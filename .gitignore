@@ -1,0 +1,20 @@
+# Environments
+.env
+.venv
+venv/
+__pycache__/
+
+# Sensitive files
+cookies.txt
+.cookies.txt
+
+# Temporary files
+temp/
+test_output/
+temp_video.mp4
+temp_audio.mp3
+
+# IDE / OS specific
+.idea/
+.vscode/
+*.DS_Store

@@ -1,0 +1,9 @@
+streamlit
+yt-dlp
+opencv-python
+moviepy
+openai
+google-generativeai
+tenacity
+python-dotenv
+ffmpeg-python
