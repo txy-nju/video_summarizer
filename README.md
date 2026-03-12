@@ -90,9 +90,9 @@ video_summarizer/
 │   └── settings.py
 ├── core/                   # 核心业务逻辑
 │   ├── extraction/         # 提取层
-│   │   ├── video/          # 视频获取模块 (下载, 上传)
-│   │   ├── extractor.py    # 媒体提取 (音频, 关键帧)
-│   │   └── transcriber.py  # 音频转录
+│   │   ├── base.py         # 抽象基类 (VideoSource)
+│   │   ├── sources/        # 策略实现 (UrlVideoSource, LocalFileVideoSource)
+│   │   └── infrastructure/ # 基础设施实现 (Extractor, Transcriber, Downloader)
 │   ├── analysis/           # 分析层 (大模型总结)
 │   └── generation/         # 生成层 (报告生成)
 ├── services/               # 业务流程编排
