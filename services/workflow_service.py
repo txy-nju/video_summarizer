@@ -115,9 +115,3 @@ class VideoSummaryService:
         finally:
             # 在结束后清理
             clear_temp_folder()
-
-    def process_video(self, url: str) -> str:
-        """
-        [兼容旧接口] 执行完整的视频总结流程（提取 -> 分析）。
-        """
-        return self.process_video_from_url(url)
