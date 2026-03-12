@@ -8,7 +8,7 @@ import os
 
 # 将项目根目录添加到 sys.path
 # 这对于在命令行中直接运行测试脚本是必要的
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..')))
 
 from core.extraction.infrastructure.video.downloader import VideoDownloader
 
