@@ -1,9 +1,10 @@
 
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, IO
 
 from core.extraction.video.downloader import VideoDownloader
+from core.extraction.video.local_video_handler import LocalVideoHandler
 from core.extraction.extractor import MediaExtractor
 from core.extraction.transcriber import AudioTranscriber
 from core.analysis.analyzer import ContentAnalyzer
@@ -17,27 +18,24 @@ class VideoSummaryService:
         self.base_url = os.getenv("OPENAI_BASE_URL")
         
         self.downloader = VideoDownloader()
+        self.local_handler = LocalVideoHandler()
         self.extractor = MediaExtractor()
         self.transcriber = AudioTranscriber(api_key, base_url=self.base_url)
         self.analyzer = ContentAnalyzer(api_key, base_url=self.base_url)
         self.generator = ReportGenerator()
 
-    def extract_content_from_url(self, url: str) -> Tuple[str, list[str]]:
+    def _extract_and_transcribe(self, video_path: Path) -> Tuple[str, list[str]]:
         """
-        第一部分：从视频URL中提取文本和关键帧。
+        [通用方法] 从本地视频文件中提取文本和关键帧。
         
         Args:
-            url (str): 视频的URL。
+            video_path (Path): 本地视频文件的路径。
 
         Returns:
             Tuple[str, list[str]]: 一个包含转录文本和Base64关键帧列表的元组。
         """
-        # 1. 下载视频
-        print(f"Downloading video from {url}...")
-        video_path = self.downloader.download(url)
-        print(f"Video downloaded to {video_path}")
-
         # 2. 提取音频和关键帧
+        print(f"Processing video at {video_path}...")
         print("Extracting audio...")
         audio_path = self.extractor.extract_audio(video_path)
         print(f"Audio extracted to {audio_path}")
@@ -53,26 +51,73 @@ class VideoSummaryService:
         
         return transcript, frames
 
-    def process_video(self, url: str) -> str:
+    def extract_content_from_url(self, url: str) -> Tuple[str, list[str]]:
         """
-        执行完整的视频总结流程（提取 -> 分析）。
+        [仅供兼容] 从视频URL中提取文本和关键帧。
+        建议使用 process_video_from_url 替代。
+        """
+        # 1. 下载视频
+        print(f"Downloading video from {url}...")
+        video_path = self.downloader.download(url)
+        print(f"Video downloaded to {video_path}")
+
+        return self._extract_and_transcribe(video_path)
+
+    def process_video_from_url(self, url: str) -> str:
+        """
+        针对 URL 的完整流程：下载 -> 提取 -> 分析。
         """
         # 在开始前清理临时文件夹
         clear_temp_folder()
 
-        # 第一部分：提取
-        transcript, frames = self.extract_content_from_url(url)
+        try:
+            # 1. 下载视频
+            print(f"Downloading video from {url}...")
+            video_path = self.downloader.download(url)
+            print(f"Video downloaded to {video_path}")
 
-        # 第二部分：分析
-        print("Analyzing content...")
-        summary = self.analyzer.analyze(transcript, frames)
-        print("Analysis complete.")
+            # 2. 通用处理 (提取 + 转录)
+            transcript, frames = self._extract_and_transcribe(video_path)
 
-        # 第三部分：生成报告 (当前未激活)
-        # report_path = self.generator.generate_pdf(summary, frames)
-        # print(f"Report generated at {report_path}")
+            # 3. 分析
+            print("Analyzing content...")
+            summary = self.analyzer.analyze(transcript, frames)
+            print("Analysis complete.")
+            
+            return summary
+        finally:
+            # 在结束后清理，确保不留垃圾文件
+            # 使用 finally 确保即使出错也能清理
+            clear_temp_folder()
 
-        # 在结束后再次清理，确保不留垃圾文件
+    def process_uploaded_video(self, uploaded_file: IO[bytes], original_filename: str) -> str:
+        """
+        针对上传文件的完整流程：保存 -> 提取 -> 分析。
+        """
+        # 在开始前清理临时文件夹
         clear_temp_folder()
 
-        return summary
+        try:
+            # 1. 保存上传的文件
+            print(f"Saving uploaded file {original_filename}...")
+            video_path = self.local_handler.save_uploaded_file(uploaded_file, original_filename)
+            print(f"File saved to {video_path}")
+
+            # 2. 通用处理 (提取 + 转录)
+            transcript, frames = self._extract_and_transcribe(video_path)
+
+            # 3. 分析
+            print("Analyzing content...")
+            summary = self.analyzer.analyze(transcript, frames)
+            print("Analysis complete.")
+            
+            return summary
+        finally:
+            # 在结束后清理
+            clear_temp_folder()
+
+    def process_video(self, url: str) -> str:
+        """
+        [兼容旧接口] 执行完整的视频总结流程（提取 -> 分析）。
+        """
+        return self.process_video_from_url(url)

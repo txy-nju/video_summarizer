@@ -6,6 +6,8 @@ from config.settings import TEMP_VIDEO_DIR, BASE_DIR
 class VideoDownloader:
     def __init__(self, output_dir: Path = TEMP_VIDEO_DIR):
         self.output_dir = output_dir
+        # 确保目录存在
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def download(self, url: str) -> Path:
         """
