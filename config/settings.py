@@ -15,6 +15,17 @@ def _get_int_env(name: str, default: int, minimum: int | None = None) -> int:
     return value
 
 
+def _get_float_env(name: str, default: float, minimum: float | None = None) -> float:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
 def _get_csv_env(name: str, default_csv: str) -> tuple[str, ...]:
     raw = os.getenv(name, default_csv)
     parts = [item.strip() for item in raw.split(",")]
@@ -52,10 +63,39 @@ CHECKPOINT_BACKEND = os.getenv("CHECKPOINT_BACKEND", "memory")
 CHECKPOINT_DB_URL = os.getenv("CHECKPOINT_DB_URL", "")
 
 # 5.3 Map-Reduce（迭代 A）配置
-MAP_CHUNK_SECONDS = int(os.getenv("MAP_CHUNK_SECONDS", "120"))
+MAP_CHUNK_SECONDS = int(os.getenv("MAP_CHUNK_SECONDS", "480"))
 MAP_CHUNK_OVERLAP_SECONDS = int(os.getenv("MAP_CHUNK_OVERLAP_SECONDS", "10"))
 MAP_MAX_PARALLELISM = int(os.getenv("MAP_MAX_PARALLELISM", "4"))
 WAVE_DISPATCH_SIZE = _get_int_env("WAVE_DISPATCH_SIZE", MAP_MAX_PARALLELISM, minimum=1)
+
+# 场景突变辅助分片配置
+ENABLE_SCENE_ANCHORED_CHUNK_SPLIT = os.getenv("ENABLE_SCENE_ANCHORED_CHUNK_SPLIT", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+CHUNK_SPLIT_ANCHOR_SEARCH_SECONDS = _get_int_env("CHUNK_SPLIT_ANCHOR_SEARCH_SECONDS", 60, minimum=5)
+CHUNK_SPLIT_DURATION_SHORT_SECONDS = _get_int_env("CHUNK_SPLIT_DURATION_SHORT_SECONDS", 600, minimum=60)
+CHUNK_SPLIT_DURATION_MEDIUM_SECONDS = _get_int_env(
+    "CHUNK_SPLIT_DURATION_MEDIUM_SECONDS", 1800, minimum=CHUNK_SPLIT_DURATION_SHORT_SECONDS + 60
+)
+CHUNK_SPLIT_MIN_DURATION_SHORT_SECONDS = _get_int_env("CHUNK_SPLIT_MIN_DURATION_SHORT_SECONDS", 90, minimum=30)
+CHUNK_SPLIT_MIN_DURATION_MEDIUM_SECONDS = _get_int_env(
+    "CHUNK_SPLIT_MIN_DURATION_MEDIUM_SECONDS",
+    300,
+    minimum=CHUNK_SPLIT_MIN_DURATION_SHORT_SECONDS,
+)
+CHUNK_SPLIT_MIN_DURATION_LONG_SECONDS = _get_int_env(
+    "CHUNK_SPLIT_MIN_DURATION_LONG_SECONDS",
+    480,
+    minimum=CHUNK_SPLIT_MIN_DURATION_MEDIUM_SECONDS,
+)
+
+# 场景突变分级阈值（基于 scene_change_score = 1 - correlation）
+SCENE_CHANGE_SEVERE_SHORT_THRESHOLD = _get_float_env("SCENE_CHANGE_SEVERE_SHORT_THRESHOLD", 0.45, minimum=0.0)
+SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD = _get_float_env("SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD", 0.35, minimum=0.0)
+SCENE_CHANGE_SEVERE_LONG_THRESHOLD = _get_float_env("SCENE_CHANGE_SEVERE_LONG_THRESHOLD", 0.25, minimum=0.0)
 
 # 5.6 第三阶段：波次并行容错配置
 CHUNK_WORKER_TIMEOUT_SECONDS = float(os.getenv("CHUNK_WORKER_TIMEOUT_SECONDS", "45"))

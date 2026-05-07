@@ -11,6 +11,11 @@ from config.settings import (
     ENABLE_KEYFRAME_FILE_REFERENCE,
     KEYFRAME_REFERENCE_INCLUDE_INLINE_IMAGE,
     KEYFRAME_IMAGE_EXTENSION,
+    CHUNK_SPLIT_DURATION_SHORT_SECONDS,
+    CHUNK_SPLIT_DURATION_MEDIUM_SECONDS,
+    SCENE_CHANGE_SEVERE_SHORT_THRESHOLD,
+    SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD,
+    SCENE_CHANGE_SEVERE_LONG_THRESHOLD,
 )
 
 class MediaExtractor:
@@ -73,6 +78,28 @@ class MediaExtractor:
             return 3
         return 5
 
+    @staticmethod
+    def _clamp_scene_change_score(score: float) -> float:
+        if math.isnan(score):
+            return 0.0
+        return max(0.0, min(1.0, float(score)))
+
+    @staticmethod
+    def _resolve_severe_threshold(duration_seconds: float) -> float:
+        if duration_seconds < CHUNK_SPLIT_DURATION_SHORT_SECONDS:
+            return SCENE_CHANGE_SEVERE_SHORT_THRESHOLD
+        if duration_seconds < CHUNK_SPLIT_DURATION_MEDIUM_SECONDS:
+            return SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD
+        return SCENE_CHANGE_SEVERE_LONG_THRESHOLD
+
+    @staticmethod
+    def _classify_scene_change_level(scene_change_score: float, severe_threshold: float) -> str:
+        if scene_change_score >= severe_threshold:
+            return "severe"
+        if scene_change_score >= severe_threshold * 0.5:
+            return "moderate"
+        return "none"
+
     def extract_frames(
         self,
         video_path: Path,
@@ -115,6 +142,7 @@ class MediaExtractor:
         # 探测步长：长视频降低 probe_fps；仅在探测帧 retrieve，非探测帧仅 grab 以降低解码开销
         safe_probe_fps = self._resolve_probe_fps(duration_seconds, probe_fps)
         probe_stride = max(1, int(fps / safe_probe_fps))
+        severe_threshold = self._resolve_severe_threshold(duration_seconds)
         
         last_extracted_time = -1000.0  # 确保第0秒强制抽取
         last_hist = None
@@ -136,6 +164,8 @@ class MediaExtractor:
                 
             current_time = frame_count / fps
             should_extract = False
+            scene_change_score = 0.0
+            scene_change_level = "none"
             
             # 条件 1：首帧强制抽取作为基准 Anchor
             current_hist = None
@@ -144,15 +174,16 @@ class MediaExtractor:
                 should_extract = True
             else:
                 time_since_last = current_time - last_extracted_time
+                current_hist = self._calc_histogram(image)
+                correlation = cv2.compareHist(last_hist, current_hist, cv2.HISTCMP_CORREL)
+                scene_change_score = self._clamp_scene_change_score(1.0 - float(correlation))
+                scene_change_level = self._classify_scene_change_level(scene_change_score, severe_threshold)
                 
                 # 条件 2：达到最大间隔时强制抽帧，避免长时间没有视觉证据
                 if time_since_last >= max_interval:
                     should_extract = True
                 # 条件 3：达到最小间隔后，仅在场景明显变化时抽帧
                 elif time_since_last >= interval:
-                    current_hist = self._calc_histogram(image)
-                    correlation = cv2.compareHist(last_hist, current_hist, cv2.HISTCMP_CORREL)
-                    
                     if correlation < threshold:
                         should_extract = True
 
@@ -193,6 +224,8 @@ class MediaExtractor:
                     time_str = f"{minutes:02d}:{seconds:02d}"
                 
                 frame_payload = {"time": time_str}
+                frame_payload["scene_change_score"] = round(scene_change_score, 4)
+                frame_payload["scene_change_level"] = scene_change_level
 
                 if ENABLE_KEYFRAME_FILE_REFERENCE:
                     TEMP_FRAMES_DIR.mkdir(parents=True, exist_ok=True)

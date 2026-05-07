@@ -2,7 +2,19 @@ import json
 import heapq
 from typing import Any, Dict, List, Tuple
 
-from config.settings import MAP_CHUNK_SECONDS
+from config.settings import (
+    MAP_CHUNK_SECONDS,
+    ENABLE_SCENE_ANCHORED_CHUNK_SPLIT,
+    CHUNK_SPLIT_ANCHOR_SEARCH_SECONDS,
+    CHUNK_SPLIT_DURATION_SHORT_SECONDS,
+    CHUNK_SPLIT_DURATION_MEDIUM_SECONDS,
+    CHUNK_SPLIT_MIN_DURATION_SHORT_SECONDS,
+    CHUNK_SPLIT_MIN_DURATION_MEDIUM_SECONDS,
+    CHUNK_SPLIT_MIN_DURATION_LONG_SECONDS,
+    SCENE_CHANGE_SEVERE_SHORT_THRESHOLD,
+    SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD,
+    SCENE_CHANGE_SEVERE_LONG_THRESHOLD,
+)
 from core.workflow.time_travel import parse_timestamp_to_seconds
 from core.workflow.video_summary.state import VideoSummaryState
 
@@ -100,6 +112,119 @@ def _build_windows(duration_seconds: int, chunk_seconds: int) -> List[Tuple[int,
     return windows
 
 
+def _resolve_scene_severe_threshold(duration_seconds: int) -> float:
+    if duration_seconds < CHUNK_SPLIT_DURATION_SHORT_SECONDS:
+        return SCENE_CHANGE_SEVERE_SHORT_THRESHOLD
+    if duration_seconds < CHUNK_SPLIT_DURATION_MEDIUM_SECONDS:
+        return SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD
+    return SCENE_CHANGE_SEVERE_LONG_THRESHOLD
+
+
+def _resolve_min_chunk_duration(duration_seconds: int) -> int:
+    if duration_seconds < CHUNK_SPLIT_DURATION_SHORT_SECONDS:
+        return CHUNK_SPLIT_MIN_DURATION_SHORT_SECONDS
+    if duration_seconds < CHUNK_SPLIT_DURATION_MEDIUM_SECONDS:
+        return CHUNK_SPLIT_MIN_DURATION_MEDIUM_SECONDS
+    return CHUNK_SPLIT_MIN_DURATION_LONG_SECONDS
+
+
+def _build_scene_change_points(keyframes: List[Dict], duration_seconds: int) -> List[Tuple[int, float]]:
+    severe_threshold = _resolve_scene_severe_threshold(duration_seconds)
+    points: List[Tuple[int, float]] = []
+    for frame in keyframes:
+        if not isinstance(frame, dict):
+            continue
+        try:
+            seconds = parse_timestamp_to_seconds(str(frame.get("time", "")))
+        except Exception:
+            continue
+
+        score_raw = frame.get("scene_change_score", 0.0)
+        try:
+            score = max(0.0, min(1.0, float(score_raw)))
+        except Exception:
+            score = 0.0
+
+        level = str(frame.get("scene_change_level", "")).strip().lower()
+        if level == "severe" or score >= severe_threshold:
+            points.append((seconds, score))
+
+    points.sort(key=lambda item: item[0])
+    return points
+
+
+def _align_windows_to_scene_changes(
+    windows: List[Tuple[int, int]], keyframes: List[Dict], duration_seconds: int, search_seconds: int
+) -> Tuple[List[Tuple[int, int]], List[Dict[str, Any]]]:
+    if len(windows) <= 1 or duration_seconds <= 0:
+        return windows, []
+
+    scene_points = _build_scene_change_points(keyframes, duration_seconds)
+    if not scene_points:
+        return windows, []
+
+    min_chunk_duration = _resolve_min_chunk_duration(duration_seconds)
+    feasible_max_min = max(1, duration_seconds // len(windows))
+    min_chunk_duration = min(min_chunk_duration, feasible_max_min)
+    boundary_count = max(0, len(windows) - 1)
+    fixed_boundaries = [end for _, end in windows[:-1]]
+    adjusted_boundaries: List[int] = []
+    boundary_meta: List[Dict[str, Any]] = []
+    prev_boundary = 0
+
+    for idx, boundary in enumerate(fixed_boundaries):
+        remaining_chunks = boundary_count - idx
+        min_candidate = max(prev_boundary + min_chunk_duration, boundary - max(1, search_seconds))
+        max_candidate = min(
+            duration_seconds - remaining_chunks * min_chunk_duration,
+            boundary + max(1, search_seconds),
+        )
+
+        best_candidate = boundary
+        best_source = "fixed"
+        best_score = 0.0
+
+        if min_candidate <= max_candidate:
+            candidates = [
+                (sec, score)
+                for sec, score in scene_points
+                if min_candidate <= sec <= max_candidate
+            ]
+            if candidates:
+                candidates.sort(key=lambda item: (abs(item[0] - boundary), -item[1], item[0]))
+                best_candidate, best_score = candidates[0]
+                best_source = "scene"
+
+        # 兜底保护：如果固定边界本身已不满足约束，强制裁剪为可行边界。
+        if not (prev_boundary + min_chunk_duration <= best_candidate <= duration_seconds - remaining_chunks * min_chunk_duration):
+            lower = prev_boundary + min_chunk_duration
+            upper = duration_seconds - remaining_chunks * min_chunk_duration
+            best_candidate = min(max(boundary, lower), upper)
+            best_source = "fixed"
+            best_score = 0.0
+
+        adjusted_boundaries.append(best_candidate)
+        boundary_meta.append(
+            {
+                "boundary_index": idx,
+                "base_boundary_sec": boundary,
+                "applied_boundary_sec": best_candidate,
+                "split_anchor_source": best_source,
+                "split_anchor_time": best_candidate if best_source == "scene" else None,
+                "scene_change_score": round(best_score, 4) if best_source == "scene" else None,
+            }
+        )
+        prev_boundary = best_candidate
+
+    adjusted_windows: List[Tuple[int, int]] = []
+    start = 0
+    for boundary in adjusted_boundaries:
+        adjusted_windows.append((start, boundary))
+        start = boundary
+    adjusted_windows.append((start, duration_seconds))
+    return adjusted_windows, boundary_meta
+
+
 def _build_keyframe_times(keyframes: List[Dict]) -> List[Tuple[int, int]]:
     """
     返回按时间排序的关键帧索引：(seconds, original_index)。
@@ -186,6 +311,14 @@ def chunk_planner_node(state: VideoSummaryState) -> dict:
     chunks = _load_chunks(transcript_data)
     duration_seconds = _extract_duration_seconds(transcript_data, segments, chunks, keyframes)
     windows = _build_windows(duration_seconds, MAP_CHUNK_SECONDS)
+    boundary_meta: List[Dict[str, Any]] = []
+    if ENABLE_SCENE_ANCHORED_CHUNK_SPLIT:
+        windows, boundary_meta = _align_windows_to_scene_changes(
+            windows,
+            keyframes,
+            duration_seconds,
+            CHUNK_SPLIT_ANCHOR_SEARCH_SECONDS,
+        )
 
     # 预处理：按时间排序，避免每个窗口反复全量扫描
     timed_keyframes = _build_keyframe_times(keyframes)
@@ -228,8 +361,14 @@ def chunk_planner_node(state: VideoSummaryState) -> dict:
                 "keyframe_indexes": keyframe_indexes,
                 "transcript_segment_indexes": transcript_segment_indexes,
                 "priority": "normal",
+                "split_anchor_source": "fixed",
+                "split_anchor_time": None,
             }
         )
+
+        if index < len(boundary_meta):
+            chunk_plan[-1]["split_anchor_source"] = boundary_meta[index].get("split_anchor_source", "fixed")
+            chunk_plan[-1]["split_anchor_time"] = boundary_meta[index].get("split_anchor_time")
         
     return {
         "video_duration_seconds": duration_seconds,

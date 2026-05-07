@@ -173,6 +173,74 @@ class TestChunkPlannerNode(unittest.TestCase):
             self.assertEqual(left["keyframe_indexes"], right["keyframe_indexes"])
             self.assertEqual(left["transcript_segment_indexes"], right["transcript_segment_indexes"])
 
+    def test_scene_anchor_alignment_moves_boundary_when_constraints_satisfied(self):
+        state = cast(
+            VideoSummaryState,
+            {
+                "transcript": '{"duration": 360}',
+                "keyframes": [
+                    {"time": "01:40", "image": "x", "scene_change_score": 0.9, "scene_change_level": "severe"},
+                ],
+            },
+        )
+
+        with patch("core.workflow.video_summary.planner.chunk_planner.ENABLE_SCENE_ANCHORED_CHUNK_SPLIT", True), patch(
+            "core.workflow.video_summary.planner.chunk_planner.MAP_CHUNK_SECONDS", 120
+        ), patch("core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_ANCHOR_SEARCH_SECONDS", 60), patch(
+            "core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_DURATION_SHORT_SECONDS", 600
+        ), patch("core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_DURATION_MEDIUM_SECONDS", 1800), patch(
+            "core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_MIN_DURATION_SHORT_SECONDS", 60
+        ):
+            result = chunk_planner_node(state)
+
+        self.assertEqual(result["chunk_plan"][0]["end_sec"], 100)
+        self.assertEqual(result["chunk_plan"][0]["split_anchor_source"], "scene")
+        self.assertEqual(result["chunk_plan"][0]["split_anchor_time"], 100)
+
+    def test_scene_anchor_rejected_when_min_duration_violated(self):
+        state = cast(
+            VideoSummaryState,
+            {
+                "transcript": '{"duration": 3600}',
+                "keyframes": [
+                    {"time": "07:40", "image": "x", "scene_change_score": 0.9, "scene_change_level": "severe"},
+                ],
+            },
+        )
+
+        with patch("core.workflow.video_summary.planner.chunk_planner.ENABLE_SCENE_ANCHORED_CHUNK_SPLIT", True), patch(
+            "core.workflow.video_summary.planner.chunk_planner.MAP_CHUNK_SECONDS", 480
+        ), patch("core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_ANCHOR_SEARCH_SECONDS", 60), patch(
+            "core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_DURATION_SHORT_SECONDS", 600
+        ), patch("core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_DURATION_MEDIUM_SECONDS", 1800), patch(
+            "core.workflow.video_summary.planner.chunk_planner.CHUNK_SPLIT_MIN_DURATION_LONG_SECONDS", 600
+        ):
+            result = chunk_planner_node(state)
+
+        self.assertEqual(result["chunk_plan"][0]["end_sec"], 450)
+        self.assertEqual(result["chunk_plan"][0]["split_anchor_source"], "fixed")
+        self.assertIsNone(result["chunk_plan"][0]["split_anchor_time"])
+
+    def test_scene_anchor_toggle_off_keeps_fixed_windows(self):
+        state = cast(
+            VideoSummaryState,
+            {
+                "transcript": '{"duration": 360}',
+                "keyframes": [
+                    {"time": "01:40", "image": "x", "scene_change_score": 0.9, "scene_change_level": "severe"},
+                ],
+            },
+        )
+
+        with patch("core.workflow.video_summary.planner.chunk_planner.ENABLE_SCENE_ANCHORED_CHUNK_SPLIT", False), patch(
+            "core.workflow.video_summary.planner.chunk_planner.MAP_CHUNK_SECONDS", 120
+        ):
+            result = chunk_planner_node(state)
+
+        self.assertEqual(result["chunk_plan"][0]["end_sec"], 120)
+        self.assertEqual(result["chunk_plan"][0]["split_anchor_source"], "fixed")
+        self.assertIsNone(result["chunk_plan"][0]["split_anchor_time"])
+
 
 if __name__ == "__main__":
     unittest.main()

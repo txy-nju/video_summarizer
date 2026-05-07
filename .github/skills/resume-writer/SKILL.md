@@ -35,7 +35,7 @@ description: "基于多模态视频智能总结系统项目生成定制化简历
 - 决定：背景段落叙事、包装方向、项目名称建议
 
 **问题 3 — 技术侧重**（多选）：
-- Map-Reduce 分片并行 / 多模态联合理解 / Self-RAG 质检闭环 / LangGraph 状态图 / 场景感知抽帧 / Checkpoint 时间旅行 / HITL 人类在环 / 双并发模式 / 实时状态透传 / 工程化测试
+- Map-Reduce 分片并行 / 多模态联合理解 / Self-RAG 质检闭环 / LangGraph 状态图 / 场景感知抽帧 / Checkpoint 时间旅行 / HITL 人类在环 / Send API 波次调度 / 实时状态透传 / 工程化测试
 - 决定：哪 3-5 个亮点写入 bullet points
 
 **问题 4 — 特殊要求**（自由文本）：
@@ -51,7 +51,7 @@ description: "基于多模态视频智能总结系统项目生成定制化简历
 | 岗位方向 | 优先亮点 |
 |---------|---------|
 | AI Application Engineer | 亮点4(LangGraph状态图) → 1(Map-Reduce) → 3(Self-RAG) → 2(多模态) |
-| Backend / 架构 | 亮点1(Map-Reduce) → 8(双并发模式) → 10(工程化测试) → 4(LangGraph) |
+| Backend / 架构 | 亮点1(Map-Reduce) → 8(Send API 波次调度) → 10(工程化测试) → 4(LangGraph) |
 | Agent Engineer | 亮点4(LangGraph状态图) → 7(HITL) → 6(Checkpoint时间旅行) → 3(Self-RAG) |
 | MLE / LLM App | 亮点2(多模态) → 3(Self-RAG) → 5(场景感知抽帧) → 1(Map-Reduce) |
 | 全栈 AI | 亮点9(实时状态透传) → 4(LangGraph) → 7(HITL) → 2(多模态) |
@@ -113,7 +113,7 @@ description: "基于多模态视频智能总结系统项目生成定制化简历
 | 幻觉内容占比 | <5%-10% | Self-RAG 质检后 |
 | 测试覆盖 | ~130 用例 | 项目实际数据 |
 | 工作流节点数 | 10+ 节点 | 项目实际数据 |
-| 并发模式 | 2 种 | ThreadPool + Send API |
+| 并发模式 | 1 种（当前主架构） | Send API（含 wave dispatch + synthesis barrier） |
 
 标注"建议值，请根据实际调整"，需用户确认。量化指标须同时出现在**过程段 bullet 尾部**和**结果段汇总**中（结果段为最终汇总，bullet 中为分点展开）。
 
@@ -133,7 +133,7 @@ description: "基于多模态视频智能总结系统项目生成定制化简历
 • [Bullet 2：关键技术实现] — 动词开头 + 工具/方法 + 量化
 • [Bullet 3：工程化/质量保障] — 动词开头 + 实践 + 数据
 • [Bullet 4：业务成果/量化指标] — 动词开头 + 指标 + 影响
-• [Bullet 5：可选扩展] — 时间旅行/HITL/并发模式等
+• [Bullet 5：可选扩展] — 时间旅行/HITL/wave 调度等
 
 **结果**：[2-3 句汇总核心量化指标：处理效率、质量控制、测试覆盖等]
 
@@ -169,7 +169,7 @@ description: "基于多模态视频智能总结系统项目生成定制化简历
 | 技术深度 | 强调决策与判断力 | 编造未实现的功能 |
 | 规模 | 声称支撑 XX 时长/视频量 | 不合理的数量级 |
 
-**底线**：不声称使用了项目中未实现的技术（如 CLIP、Gemini 1.5 Pro 原生视频理解），不声称完成了标记为"后续升级"的功能（如 Postgres 生产化、全量 Send API 迁移）。
+**底线**：不声称使用了项目中未实现的技术（如 CLIP、Gemini 1.5 Pro 原生视频理解），不声称完成了标记为"后续升级"的功能（如 Postgres 生产化）。
 
 ## 反模式检查
 

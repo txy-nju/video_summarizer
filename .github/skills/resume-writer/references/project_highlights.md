@@ -45,12 +45,12 @@
 - 设计"先查事实、再查需求"的两级质检闭环，杜绝"有文笔但不靠谱"的输出
 - 幻觉核查（Hallucination Grader）：JSON Mode + temperature=0 严格验证总结是否脱离原始证据，检出幻觉则生成定向修正指令回流 Fusion Drafter
 - 有用性核查（Usefulness Grader）：验证总结是否命中用户指定需求 + human_guidance，偏题则回流重写
-- 双重质检均设置 MAX_REVISIONS=2 熔断机制，防止质检-重写死循环
+- 双重质检共享 `SELF_RAG_MAX_REVISIONS` 熔断参数（.env 可配置），防止质检-重写死循环
 - 条件路由通过 LangGraph Conditional Edges 实现，路由常量消灭魔法字符串
 
 **简历话术方向**：
 - "实现 Self-RAG 双重质检闭环（幻觉核查 + 有用性核查），基于 JSON Mode 严格评分，不通过则携带修正指令回流重写，并设置熔断阈值防止死循环"
-- "质检节点采用 temperature=0 保证评分确定性，LangGraph 条件路由实现回流决策，MAX_REVISIONS 熔断保障系统活性"
+- "质检节点采用 temperature=0 保证评分确定性，LangGraph 条件路由实现回流决策，SELF_RAG_MAX_REVISIONS 熔断保障系统活性"
 
 **可量化角度**：幻觉检出率、重写次数分布、质检通过率、最终总结事实一致性
 
@@ -124,20 +124,19 @@
 
 ---
 
-## 亮点 8：双并发模式（ThreadPool + Send API）
+## 亮点 8：Send API 波次并行调度
 
 **技术要点**：
-- 支持 `threadpool`（稳定默认）和 `send_api`（LangGraph 原生 fan-out/fan-in）两种并发模式，通过 `CONCURRENCY_MODE` 配置切换
-- ThreadPool 模式：图级并行（LangGraph 原生 fan-out audio/vision 分支）+ 节点内 ThreadPoolExecutor 并行处理多个 chunk
-- Send API 模式：通过 `Send()` API 实现动态数量的 worker 分发，每个 chunk 独立为一个 LangGraph 子图节点
-- Send API 含合成屏障（synthesis_barrier_node），等待所有音频/视觉分析完成后再触发融合分发
-- 两种模式共享后半段图（aggregator → human_gate → fusion → graders），保持 API 兼容
+- 当前主架构固定 `send_api`，通过 `map_dispatch_node` 按波次派发 active chunks
+- 使用 `synthesis_barrier_node` 等待波次就绪后再触发融合 worker
+- `route_after_wave_synthesis` 控制 continue_wave / wave_done，直至进入聚合
+- 通过 reducer 解决并行写冲突，并配合 timeout/retry/degraded 机制保障活性
 
 **简历话术方向**：
-- "设计双并发模式架构（ThreadPool + LangGraph Send API），通过配置开关实现灰度切换，Send API 模式支持动态 fan-out 和分片级进度追踪"
-- "Send API 模式引入合成屏障（synthesis_barrier）实现 fan-out/fan-in 精确控制，保留 ThreadPool 回退路径确保生产安全"
+- "设计基于 Send API 的波次并行调度架构，通过 active wave 派发与 barrier 汇聚实现可控并发"
+- "引入 synthesis_barrier + wave 路由实现 fan-out/fan-in 精确控制，并以容错降级策略避免单分片阻塞全局"
 
-**可量化角度**：两种模式性能对比、并行度提升倍数、分片级错误隔离率
+**可量化角度**：波次并发度、长视频稳定性、分片级错误隔离率
 
 ---
 
@@ -166,12 +165,12 @@
 - 单元测试覆盖：提取算法（场景抽帧/大文件切分/编解码兼容）、工作流节点（10 个节点各自独立测试）、路由函数、工具函数
 - 集成测试覆盖：并行分支合并（Reducer 正确性 12 个场景）、Checkpoint 持久化链路、HITL 完整流、Send API 合成流、时间旅行管线
 - Mock 外部依赖（LLM API / Whisper / Tavily），测试不依赖真实 API 调用
-- 并发验证通过 Mock ThreadPoolExecutor 调用计数实现，非脆弱时间断言
-- A/B 回归脚本支持 threadpool vs send_api 三轮对比，确保模式切换不引入回归
+- 并发验证聚焦 wave 派发与 barrier 汇聚行为，采用机制断言而非脆弱时间断言
+- 回归脚本覆盖 send_api 核心链路（分派/汇聚/容错），确保调度演进不引入回归
 - E2E 通过 `RUN_E2E` 环境变量控制，默认关闭保护 CI 成本
 
 **简历话术方向**：
 - "建立覆盖 ~130 个用例的三层测试金字塔（Unit → Integration → E2E），所有 LLM/Whisper/搜索调用通过 Mock 隔离，测试零 API 成本"
-- "设计并发机制验证策略（Mock ThreadPoolExecutor 调用计数），避免基于执行时间的脆弱断言，A/B 回归脚本保障双并发模式切换安全"
+- "设计并发机制验证策略（wave 派发与 barrier 机制断言），避免基于执行时间的脆弱断言，回归脚本保障 send_api 架构演进安全"
 
-**可量化角度**：测试用例总数、测试层级数、Mock 覆盖率、A/B 回归通过率、CI 运行零 API 成本
+**可量化角度**：测试用例总数、测试层级数、Mock 覆盖率、回归通过率、CI 运行零 API 成本

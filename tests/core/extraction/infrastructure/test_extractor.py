@@ -123,6 +123,18 @@ class TestMediaExtractor(unittest.TestCase):
         self.assertEqual(len(frames), expected_extracted_count)
         self.assertEqual(frames[0]["time"], "00:00")
         self.assertEqual(frames[1]["time"], "00:02")
+        self.assertIn("scene_change_score", frames[0])
+        self.assertIn("scene_change_level", frames[0])
+        self.assertEqual(frames[0]["scene_change_level"], "none")
+        self.assertEqual(frames[1]["scene_change_level"], "severe")
+
+    def test_scene_change_threshold_adapts_by_duration_bucket(self):
+        short = self.extractor._resolve_severe_threshold(300)
+        medium = self.extractor._resolve_severe_threshold(1200)
+        long = self.extractor._resolve_severe_threshold(3600)
+
+        self.assertGreater(short, medium)
+        self.assertGreater(medium, long)
 
     @patch('core.extraction.infrastructure.extractor.cv2.imencode')
     @patch('core.extraction.infrastructure.extractor.cv2.VideoCapture')

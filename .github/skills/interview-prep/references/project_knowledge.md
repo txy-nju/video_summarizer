@@ -10,10 +10,10 @@
 
 ### 核心实现
 - **两阶段图**：Phase 1（analyze_graph）并行分析所有分片 → Phase 2（finalize_graph）融合输出最终摘要
-- **节点类型**：`audio_analyzer`（Whisper 转录）、`vision_analyzer`（帧分析）、`chunk_synthesizer`（单片摘要）、`chunk_aggregator`（并行结果聚合）、`fusion_drafter`（融合全文起草）、`hallucination_grader`（幻觉检测）、`usefulness_grader`（质量检测）、`human_gate`（HITL 人类审核）
-- **条件边（Conditional Edge）**：质检节点的输出决定路由——pass → 继续，fail → 回环重合成，max_retry → 强制通过
+- **节点类型**：`outline_bootstrap`（结构化全局上下文）、`chunk_audio_worker`（音频分片分析）、`chunk_vision_worker`（视觉分片分析）、`synthesis_barrier`（波次屏障）、`chunk_synthesizer_worker`（单片融合）、`chunk_synthesizer`（波次推进）、`chunk_aggregator`（并行结果聚合）、`human_gate`（HITL 人类审核）、`fusion_drafter`（融合全文起草）、`hallucination_grader`（幻觉检测）、`usefulness_grader`（质量检测）
+- **条件边（Conditional Edge）**：用于质检回流路由与波次推进路由；质检不通过回到 drafter，达到 `SELF_RAG_MAX_REVISIONS` 后熔断放行
 - **自定义 Reducer**：`_merge_chunk_results` 将并行分支的 chunk 结果列表合并到共享 State，解决 Fan-In 写冲突
-- **TypedDict State**：`VideoSummaryState` 包含 `transcript`、`frames`、`chunk_results`、`draft_summary`、`final_summary`、`hallucination_score`、`usefulness_score`、`retry_count` 等字段
+- **TypedDict State**：`VideoSummaryState` 包含 `transcript`、`keyframes`、`structured_global_context`、`chunk_results`、`chunk_summary_memory`、`draft_summary`、`hallucination_score`、`usefulness_score`、`revision_count` 等字段
 
 ### 高频面试题
 
@@ -24,7 +24,7 @@ A: LangGraph 提供 StateGraph 抽象，将工作流建模为有向图（节点 
 A: LangGraph 并行执行多个分片节点时，各分支会同时向同一个 State 字段写入结果。默认行为是最后写入覆盖之前的值，导致数据丢失。`_merge_chunk_results` 是自定义 Reducer，声明为 `Annotated[List, _merge_chunk_results]`，每次并行写入时将新结果 append 到列表，实现无损 Fan-In 聚合。
 
 **Q: Phase 1 和 Phase 2 两张图为什么分开，而不是做成一张大图？**  
-A: Phase 1（analyze_graph）负责并行分析所有分片，结束后需要等待用户在 HITL 节点审核结果——此时图执行被中断（interrupt）。Phase 2（finalize_graph）接收用户反馈后启动，进行最终融合起草。两张图分开使 HITL 中断的语义更清晰，也便于分别测试和独立部署。
+A: Phase 1（analyze_graph）在 `human_gate` 结束并返回 `review_package`，Phase 2（finalize_graph）读取同一 `thread_id` 的 checkpoint 执行成文与质检闭环。两张图分开后，审批边界、状态恢复和接口职责更清晰，也更便于回归测试与演进。
 
 ---
 
@@ -32,16 +32,17 @@ A: Phase 1（analyze_graph）负责并行分析所有分片，结束后需要等
 
 ### 核心实现
 - **分片策略**：视频时长 / 分片时长（默认 5 min）→ N 个 chunk，每片独立进行转录+帧分析+摘要合成
-- **Fan-Out 实现**：两种并发模式可选
-  1. **ThreadPool 模式**（默认稳定）：`ThreadPoolExecutor` 并发执行 N 个分片任务，`concurrent.futures.wait()` 等待全部完成后聚合
-  2. **Send API 模式**（试验）：LangGraph 原生 `Send()` API 动态分发子图，每个分片作为独立图节点并行执行
+- **Fan-Out 实现**：当前采用 **Send API 波次调度**（主架构）
+  1. `map_dispatch_node` 按 `WAVE_DISPATCH_SIZE` 派发当前波次分片
+  2. `synthesis_barrier_node` 在当前波次就绪后再派发合成 worker
+  3. `route_after_wave_synthesis` 决定继续下一波或进入聚合
 - **Fan-In**：`chunk_aggregator` 节点接收所有分片结果，通过 `_merge_chunk_results` Reducer 聚合
 - **ChunkPlanner**：根据视频时长决定分片数和每片时间范围，存入 State 供下游节点使用
 
 ### 高频面试题
 
-**Q: ThreadPool 和 Send API 两种并发模式有什么区别？为什么 ThreadPool 是默认？**  
-A: ThreadPool 用 `ThreadPoolExecutor` 在应用层并发，调用链简单、可预测，LangGraph 只看到一个节点；Send API 是 LangGraph 原生并行原语，每个分片作为独立图节点执行，State 管理更复杂，需要处理并行写冲突（Reducer）。ThreadPool 是默认因为：稳定成熟、不需要特殊 Reducer 处理、调试更容易；Send API 作为 pilot 探索 LangGraph 原生并行能力。
+**Q: 当前 Send API 波次并行是怎么工作的？**  
+A: 系统在图层使用 Send API 做 fan-out/fan-in。`map_dispatch` 仅派发 active wave，audio/vision worker 完成后进入 `synthesis_barrier`，再 fan-out 合成 worker。`chunk_synthesizer_node` 基于 `route_after_wave_synthesis` 决定继续下一波或 wave_done 后进入 `chunk_aggregator`，并由 reducer 解决并行写冲突。
 
 **Q: 如果某个分片的 LLM 调用失败，整个工作流会怎么处理？**  
 A: 当前实现在 chunk 节点内部捕获异常，将该分片标记为 error 状态写入 `chunk_results`。`chunk_aggregator` 检测到 error 分片时决定是跳过（只用成功分片的结果）还是整体重试（取决于错误率阈值）。Whisper API 调用使用 `tenacity` 装饰器自动重试（指数退避）。
@@ -55,19 +56,19 @@ A: `chunk_aggregator` 将所有分片的 `chunk_summary` 按时间顺序排列�
 
 ### 核心实现
 - **双重质检节点**：
-  1. `hallucination_grader`：检测 `draft_summary` 是否包含不在原始 `transcript`/`frames` 中的事实（幻觉）
+  1. `hallucination_grader`：检测 `draft_summary` 是否脱离 `aggregated_chunk_insights` 证据边界（并参考 structured_global_context 约束）
   2. `usefulness_grader`：评估摘要质量，检测内容是否过于简短、重复、缺乏关键信息
 - **质检结果路由**：节点输出 `{grade: "pass"/"fail", reason: "..."}`，条件边根据 grade 决策
-- **重试机制**：grade = "fail" → 带 `feedback` 字段重新进入 `fusion_drafter`；`retry_count` 超过阈值则强制 pass，避免死循环
+- **重试机制**：grade = "fail" → 带 `feedback_instructions` 重新进入 `fusion_drafter`；`revision_count` 达到 `SELF_RAG_MAX_REVISIONS` 时熔断放行，避免死循环
 - **为什么是两个 Grader**：Hallucination 检测准确性，Usefulness 检测充分性，两者正交——可能不幻觉但摘要质量差（只提了无关内容），也可能摘要丰富但包含幻觉
 
 ### 高频面试题
 
 **Q: HallucinationGrader 是怎么判断幻觉的？它会不会误判？**  
-A: 调用 LLM 进行判断：将 `draft_summary` 和原始 `transcript` 片段一起输入，让 LLM 判断摘要中每个关键事实点是否有文本依据。结构化输出 `{grounded: bool, unsupported_claims: [...]}`。可能误判：① LLM 自身的偏差 ② 长文本 context 超过窗口时截断 ③ 视频内隐含语义难以从文本判断。实践中配合 retry_count 上限防止无限循环。
+A: 节点以 `aggregated_chunk_insights` 为一级证据，并引入 `structured_global_context`（实体/时间锚点）作为二级约束做 JSON 判决。可能误判来源于模型偏差或证据表达歧义，因此系统使用 `SELF_RAG_MAX_REVISIONS` 熔断上限保证活性。
 
 **Q: 质检失败后重新生成时，feedback 是怎么传递的？会不会反复失败？**  
-A: 质检节点将 `{reason, unsupported_claims}` 写入 State 的 `grader_feedback` 字段。`fusion_drafter` 在下次执行时读取该字段，在 Prompt 中明确指出上次的问题点，引导 LLM 修正。为防止死循环，State 中维护 `retry_count`，条件边在 retry_count ≥ max_retry 时强制走 pass 路径，输出当前最优结果。
+A: 质检节点把定向修改指令写入 `feedback_instructions`，`fusion_drafter` 下一轮读取后执行定点修正。系统通过共享 `revision_count` + `SELF_RAG_MAX_REVISIONS` 控制最大回流次数，避免无限循环。
 
 ---
 
@@ -139,18 +140,18 @@ A: 用户在 Streamlit 前端点击"追问"功能，输入针对某段内容的�
 
 ### 核心实现
 - **Phase 1 结束点**：`chunk_aggregator` 输出分片摘要列表后，下一个节点是 `human_gate`（HITL 中断点）
-- **human_gate 行为**：调用 `graph.stream(interrupt_before=["fusion_drafter"])` → 执行到 `human_gate` 后挂起，等待用户反馈
+- **human_gate 行为**：第一阶段在 `human_gate` 以 pending 结束并返回 `review_package`，由前端触发第二阶段 `finalize_summary` 继续
 - **前端展示**：Streamlit 在 `human_gate` 暂停后展示分片摘要列表，提供"继续"/"修改后继续"/"放弃"三个选项
-- **Phase 2 触发**：用户点击"继续"后，前端调用 `workflow_api.resume(thread_id, human_feedback)`，向 State 写入 `human_feedback` 并恢复 `fusion_drafter` 及后续节点
+- **Phase 2 触发**：用户点击"继续"后，前端调用 `finalize_summary(thread_id, edited_aggregated_chunk_insights, human_guidance)`，基于同一会话 checkpoint 继续执行 `fusion_drafter` 及后续节点
 - **设计价值**：用户在生成全文摘要前可以审查中间结果，减少"全量处理后才发现分析方向不对"的时间浪费
 
 ### 高频面试题
 
-**Q: HITL 中断的实现机制是什么？interrupt_before 是怎么工作的？**  
-A: LangGraph `interrupt_before` 参数在图编译时注入中断钩子，执行到指定节点之前触发 `GraphInterrupt` 异常，Checkpoint 自动保存当前 State，`graph.stream()` 结束并返回 `{"__interrupt__": {...}}` 标记。应用层收到中断标记后展示 UI，等待用户输入。恢复时调用 `graph.invoke(None, config)` 或 `graph.stream(None, config)`，LangGraph 从 Checkpoint 加载 State 继续执行被中断的节点。
+**Q: HITL 在当前架构里的实现机制是什么？**  
+A: 当前主路径采用“两阶段图 + review_package + thread_id checkpoint”。第一阶段执行到 `human_gate` 结束并返回可编辑内容；用户提交编辑稿与 `human_guidance` 后，第二阶段 `finalize_summary` 在同一会话上继续执行成文与质检闭环。
 
-**Q: 如果用户在 HITL 阶段修改了某个分片的摘要，后续节点怎么感知到？**  
-A: 用户的修改通过 `graph.update_state(config, {"human_feedback": user_edits})` 写入 State。`fusion_drafter` 在 Phase 2 中读取 `human_feedback` 字段，将用户的修改意见作为额外指令融入最终起草过程（如"忽略 2:30-3:00 的内容"或"重点展开第 3 分片的结论"）。
+**Q: 如果用户在 HITL 阶段修改了聚合稿，后续节点怎么感知到？**  
+A: 前端将编辑后的聚合稿与指导语作为 `edited_aggregated_chunk_insights` 和 `human_guidance` 传入 `finalize_summary(...)`。`fusion_drafter` 在第二阶段优先读取人工编辑后的聚合稿，并将指导语作为高优先级约束融入最终起草。
 
 ---
 
@@ -183,10 +184,10 @@ A: `workflow_service.py` 在调用 `graph.stream()` 时接收每个节点的输�
 | 模块 | 文件 | 测试内容 |
 |------|------|---------|
 | chunk_aggregator | `test_chunk_aggregator.py` | Reducer 合并逻辑、空结果处理 |
-| chunk_audio_analyzer | `test_chunk_audio_analyzer.py` | 音频分析节点输出格式 |
+| chunk_audio_worker | `test_chunk_workers_structured.py` | 音频 worker 结构化协议与容错 |
 | chunk_planner | `test_chunk_planner.py` | 分片数计算、时间范围边界 |
 | chunk_synthesizer | `test_chunk_synthesizer.py` | 摘要生成、feedback 注入 |
-| chunk_vision_analyzer | `test_chunk_vision_analyzer.py` | 帧分析节点逻辑 |
+| chunk_vision_worker | `test_chunk_workers_structured.py` | 视觉 worker 结构化协议与容错 |
 | fusion_drafter | `test_fusion_drafter.py` | 融合起草、人工反馈处理 |
 | hallucination_grader | `test_hallucination_grader.py` | 幻觉判断路由逻辑 |
 | usefulness_grader | `test_usefulness_grader.py` | 质量判断路由逻辑 |
@@ -219,10 +220,10 @@ A: `workflow_service.py` 在调用 `graph.stream()` 时接收每个节点的输�
 | 简历描述 | 深挖问题 | 露馅信号 |
 |---------|---------|---------|
 | "Map-Reduce 分片并行处理" | ChunkPlanner 怎么切片的？Fan-In 写冲突怎么解决？ | 说不清 Reducer / Annotated 机制 |
-| "Self-RAG 双重质检" | HallucinationGrader 和 UsefulnessGrader 分别检测什么？ | 两个 grader 职责混淆，或不知道 retry_count |
+| "Self-RAG 双重质检" | HallucinationGrader 和 UsefulnessGrader 分别检测什么？ | 两个 grader 职责混淆，或不知道 `SELF_RAG_MAX_REVISIONS` |
 | "场景感知智能抽帧" | 阈值 0.90 怎么来的？ | 说不出 cv2.compareHist HISTCMP_CORREL |
 | "LangGraph 工作流设计" | VideoSummaryState 里为什么要用 Annotated Reducer？ | 不知道并行写冲突问题 |
 | "Checkpoint 持久化" | InMemorySaver 和 PostgresSaver 有什么区别？ | 不知道 CheckpointFactory 或 thread_id |
-| "HITL 两阶段工作流" | interrupt_before 设置在哪？Phase 2 怎么恢复执行？ | 说不清 graph.update_state 或 thread_id 复用 |
+| "HITL 两阶段工作流" | 第一阶段如何结束？Phase 2 怎么恢复执行？ | 说不清 review_package / finalize_summary / thread_id 复用 |
 | "Whisper 大文件处理" | 文件超过 25MB 怎么处理？为什么不按固定时长切？ | 不知道递归二分策略 |
 | "单元测试 mock LLM" | 具体 patch 的是哪个对象？ | 说不出 unittest.mock.patch 对 openai 客户端的用法 |
