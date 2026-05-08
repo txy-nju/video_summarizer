@@ -10,8 +10,34 @@ ENTITY_HALLUCINATION_PENALTY = 0.2
 RELATION_HALLUCINATION_PENALTY = 0.5
 FABRICATION_HALLUCINATION_PENALTY = 1.0
 
+FACT_SUPPORT_WEIGHT = 0.6
+FACT_ANTI_HALLUCINATION_WEIGHT = 0.25
+FACT_CONFIDENCE_WEIGHT = 0.15
+FACT_WEIGHTED_PENALTY_CAP = 0.35
+
+TASK_COVERAGE_WEIGHT = 0.85
+TASK_CONFIDENCE_WEIGHT = 0.15
+TASK_PARTIAL_CREDIT_WEIGHT = 0.7
+
+PASS_THRESHOLD = 0.75
+WARN_THRESHOLD = 0.55
+REVIEW_MIN_THRESHOLD = 0.5
+REVIEW_MAX_THRESHOLD = 0.65
+
 _TASK_REQUIREMENTS_CACHE: Dict[tuple[str, str, Optional[str], str], List[Dict[str, Any]]] = {}
 _TASK_REQUIREMENTS_CACHE_LOCK = Lock()
+
+
+def _label_from_score(score: Optional[float]) -> str:
+    if score is None:
+        return "na"
+    if score >= PASS_THRESHOLD:
+        return "pass"
+    if score >= WARN_THRESHOLD:
+        return "warn"
+    if REVIEW_MIN_THRESHOLD <= score <= REVIEW_MAX_THRESHOLD:
+        return "review"
+    return "fail"
 
 
 def _get_client(api_key: Optional[str] = None, base_url: Optional[str] = None) -> OpenAI:
@@ -237,9 +263,10 @@ def score_claim_based_hallucination(
         model_name=model_name,
     )
     if not claims:
+        score = 0.5
         return {
-            "score": 0.0,
-            "label": "fail",
+            "score": score,
+            "label": _label_from_score(score),
             "details": "no verifiable claims extracted",
             "claim_count": 0,
             "total_claim_importance": 0,
@@ -249,10 +276,10 @@ def score_claim_based_hallucination(
             "supported_claim_importance": 0,
             "contradicted_claim_importance": 0,
             "not_mentioned_claim_importance": 0,
-            "support_ratio": 0.0,
-            "judge_confidence": 0.0,
-            "hallucination_density": 0.0,
-            "weighted_hallucination_density": 0.0,
+            "support_ratio": None,
+            "judge_confidence": None,
+            "hallucination_density": None,
+            "weighted_hallucination_density": None,
             "weighted_penalty": 0.0,
             "hallucination_breakdown": {
                 "entity": 0,
@@ -324,14 +351,17 @@ def score_claim_based_hallucination(
     confidence = (
         sum(item["confidence"] for item in verifications) / (100.0 * claim_count) if claim_count else 0.0
     )
-    score = max(0.0, round(support_ratio - weighted_hallucination_density, 4))
-
-    if score >= 0.85:
-        label = "pass"
-    elif score >= 0.6:
-        label = "warn"
-    else:
-        label = "fail"
+    capped_weighted_hallucination_density = min(weighted_hallucination_density, FACT_WEIGHTED_PENALTY_CAP)
+    score = max(
+        0.0,
+        round(
+            FACT_SUPPORT_WEIGHT * support_ratio
+            + FACT_ANTI_HALLUCINATION_WEIGHT * (1.0 - capped_weighted_hallucination_density)
+            + FACT_CONFIDENCE_WEIGHT * confidence,
+            4,
+        ),
+    )
+    label = _label_from_score(score)
 
     return {
         "score": score,
@@ -350,6 +380,7 @@ def score_claim_based_hallucination(
         "hallucination_density": round(hallucination_density, 4),
         "weighted_hallucination_density": round(weighted_hallucination_density, 4),
         "weighted_penalty": round(weighted_penalty, 4),
+        "capped_weighted_hallucination_density": round(capped_weighted_hallucination_density, 4),
         "hallucination_breakdown": {
             "entity": entity_count,
             "relation_action": relation_count,
@@ -500,7 +531,7 @@ def score_task_alignment(
     )
 
     if total_requirement_importance > 0:
-        earned_score = satisfied_importance + partial_importance * 0.5
+        earned_score = satisfied_importance + partial_importance * TASK_PARTIAL_CREDIT_WEIGHT
         coverage_ratio = earned_score / total_requirement_importance
     else:
         coverage_ratio = 0.0
@@ -510,14 +541,8 @@ def score_task_alignment(
         if requirement_count
         else 0.0
     )
-    score = round(coverage_ratio, 4)
-
-    if score >= 0.85:
-        label = "pass"
-    elif score >= 0.6:
-        label = "warn"
-    else:
-        label = "fail"
+    score = round(TASK_COVERAGE_WEIGHT * coverage_ratio + TASK_CONFIDENCE_WEIGHT * confidence, 4)
+    label = _label_from_score(score)
 
     return {
         "score": score,
