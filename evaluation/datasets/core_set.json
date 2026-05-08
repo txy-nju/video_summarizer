@@ -50,5 +50,68 @@
     "llm-memory"
   ],
   "human_guidance": "评估时请重点关注摘要是否遗漏了核心的专有名词（如四象限的具体英文名称、四层防御的具体层级），以及是否准确传达了“上下文维护是认知问题而非容量问题”的最终结论。"
-  }
+  },
+  {
+  "sample_id": "video-rag-hallucination-001",
+  "enabled": true,
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/面试官：你觉得RAG为什么会出现幻觉？.mp4",
+  "user_prompt": "请根据视频内容，系统性地总结RAG出现幻觉的原因及全链路解决方案。看完你的总结后，我可能会追问：在检索阶段，为什么仅仅使用向量检索不够，必须引入混合检索（Hybrid Search）？",
+  "reference_summary": "该视频详细解析了RAG（检索增强生成）产生幻觉的根本原因，并提供了一套Advanced RAG全链路治理方案。讲者指出，幻觉不仅是生成模型的问题，而是贯穿全链路的隐患。系统被拆解为五个核心阶段并浓缩为“净、改、排、控”四大口诀：1. 净（数据准备）：避免粗暴的字数切分，采用语义切分（Semantic Chunking）保证语料干净完整。2. 改（查询优化）：利用大模型进行Query改写或HyDE技术，明确用户模糊的意图。3. 排（检索与重排序）：采用混合检索（向量+关键词）抓取语义与精准词汇，并使用Cross-Encoder模型进行重排序（Re-ranking），剔除噪声。4. 控（生成阶段）：通过Prompt严格约束模型，要求“不知道就说不知道”并强制输出引用的具体文档行数，从而有效遏制幻觉胡编。",
+  "key_points": [
+    "痛点与问题定义：RAG幻觉可能发生在数据入库、检索、生成的任何一环。例如切分粒度不当导致的“语义断裂”、用户提问与知识库不匹配、以及大模型自身的“知识冲突”与“惯性输出”。",
+    "核心技术实体：解决链路涉及多个关键技术，包括 Semantic Chunking（语义切分）、Query Rewriting（查询重写）、Hybrid Search（混合检索）和 Cross-Encoder（重排精排模型）。",
+    "结构化面试结论：针对“RAG幻觉治理”的面试考点，可直接套用“净（源头去噪）、改（问题对齐）、排（混合检索+重排序提纯）、控（Prompt强制引用）”的四字方法论。"
+  ],
+  "tags": [
+    "大模型面试",
+    "RAG架构",
+    "幻觉治理",
+    "Advanced RAG"
+  ],
+  "human_guidance": "生成总结时请务必按照面试八股文的严谨结构输出。为了覆盖用户的追问需求，请在摘要或关键点中明确强调：向量检索对于专有名词（如具体型号）容易发生偏离，因此必须与传统的关键词匹配（如BM25）结合，形成“两手抓”的混合检索策略。"
+},
+{
+  "sample_id": "harness-engineering-agent-001",
+  "enabled": true,
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/专业祛魅：Harness是什么，怎么学.mp4",
+  "user_prompt": "请总结视频中关于 Harness Engineering 的核心定义、大厂实践案例（特别是 LangChain 和 Anthropic 的架构设计），并结合我们日常构建的多智能体工作流（如基于 LangGraph）提出相关的进阶追问探讨。",
+  "reference_summary": "视频深入解析了 AI Agent 领域的最新热词 Harness Engineering（脚手架/约束工程）。它并非单一技术，而是千方百计提升 Agent 可靠性的一系列工程技巧总称。视频详细拆解了 Anthropic 的长任务状态接力与“生成器-评估器”架构、OpenAI 的 AI 友好型日志设计，以及 LangChain 利用执行轨迹让 AI 自我优化和 Hook 拦截的机制。最后作者强调，随着模型演进具体技巧会过时，但工程能力永存。建议学习者先在 Vibe Coding 模式下通过高阶工具（如 Claude Code）真实踩坑，在经历痛点后再系统学习这些约束技巧。",
+  "key_points": [
+    "核心定义：Harness 旨在构建一套机制防止 Agent 重复犯错，是提示词工程、上下文工程的自然演进，本质是围绕模型运行构建的外层脚手架框架。",
+    "Anthropic 方案：针对长上下文崩溃，采用独立小 Agent 接力执行；针对模型“盲目自信”，设计了带严格规范和验证工具（如 Playwright）的“生成器-评估器”循环修正架构。",
+    "OpenAI 与 LangChain 方案：OpenAI 提出构建专供 AI 阅读的日志及渐进式文档披露（按需查找）；LangChain 通过分析 Agent 历史轨迹提取优化方案，并用中间件 Hook 拦截模型草率的结单汇报。",
+    "学习建议：反对无脑囤积教程，提倡先投入编码实战，在真实报错和“被 AI 戏耍”的挫败后，再带着具体问题去理解 Harness 的设计思路。"
+  ],
+  "tags": [
+    "Agentic Systems",
+    "Harness Engineering",
+    "LangChain",
+    "Vibe Coding"
+  ],
+  "human_guidance": "模拟追问：\n1. 在实际开发中，如果将 Anthropic 的“生成器-评估器”循环迁移到咱们熟悉的 LangGraph 状态图中，评估节点的 State 应该如何设计才能避免因循环次数过多导致的 Token 消耗过载？\n2. 视频里提到的 LangChain 中间件 Hook 机制，如果在我们自己的模块化系统中实现，如何在 Agent 决策层和底层工具链之间优雅地插入这些 Hook 卡点？\n3. 面对模型能力不断变强导致旧 Harness 技巧失效的风险，我们在设计底座架构时，应该如何保持外部约束逻辑与核心链路的解耦？"
+},
+{
+  "sample_id": "video-summary-ai-transition-001",
+  "enabled": true,
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/分享我转 AI 方向的学习路径和工作转变.mp4",
+  "user_prompt": "本地视频场景下，请按照“学习路径与核心技术”、“企业工作模式转变”以及“AI焦虑应对”的结构进行归纳，并模拟人类对视频核心技术点的询问和追问。",
+  "reference_summary": "本视频系统分享了UP主（Polebug）从Web3后端转向AI方向的实战与思考。在学习路径上，她详细梳理了基于LangGraph的Agent Workflow、Tool Calling与上下文持久化、Prompt/Skill工程、MCP Server以及RAG应用及评测等核心模块。在工作模式上，她从单线业务开发转向企业内部AI工具建设与跨部门AI提效，强调了个人Vibe Coding与团队严谨Skill工程的差异。针对AI带来的成就感剥夺与工作压缩焦虑，她引用《德米安》鼓励大家借此契机摆脱随波逐流，寻找真正的自我使命。",
+  "key_points": [
+    "核心技术演进：系统讲解了从LangGraph状态流转、OpenAI/Anthropic的Tool Calling最佳实践，到使用MCP Server替代RESTful API作为AI时代标准通信协议的学习过程。",
+    "生产环境认知：明确区分了个人“Vibe Coding”（高容错、可随时微调）与企业生产环境“Skill工程”（要求高稳定性、严控上下文长度以防注意力稀释）的巨大差异。",
+    "企业AI落地三大方向：总结了企业内部AI团队的主要发力点，包括AI基建（网关/权限）、内部AI工具（知识库问答/Skill Hub）以及赋能其他业务线的团队AI提效。"
+  ],
+  "tags": [
+    "AI转型",
+    "LangGraph",
+    "MCP Server",
+    "RAG",
+    "Agent开发",
+    "职业规划"
+  ],
+  "human_guidance": "模拟追问设计：1. 追问技术原理：“UP主提到的MCP Server相比传统RESTful API，具体是如何让大模型自主‘发现’和‘理解’工具的？” 2. 追问工程挑战：“视频里提到把流程约束都写进Prompt会导致‘上下文膨胀’和‘注意力稀释’，在实际Skill工程中她是怎么解决这个边界问题的？” 3. 追问实践资源：“对于想动手实践RAG Agent的新手，视频中重点推荐了哪些官方文档或评测工具（如LangSmith）的具体用法？”"
+}
 ]

@@ -400,6 +400,7 @@ def route_synthesis_send_tasks(state: VideoSummaryState) -> List[Send]:
 
     sends: List[Send] = []
     user_prompt = str(state.get("user_prompt", ""))
+    structured_global_context = str(state.get("structured_global_context", ""))
     for chunk in chunk_plan:
         if not isinstance(chunk, dict):
             continue
@@ -423,6 +424,7 @@ def route_synthesis_send_tasks(state: VideoSummaryState) -> List[Send]:
                 "chunk_synthesizer_worker_node",
                 {
                     "user_prompt": user_prompt,
+                    "structured_global_context":structured_global_context,
                     "current_synthesis_chunk": chunk,
                     "current_synthesis_base_item": base_item,
                 },

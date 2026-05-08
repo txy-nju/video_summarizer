@@ -43,6 +43,7 @@ class TestSynthesisSendApiFlow(unittest.TestCase):
             {
                 "chunk_plan": chunk_plan,
                 "user_prompt": "focus",
+                "structured_global_context": {"entities": [{"name": "demo"}]},
                 "chunk_results": [
                     {"chunk_id": "c1", "audio_insights": "a1", "vision_insights": "v1"},
                     {"chunk_id": "c2", "audio_insights": "a2", "vision_insights": "v2"},
@@ -51,9 +52,15 @@ class TestSynthesisSendApiFlow(unittest.TestCase):
             },
         )
 
-        def _mock_process(chunk_id: str, user_prompt: str, base_item: Dict[str, Any]):
+        def _mock_process(
+            chunk_id: str,
+            user_prompt: str,
+            structured_global_context: str,
+            base_item: Dict[str, Any],
+        ):
             merged = dict(base_item)
             merged["chunk_summary"] = f"summary-{chunk_id}"
+            merged["_debug_context"] = structured_global_context
             return chunk_id, merged
 
         mock_process.side_effect = _mock_process
@@ -72,6 +79,7 @@ class TestSynthesisSendApiFlow(unittest.TestCase):
                 VideoSummaryState,
                 {
                     "user_prompt": payload.get("user_prompt", ""),
+                    "structured_global_context": payload.get("structured_global_context", ""),
                     "current_synthesis_chunk": payload.get("current_synthesis_chunk", {}),
                     "current_synthesis_base_item": payload.get("current_synthesis_base_item", {}),
                 },
@@ -95,6 +103,10 @@ class TestSynthesisSendApiFlow(unittest.TestCase):
         self.assertEqual(len(result["chunk_results"]), 2)
         self.assertEqual(result["chunk_results"][0].get("chunk_summary"), "summary-c1")
         self.assertEqual(result["chunk_results"][1].get("chunk_summary"), "summary-c2")
+        self.assertEqual(
+            result["chunk_results"][0].get("_debug_context"),
+            str(state.get("structured_global_context", "")),
+        )
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ def _llm_chunk_fusion(
     chunk_id: str,
     audio_insights: str,
     vision_insights: str,
+    structured_global_context:str,
     user_prompt: str,
     timeout_seconds: float,
 ) -> str:
@@ -52,7 +53,8 @@ def _llm_chunk_fusion(
                     f"[chunk_id]\\n{chunk_id}\\n\\n"
                     f"[user_prompt]\\n{user_prompt}\\n\\n"
                     f"[audio_insights]\\n{audio_insights}\\n\\n"
-                    f"[vision_insights]\\n{vision_insights}"
+                    f"[vision_insights]\\n{vision_insights}\\n\\n"
+                    f"[structured_global_context]\\n{structured_global_context}"
                 ),
             },
         ],
@@ -65,6 +67,7 @@ def _llm_chunk_fusion(
 def _process_single_chunk_synthesis(
     chunk_id: str,
     user_prompt: str,
+    structured_global_context:str,
     base_item: Dict[str, Any],
 ) -> Tuple[str, Dict[str, Any]]:
     started = time.perf_counter()
@@ -77,6 +80,7 @@ def _process_single_chunk_synthesis(
             chunk_id,
             audio_insights,
             vision_insights,
+            structured_global_context,
             user_prompt,
             CHUNK_WORKER_TIMEOUT_SECONDS,
         )
@@ -103,6 +107,7 @@ def _process_single_chunk_synthesis(
 def _run_synthesis_with_retry(
     chunk_id: str,
     user_prompt: str,
+    structured_global_context:str,
     base_item: Dict[str, Any],
 ) -> Tuple[str, Dict[str, Any]]:
     last_delta: Dict[str, Any] = {
@@ -114,7 +119,7 @@ def _run_synthesis_with_retry(
 
     retries_used = 0
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
-        _, delta = _process_single_chunk_synthesis(chunk_id, user_prompt, base_item)
+        _, delta = _process_single_chunk_synthesis(chunk_id, user_prompt, structured_global_context ,base_item)
         last_delta = dict(delta)
         status = str(last_delta.get("modality_status", {}).get("synthesizer", "ok")).strip().lower()
         retries_used = attempt
@@ -199,12 +204,14 @@ def chunk_synthesizer_worker_node(state: VideoSummaryState) -> dict:
 
     user_prompt = str(state.get("user_prompt", ""))
     base_item = state.get("current_synthesis_base_item", {"chunk_id": chunk_id})
+    structured_global_context = str(state.get("structured_global_context",""))
     if not isinstance(base_item, dict):
         base_item = {"chunk_id": chunk_id}
 
     _, merged = _run_synthesis_with_retry(
         chunk_id,
         user_prompt,
+        structured_global_context,
         base_item,
     )
     return {"chunk_results": [merged]}
