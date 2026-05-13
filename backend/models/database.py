@@ -1,11 +1,96 @@
 from datetime import datetime
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
 
 from backend.models.enums import FrameExtractionStatus, TranscribeStatus, WorkflowState
+
+
+class RetrievalConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    top_k: int = Field(ge=1)
+    rerank: bool
+
+
+class ToolPreferencesSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allow_web_search: bool
+
+
+class LlmPolicySchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    temperature: float = Field(ge=0.0, le=2.0)
+
+
+class KnowledgeBaseConfigSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    retrieval: RetrievalConfigSchema
+    tool_preferences: ToolPreferencesSchema
+    llm_policy: LlmPolicySchema
+
+
+class KeyframeSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    time: str
+    scene_change_score: float = Field(ge=0.0, le=1.0)
+    scene_change_level: str
+    oss_key: str
+
+
+class AttachmentSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    oss_key: str
+    mime_type: str
+    size_bytes: int = Field(ge=0)
+
+
+class CitedSourceSchema(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str
+    task_id: str | None = None
+    time_range: str
+    quote: str
+    score: float = Field(ge=0.0, le=1.0)
+
+
+def _validate_model(value: dict, schema_cls: type[BaseModel], field_name: str) -> dict:
+    try:
+        return schema_cls.model_validate(value).model_dump()
+    except ValidationError as exc:
+        raise ValueError(f"Invalid JSON payload for {field_name}: {exc}") from exc
+
+
+def _validate_model_list(value: list, schema_cls: type[BaseModel], field_name: str) -> list[dict]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+
+    validated: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError(f"Each item in {field_name} must be an object")
+        validated.append(_validate_model(item, schema_cls, field_name))
+    return validated
+
+
+def _validate_vector_ids(value: dict | list | None, field_name: str) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of strings")
+    if any(not isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of strings")
+    return value
 
 
 class Base(DeclarativeBase):
@@ -51,6 +136,17 @@ class VideoResource(Base):
     keyframes_oss_prefix: Mapped[str | None] = mapped_column(String(512))
     extract_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    @validates("transcript_vector_ids")
+    def validate_transcript_vector_ids(self, key: str, value: dict | list | None) -> list[str] | None:
+        return _validate_vector_ids(value, key)
+
+    @validates("keyframes")
+    def validate_keyframes(self, key: str, value: dict | list | None) -> list[dict] | None:
+        if value is None:
+            return None
+        validated = _validate_model_list(value, KeyframeSchema, key)
+        return validated
+
 
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
@@ -62,6 +158,14 @@ class KnowledgeBase(Base):
     description: Mapped[str | None] = mapped_column(Text)
     vector_collection_name: Mapped[str | None] = mapped_column(String(255))
     config: Mapped[dict | None] = mapped_column(JSONB)
+
+    @validates("config")
+    def validate_config(self, key: str, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError(f"{key} must be an object")
+        return _validate_model(value, KnowledgeBaseConfigSchema, key)
 
 
 class KBVideoRelation(Base):
@@ -99,6 +203,10 @@ class VideoSummaryTask(Base):
         nullable=False,
     )
 
+    @validates("summary_vector_ids")
+    def validate_summary_vector_ids(self, key: str, value: dict | list | None) -> list[str] | None:
+        return _validate_vector_ids(value, key)
+
 
 class VideoQARecord(Base):
     __tablename__ = "video_qa_records"
@@ -111,6 +219,12 @@ class VideoQARecord(Base):
     answer_content: Mapped[str | None] = mapped_column(Text)
     attachments: Mapped[dict | list | None] = mapped_column(JSONB)
     question_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    @validates("attachments")
+    def validate_attachments(self, key: str, value: dict | list | None) -> list[dict] | None:
+        if value is None:
+            return None
+        return _validate_model_list(value, AttachmentSchema, key)
 
 
 class GlobalChatSession(Base):
@@ -132,3 +246,15 @@ class GlobalQARecord(Base):
     attachments: Mapped[dict | list | None] = mapped_column(JSONB)
     cited_sources: Mapped[dict | list | None] = mapped_column(JSONB)
     question_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    @validates("attachments")
+    def validate_attachments(self, key: str, value: dict | list | None) -> list[dict] | None:
+        if value is None:
+            return None
+        return _validate_model_list(value, AttachmentSchema, key)
+
+    @validates("cited_sources")
+    def validate_cited_sources(self, key: str, value: dict | list | None) -> list[dict] | None:
+        if value is None:
+            return None
+        return _validate_model_list(value, CitedSourceSchema, key)
