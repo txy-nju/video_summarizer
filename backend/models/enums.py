@@ -1,0 +1,22 @@
+from enum import Enum
+
+
+class TranscribeStatus(str, Enum):
+    UPLOADED = "UPLOADED"
+    TRANSCRIBING = "TRANSCRIBING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class FrameExtractionStatus(str, Enum):
+    UPLOADED = "UPLOADED"
+    EXTRACTING = "EXTRACTING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class WorkflowState(str, Enum):
+    DRAFT_GENERATING = "DRAFT_GENERATING"
+    WAITING_USER_APPROVAL = "WAITING_USER_APPROVAL"
+    FINAL_GENERATING = "FINAL_GENERATING"
+    COMPLETED = "COMPLETED"

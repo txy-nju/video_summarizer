@@ -1,4 +1,11 @@
 streamlit
+fastapi
+uvicorn
+pydantic-settings
+python-jose[cryptography]
+sqlalchemy
+psycopg2-binary
+alembic
 yt-dlp
 opencv-python
 moviepy
