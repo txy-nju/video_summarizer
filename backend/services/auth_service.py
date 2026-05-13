@@ -36,12 +36,40 @@ class AuthService:
         return UserView(user_id=user.user_id, username=user.username)
 
     def authenticate_user(self, username: str, password: str, device_id: str) -> TokenResponseData:
+        """
+        验证用户身份并颁发令牌对。
+
+        Args:
+            username (str): 用户名。
+            password (str): 用户密码。
+            device_id (str): 设备唯一标识符。
+
+        Returns:
+            TokenResponseData: 包含访问令牌和刷新令牌的数据对象。
+
+        Raises:
+            HTTPException: 当用户名不存在或密码错误时，抛出401未授权异常。
+        """
         user = self._users_by_name.get(username)
         if user is None or not verify_password(password, user.password_hash):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
         return self._issue_token_pair(user=user, device_id=device_id)
 
     def refresh_access_token(self, user_id: str, username: str, device_id: str) -> TokenResponseData:
+        """
+        刷新访问令牌。
+
+        根据用户ID、用户名和设备ID生成新的令牌对。如果用户不存在或用户名不匹配，
+        则抛出401未授权异常。
+
+        Args:
+            user_id (str): 用户的唯一标识符。
+            username (str): 用户的用户名，用于验证身份。
+            device_id (str): 设备ID，用于关联令牌与特定设备。
+
+        Returns:
+            TokenResponseData: 包含新颁发的访问令牌和刷新令牌的数据对象。
+        """
         user = self._users_by_id.get(user_id)
         if user is None or user.username != username:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token subject")

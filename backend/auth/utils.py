@@ -18,6 +18,19 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """
+    验证明文密码是否与哈希密码匹配。
+
+    该函数解析特定格式的哈希字符串，使用 PBKDF2-HMAC-SHA256 算法重新计算摘要，
+    并通过恒定时间比较来防止时序攻击。
+
+    Args:
+        plain_password (str): 用户输入的明文密码。
+        hashed_password (str): 存储的哈希密码字符串，格式为 "algorithm$rounds$salt_hex$digest_hex"。
+
+    Returns:
+        bool: 如果明文密码与哈希密码匹配则返回 True，否则返回 False。
+    """
     try:
         algorithm, rounds, salt_hex, digest_hex = hashed_password.split("$", 3)
     except ValueError:
