@@ -14,6 +14,11 @@ from backend.schemas.kb import (
     KnowledgeBaseListResponse,
     KnowledgeBaseResponse,
     KnowledgeBaseUpdateRequest,
+    KnowledgeBaseVideoBindData,
+    KnowledgeBaseVideoBindRequest,
+    KnowledgeBaseVideoBindResponse,
+    KnowledgeBaseVideoListResponse,
+    KnowledgeBaseVideoRemoveResponse,
 )
 from backend.services.kb_service import KnowledgeBaseService
 
@@ -105,3 +110,60 @@ async def delete_knowledge_base(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
     return KnowledgeBaseDeleteResponse(data=KnowledgeBaseDeleteData(kbid=kbid), meta=_build_meta(request))
+
+
+@router.post("/{kbid}/videos", response_model=KnowledgeBaseVideoBindResponse)
+async def add_video_to_knowledge_base(
+    kbid: str,
+    payload: KnowledgeBaseVideoBindRequest,
+    request: Request,
+    current_user: UserView = Depends(get_current_user),
+    kb_service: KnowledgeBaseService = Depends(get_kb_service),
+):
+    bound = kb_service.add_video_to_knowledge_base(
+        owner_id=current_user.user_id,
+        kbid=kbid,
+        video_id=payload.video_id,
+    )
+    if not bound:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base or video resource not found")
+    return KnowledgeBaseVideoBindResponse(data=KnowledgeBaseVideoBindData(kbid=kbid, video_id=payload.video_id), meta=_build_meta(request))
+
+
+@router.get("/{kbid}/videos", response_model=KnowledgeBaseVideoListResponse)
+async def list_knowledge_base_videos(
+    kbid: str,
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: UserView = Depends(get_current_user),
+    kb_service: KnowledgeBaseService = Depends(get_kb_service),
+):
+    result = kb_service.list_knowledge_base_videos(
+        owner_id=current_user.user_id,
+        kbid=kbid,
+        page=page,
+        page_size=page_size,
+    )
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+    items, pagination = result
+    return KnowledgeBaseVideoListResponse(data=items, pagination=PaginationInfo.model_validate(pagination), meta=_build_meta(request))
+
+
+@router.delete("/{kbid}/videos/{video_id}", response_model=KnowledgeBaseVideoRemoveResponse)
+async def remove_video_from_knowledge_base(
+    kbid: str,
+    video_id: str,
+    request: Request,
+    current_user: UserView = Depends(get_current_user),
+    kb_service: KnowledgeBaseService = Depends(get_kb_service),
+):
+    removed = kb_service.remove_video_from_knowledge_base(
+        owner_id=current_user.user_id,
+        kbid=kbid,
+        video_id=video_id,
+    )
+    if not removed:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base or video resource not found")
+    return KnowledgeBaseVideoRemoveResponse(data=KnowledgeBaseVideoBindData(kbid=kbid, video_id=video_id), meta=_build_meta(request))

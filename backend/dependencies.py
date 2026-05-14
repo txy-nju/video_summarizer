@@ -3,6 +3,7 @@ from functools import lru_cache
 from backend.config import Settings, get_settings
 from backend.services.auth_service import AuthService
 from backend.repositories.kb_repository import KnowledgeBaseRepository
+from backend.repositories.kb_video_relation_repository import KBVideoRelationRepository
 from backend.services.kb_service import KnowledgeBaseService
 from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.services.video_resource_service import VideoResourceService
@@ -27,8 +28,17 @@ def get_kb_repository() -> KnowledgeBaseRepository:
 
 
 @lru_cache(maxsize=1)
+def get_kb_video_relation_repository() -> KBVideoRelationRepository:
+    return KBVideoRelationRepository()
+
+
+@lru_cache(maxsize=1)
 def get_kb_service() -> KnowledgeBaseService:
-    return KnowledgeBaseService(repository=get_kb_repository())
+    return KnowledgeBaseService(
+        repository=get_kb_repository(),
+        video_repository=get_video_resource_repository(),
+        kb_video_relation_repository=get_kb_video_relation_repository(),
+    )
 
 
 @lru_cache(maxsize=1)

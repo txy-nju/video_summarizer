@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.schemas.common import MetaInfo, PaginationInfo
 
@@ -71,4 +71,40 @@ class KnowledgeBaseDeleteData(BaseModel):
 class KnowledgeBaseDeleteResponse(BaseModel):
     status: str = "success"
     data: KnowledgeBaseDeleteData
+    meta: MetaInfo
+
+
+class KnowledgeBaseVideoBindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    video_id: str = Field(min_length=1, max_length=64)
+
+
+class KnowledgeBaseVideoItem(BaseModel):
+    video_id: str
+    file_name: str
+    created_at: datetime
+
+
+class KnowledgeBaseVideoBindData(BaseModel):
+    kbid: str
+    video_id: str
+
+
+class KnowledgeBaseVideoBindResponse(BaseModel):
+    status: str = "success"
+    data: KnowledgeBaseVideoBindData
+    meta: MetaInfo
+
+
+class KnowledgeBaseVideoListResponse(BaseModel):
+    status: str = "success"
+    data: list[KnowledgeBaseVideoItem]
+    pagination: PaginationInfo
+    meta: MetaInfo
+
+
+class KnowledgeBaseVideoRemoveResponse(BaseModel):
+    status: str = "success"
+    data: KnowledgeBaseVideoBindData
     meta: MetaInfo

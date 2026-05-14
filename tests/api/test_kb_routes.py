@@ -20,6 +20,10 @@ KB_PAYLOAD = {
     },
 }
 
+VIDEO_PAYLOAD = {
+    "file_name": "kb-related-video.mp4",
+}
+
 
 def _login(username: str, password: str = "Secret123!") -> str:
     register_response = client.post("/api/v1/auth/register", json={"username": username, "password": password})
@@ -151,3 +155,63 @@ def test_delete_knowledge_base_not_found_for_other_user() -> None:
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert delete_response.status_code == 404
+
+
+def test_kb_video_relation_intent_flow() -> None:
+    token = _login("alice-kb-video")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=headers)
+    assert create_kb_response.status_code == 201
+    kbid = create_kb_response.json()["data"]["kbid"]
+
+    create_video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert create_video_response.status_code == 201
+    video_id = create_video_response.json()["data"]["video_id"]
+
+    bind_response = client.post(f"/api/v1/kbs/{kbid}/videos", json={"video_id": video_id}, headers=headers)
+    assert bind_response.status_code == 200
+    assert bind_response.json()["data"] == {"kbid": kbid, "video_id": video_id}
+
+    list_response = client.get(f"/api/v1/kbs/{kbid}/videos?page=1&page_size=20", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()["pagination"]["total"] == 1
+    assert list_response.json()["data"][0]["video_id"] == video_id
+    assert "relation_id" not in list_response.json()["data"][0]
+    assert "added_at" not in list_response.json()["data"][0]
+
+    remove_response = client.delete(f"/api/v1/kbs/{kbid}/videos/{video_id}", headers=headers)
+    assert remove_response.status_code == 200
+
+    list_after_remove = client.get(f"/api/v1/kbs/{kbid}/videos?page=1&page_size=20", headers=headers)
+    assert list_after_remove.status_code == 200
+    assert list_after_remove.json()["pagination"]["total"] == 0
+
+
+def test_kb_video_relation_owner_isolation() -> None:
+    alice_token = _login("alice-kb-video-isolation")
+    bob_token = _login("bob-kb-video-isolation")
+
+    alice_headers = {"Authorization": f"Bearer {alice_token}"}
+    bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+    create_kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=alice_headers)
+    assert create_kb_response.status_code == 201
+    alice_kbid = create_kb_response.json()["data"]["kbid"]
+
+    create_video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=alice_headers)
+    assert create_video_response.status_code == 201
+    alice_video_id = create_video_response.json()["data"]["video_id"]
+
+    bind_forbidden = client.post(
+        f"/api/v1/kbs/{alice_kbid}/videos",
+        json={"video_id": alice_video_id},
+        headers=bob_headers,
+    )
+    assert bind_forbidden.status_code == 404
+
+    list_forbidden = client.get(f"/api/v1/kbs/{alice_kbid}/videos", headers=bob_headers)
+    assert list_forbidden.status_code == 404
+
+    remove_forbidden = client.delete(f"/api/v1/kbs/{alice_kbid}/videos/{alice_video_id}", headers=bob_headers)
+    assert remove_forbidden.status_code == 404
