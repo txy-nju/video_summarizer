@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from backend.api.routes.auth_routes import router as auth_router
+from backend.api.routes.kb_routes import router as kb_router
 from backend.config import get_settings
 from backend.logging import setup_logging
 from backend.middleware.mobile_optimize import register_mobile_optimization
@@ -26,6 +27,7 @@ def _build_system_router() -> APIRouter:
 def _register_routers(app: FastAPI) -> None:
     app.include_router(_build_system_router())
     app.include_router(auth_router)
+    app.include_router(kb_router)
 
 
 def create_app() -> FastAPI:
