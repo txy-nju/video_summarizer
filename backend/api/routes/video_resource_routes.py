@@ -96,7 +96,7 @@ async def update_video_resource(
     return VideoResourceResponse(data=video, meta=_build_meta(request))
 
 
-@router.delete("/{video_id}", response_model=VideoResourceDeleteResponse)
+@router.delete("/{video_id}", response_model=VideoResourceDeleteResponse, status_code=status.HTTP_202_ACCEPTED)
 async def delete_video_resource(
     video_id: str,
     request: Request,

@@ -24,6 +24,9 @@ class VideoResourceRecord:
     frame_extraction_status: str
     keyframes_oss_prefix: str | None
     extract_completed_at: datetime | None
+    is_deleted: bool
+    deleted_at: datetime | None
+    deletion_status: str
     created_at: datetime
 
 
@@ -46,6 +49,9 @@ class VideoResourceRepository:
             frame_extraction_status="UPLOADED",
             keyframes_oss_prefix=None,
             extract_completed_at=None,
+            is_deleted=False,
+            deleted_at=None,
+            deletion_status="NONE",
             created_at=datetime.now(UTC),
         )
         with self._lock:
@@ -56,12 +62,16 @@ class VideoResourceRepository:
     def list_by_owner(self, owner_id: str) -> list[VideoResourceRecord]:
         with self._lock:
             owner_bucket = self._records_by_owner.get(owner_id, {})
-            return sorted(owner_bucket.values(), key=lambda item: item.created_at, reverse=True)
+            visible_items = [item for item in owner_bucket.values() if not item.is_deleted]
+            return sorted(visible_items, key=lambda item: item.created_at, reverse=True)
 
     def get_by_owner_and_id(self, owner_id: str, video_id: str) -> VideoResourceRecord | None:
         with self._lock:
             owner_bucket = self._records_by_owner.get(owner_id, {})
-            return owner_bucket.get(video_id)
+            record = owner_bucket.get(video_id)
+            if record is None or record.is_deleted:
+                return None
+            return record
 
     def update_by_owner_and_id(
         self,
@@ -73,7 +83,7 @@ class VideoResourceRepository:
         with self._lock:
             owner_bucket = self._records_by_owner.get(owner_id, {})
             current = owner_bucket.get(video_id)
-            if current is None:
+            if current is None or current.is_deleted:
                 return None
             updated = replace(
                 current,
@@ -85,5 +95,14 @@ class VideoResourceRepository:
     def delete_by_owner_and_id(self, owner_id: str, video_id: str) -> bool:
         with self._lock:
             owner_bucket = self._records_by_owner.get(owner_id, {})
-            removed = owner_bucket.pop(video_id, None)
-            return removed is not None
+            current = owner_bucket.get(video_id)
+            if current is None or current.is_deleted:
+                return False
+
+            owner_bucket[video_id] = replace(
+                current,
+                is_deleted=True,
+                deleted_at=datetime.now(UTC),
+                deletion_status="PENDING_DELETE",
+            )
+            return True

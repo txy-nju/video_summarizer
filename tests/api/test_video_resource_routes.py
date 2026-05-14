@@ -47,10 +47,17 @@ def test_video_resource_crud_flow() -> None:
     assert update_response.json()["data"]["duration"] == 0
 
     delete_response = client.delete(f"/api/v1/videos/{video_id}", headers=headers)
-    assert delete_response.status_code == 200
+    assert delete_response.status_code == 202
+
+    list_after_delete = client.get("/api/v1/videos?page=1&page_size=20", headers=headers)
+    assert list_after_delete.status_code == 200
+    assert list_after_delete.json()["pagination"]["total"] == 0
 
     get_after_delete = client.get(f"/api/v1/videos/{video_id}", headers=headers)
     assert get_after_delete.status_code == 404
+
+    second_delete = client.delete(f"/api/v1/videos/{video_id}", headers=headers)
+    assert second_delete.status_code == 404
 
 
 def test_video_resource_owner_isolation() -> None:
