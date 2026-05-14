@@ -1,0 +1,154 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from backend.app_factory import create_app
+
+
+app = create_app()
+client = TestClient(app)
+
+
+KB_PAYLOAD = {
+    "name": "QA知识库",
+    "category": "research",
+    "description": "用于测试单视频问答",
+    "config": {
+        "retrieval": {"top_k": 5, "rerank": True},
+        "tool_preferences": {"allow_web_search": False},
+        "llm_policy": {"temperature": 0.2},
+    },
+}
+
+VIDEO_PAYLOAD = {
+    "file_name": "qa-video.mp4",
+}
+
+
+def _login(username: str, password: str = "Secret123!") -> str:
+    register_response = client.post("/api/v1/auth/register", json={"username": username, "password": password})
+    assert register_response.status_code in (200, 201)
+    login_response = client.post(
+        "/api/v1/auth/login",
+        json={"username": username, "password": password, "device_id": f"device-{username}"},
+    )
+    assert login_response.status_code == 200
+    return login_response.json()["data"]["access_token"]
+
+
+def _prepare_task(token: str) -> str:
+    """准备一个任务用于测试问答"""
+    headers = {"Authorization": f"Bearer {token}"}
+    kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=headers)
+    assert kb_response.status_code == 201
+    kbid = kb_response.json()["data"]["kbid"]
+
+    video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert video_response.status_code == 201
+    video_id = video_response.json()["data"]["video_id"]
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={
+            "kbid": kbid,
+            "video_id": video_id,
+            "user_initial_preference": "测试问答",
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    return create_response.json()["data"]["task_id"]
+
+
+def test_video_qa_crud_flow() -> None:
+    token = _login("alice-qa")
+    headers = {"Authorization": f"Bearer {token}"}
+    task_id = _prepare_task(token)
+
+    # 创建问答
+    create_response = client.post(
+        f"/api/v1/tasks/{task_id}/qa",
+        json={
+            "task_id": task_id,
+            "start_time": "00:10:00",
+            "end_time": "00:12:00",
+            "question_content": "这段视频讲的是什么?",
+            "attachments": [],
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    qa_id = create_response.json()["data"]["qa_id"]
+
+    # 查询问答列表
+    list_response = client.get(f"/api/v1/tasks/{task_id}/qa?page=1&page_size=20", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()["pagination"]["total"] == 1
+
+    # 获取单条问答
+    get_response = client.get(f"/api/v1/tasks/{task_id}/qa/{qa_id}", headers=headers)
+    assert get_response.status_code == 200
+    assert get_response.json()["data"]["question_content"] == "这段视频讲的是什么?"
+    assert get_response.json()["data"]["answer_content"] is None
+
+    # 删除问答
+    delete_response = client.delete(f"/api/v1/tasks/{task_id}/qa/{qa_id}", headers=headers)
+    assert delete_response.status_code == 200
+
+    get_after_delete = client.get(f"/api/v1/tasks/{task_id}/qa/{qa_id}", headers=headers)
+    assert get_after_delete.status_code == 404
+
+
+def test_video_qa_with_attachments() -> None:
+    token = _login("bob-qa")
+    headers = {"Authorization": f"Bearer {token}"}
+    task_id = _prepare_task(token)
+
+    # 创建带附件的问答
+    create_response = client.post(
+        f"/api/v1/tasks/{task_id}/qa",
+        json={
+            "task_id": task_id,
+            "start_time": "00:05:00",
+            "end_time": "00:08:00",
+            "question_content": "这个图表的含义?",
+            "attachments": [
+                {
+                    "name": "screenshot.png",
+                    "oss_key": "attachments/usr_001/qa_001/screenshot.png",
+                    "mime_type": "image/png",
+                    "size_bytes": 102400,
+                }
+            ],
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    assert len(create_response.json()["data"]["attachments"]) == 1
+
+
+def test_video_qa_owner_isolation() -> None:
+    alice_token = _login("alice-qa-isolation")
+    bob_token = _login("bob-qa-isolation")
+    alice_headers = {"Authorization": f"Bearer {alice_token}"}
+    bob_headers = {"Authorization": f"Bearer {bob_token}"}
+
+    alice_task_id = _prepare_task(alice_token)
+
+    # Alice 创建问答
+    create_response = client.post(
+        f"/api/v1/tasks/{alice_task_id}/qa",
+        json={
+            "task_id": alice_task_id,
+            "start_time": "00:00:00",
+            "end_time": "00:01:00",
+            "question_content": "Alice的问题",
+            "attachments": [],
+        },
+        headers=alice_headers,
+    )
+    assert create_response.status_code == 201
+
+    # Bob 不能访问 Alice 的任务的问答
+    list_response = client.get(f"/api/v1/tasks/{alice_task_id}/qa", headers=bob_headers)
+    assert list_response.status_code == 404 or list_response.json()["pagination"]["total"] == 0

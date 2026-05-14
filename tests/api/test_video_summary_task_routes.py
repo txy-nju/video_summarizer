@@ -22,8 +22,6 @@ KB_PAYLOAD = {
 
 VIDEO_PAYLOAD = {
     "file_name": "task-video.mp4",
-    "oss_key": "videos/usr_001/vid_001/original.mp4",
-    "duration": 120,
 }
 
 
