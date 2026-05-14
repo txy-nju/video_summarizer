@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from backend.api.routes.auth_routes import router as auth_router
 from backend.config import get_settings
 from backend.logging import setup_logging
+from backend.middleware.mobile_optimize import register_mobile_optimization
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
     setup_logging(settings.log_level)
 
     app = FastAPI(title=settings.app_name)
+    register_mobile_optimization(app)
 
     @app.middleware("http")
     async def request_context_middleware(request: Request, call_next):
