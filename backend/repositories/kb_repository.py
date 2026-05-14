@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import Lock
 
-try:
-    from uuid import uuid7
-except ImportError:  # pragma: no cover - Python versions without uuid7
-    from uuid import uuid4 as uuid7
+from sqlalchemy.orm import Session
+
+from backend.models.database import KnowledgeBase
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,9 +21,8 @@ class KnowledgeBaseRecord:
 
 
 class KnowledgeBaseRepository:
-    def __init__(self) -> None:
-        self._records_by_owner: dict[str, dict[str, KnowledgeBaseRecord]] = {}
-        self._lock = Lock()
+    def __init__(self, db_session: Session) -> None:
+        self._session = db_session
 
     def create(
         self,
@@ -38,30 +34,37 @@ class KnowledgeBaseRepository:
         vector_collection_name: str | None,
         config: dict,
     ) -> KnowledgeBaseRecord:
-        record = KnowledgeBaseRecord(
-            kbid=str(uuid7()),
+        entity = KnowledgeBase(
             owner_id=owner_id,
             name=name,
             category=category,
             description=description,
             vector_collection_name=vector_collection_name,
             config=config,
-            created_at=datetime.now(UTC),
         )
-        with self._lock:
-            owner_bucket = self._records_by_owner.setdefault(owner_id, {})
-            owner_bucket[record.kbid] = record
-        return record
+        self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return self._to_record(entity)
 
     def list_by_owner(self, owner_id: str) -> list[KnowledgeBaseRecord]:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            return sorted(owner_bucket.values(), key=lambda item: item.created_at, reverse=True)
+        rows = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id)
+            .order_by(KnowledgeBase.kbid.desc())
+            .all()
+        )
+        return [self._to_record(row) for row in rows]
 
     def get_by_owner_and_id(self, owner_id: str, kbid: str) -> KnowledgeBaseRecord | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            return owner_bucket.get(kbid)
+        row = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return self._to_record(row)
 
     def update_by_owner_and_id(
         self,
@@ -73,24 +76,50 @@ class KnowledgeBaseRepository:
         description: str | None,
         config: dict | None,
     ) -> KnowledgeBaseRecord | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            current = owner_bucket.get(kbid)
-            if current is None:
-                return None
+        row = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if row is None:
+            return None
 
-            updated = replace(
-                current,
-                name=current.name if name is None else name,
-                category=current.category if category is None else category,
-                description=current.description if description is None else description,
-                config=current.config if config is None else config,
-            )
-            owner_bucket[kbid] = updated
-            return updated
+        if name is not None:
+            row.name = name
+        if category is not None:
+            row.category = category
+        if description is not None:
+            row.description = description
+        if config is not None:
+            row.config = config
+
+        self._session.commit()
+        self._session.refresh(row)
+        return self._to_record(row)
 
     def delete_by_owner_and_id(self, owner_id: str, kbid: str) -> bool:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            removed = owner_bucket.pop(kbid, None)
-            return removed is not None
+        row = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if row is None:
+            return False
+
+        self._session.delete(row)
+        self._session.commit()
+        return True
+
+    @staticmethod
+    def _to_record(entity: KnowledgeBase) -> KnowledgeBaseRecord:
+        created_at = getattr(entity, "created_at", None) or datetime.now(UTC)
+        return KnowledgeBaseRecord(
+            kbid=entity.kbid,
+            owner_id=entity.owner_id,
+            name=entity.name,
+            category=entity.category,
+            description=entity.description,
+            vector_collection_name=entity.vector_collection_name,
+            config=entity.config or {},
+            created_at=created_at,
+        )

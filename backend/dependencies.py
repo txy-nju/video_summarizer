@@ -42,7 +42,7 @@ def get_auth_service() -> AuthService:
 
 @lru_cache(maxsize=1)
 def get_kb_repository() -> KnowledgeBaseRepository:
-    return KnowledgeBaseRepository()
+    return KnowledgeBaseRepository(db_session=SessionLocal())
 
 
 @lru_cache(maxsize=1)
