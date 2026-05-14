@@ -15,8 +15,6 @@ class VideoResourceService:
         record = self._repository.create(
             owner_id=owner_id,
             file_name=payload.file_name,
-            oss_key=payload.oss_key,
-            duration=payload.duration,
         )
         return self._to_view(record)
 
@@ -53,7 +51,6 @@ class VideoResourceService:
             owner_id=owner_id,
             video_id=video_id,
             file_name=payload.file_name,
-            duration=payload.duration,
         )
         if record is None:
             return None

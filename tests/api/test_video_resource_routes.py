@@ -11,8 +11,6 @@ client = TestClient(app)
 
 VIDEO_PAYLOAD = {
     "file_name": "intro.mp4",
-    "oss_key": "videos/usr_001/vid_001/original.mp4",
-    "duration": 120,
 }
 
 
@@ -41,12 +39,12 @@ def test_video_resource_crud_flow() -> None:
 
     update_response = client.patch(
         f"/api/v1/videos/{video_id}",
-        json={"file_name": "intro-v2.mp4", "duration": 180},
+        json={"file_name": "intro-v2.mp4"},
         headers=headers,
     )
     assert update_response.status_code == 200
     assert update_response.json()["data"]["file_name"] == "intro-v2.mp4"
-    assert update_response.json()["data"]["duration"] == 180
+    assert update_response.json()["data"]["duration"] == 0
 
     delete_response = client.delete(f"/api/v1/videos/{video_id}", headers=headers)
     assert delete_response.status_code == 200
@@ -78,3 +76,30 @@ def test_video_resource_owner_isolation() -> None:
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert forbidden_delete.status_code == 404
+
+
+def test_video_resource_rejects_non_user_writable_fields() -> None:
+    token = _login("alice-video-fields")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/v1/videos",
+        json={"file_name": "intro.mp4", "oss_key": "videos/usr_001/vid_001/original.mp4"},
+        headers=headers,
+    )
+    assert create_response.status_code == 422
+
+    valid_create_response = client.post(
+        "/api/v1/videos",
+        json={"file_name": "intro.mp4"},
+        headers=headers,
+    )
+    assert valid_create_response.status_code == 201
+    video_id = valid_create_response.json()["data"]["video_id"]
+
+    update_response = client.patch(
+        f"/api/v1/videos/{video_id}",
+        json={"duration": 180},
+        headers=headers,
+    )
+    assert update_response.status_code == 422

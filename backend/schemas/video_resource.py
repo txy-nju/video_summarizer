@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.schemas.common import MetaInfo, PaginationInfo
 
@@ -19,14 +19,15 @@ class KeyFrameItem(BaseModel):
 
 
 class VideoResourceCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     file_name: str = Field(min_length=1, max_length=255)
-    oss_key: str = Field(min_length=1, max_length=2000)
-    duration: int = Field(ge=0)
 
 
 class VideoResourceUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     file_name: str | None = Field(default=None, min_length=1, max_length=255)
-    duration: int | None = Field(default=None, ge=0)
 
 
 class VideoResourceView(BaseModel):

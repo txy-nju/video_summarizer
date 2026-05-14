@@ -32,13 +32,13 @@ class VideoResourceRepository:
         self._records_by_owner: dict[str, dict[str, VideoResourceRecord]] = {}
         self._lock = Lock()
 
-    def create(self, *, owner_id: str, file_name: str, oss_key: str, duration: int) -> VideoResourceRecord:
+    def create(self, *, owner_id: str, file_name: str) -> VideoResourceRecord:
         record = VideoResourceRecord(
             video_id=str(uuid7()),
             owner_id=owner_id,
             file_name=file_name,
-            oss_key=oss_key,
-            duration=duration,
+            oss_key="",
+            duration=0,
             full_transcript=None,
             transcribe_status="UPLOADED",
             transcript_vector_ids=None,
@@ -69,7 +69,6 @@ class VideoResourceRepository:
         owner_id: str,
         video_id: str,
         file_name: str | None,
-        duration: int | None,
     ) -> VideoResourceRecord | None:
         with self._lock:
             owner_bucket = self._records_by_owner.get(owner_id, {})
@@ -79,7 +78,6 @@ class VideoResourceRepository:
             updated = replace(
                 current,
                 file_name=current.file_name if file_name is None else file_name,
-                duration=current.duration if duration is None else duration,
             )
             owner_bucket[video_id] = updated
             return updated

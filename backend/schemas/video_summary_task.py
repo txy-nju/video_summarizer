@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from backend.schemas.common import MetaInfo, PaginationInfo
 
@@ -23,7 +23,9 @@ class VideoSummaryTaskCreateRequest(BaseModel):
 
 
 class VideoSummaryTaskUpdateRequest(BaseModel):
-    workflow_state: WorkflowState | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    draft_summary: str | None = Field(default=None, max_length=20000)
     user_guidance: str | None = Field(default=None, max_length=10000)
     title: str | None = Field(default=None, max_length=255)
 

@@ -73,11 +73,12 @@ def test_video_summary_task_crud_flow() -> None:
 
     update_response = client.patch(
         f"/api/v1/tasks/{task_id}",
-        json={"workflow_state": "WAITING_USER_APPROVAL", "user_guidance": "突出风险分析", "title": "第一版"},
+        json={"draft_summary": "这是用户修订后的摘要初稿", "user_guidance": "突出风险分析", "title": "第一版"},
         headers=headers,
     )
     assert update_response.status_code == 200
-    assert update_response.json()["data"]["workflow_state"] == "WAITING_USER_APPROVAL"
+    assert update_response.json()["data"]["workflow_state"] == "DRAFT_GENERATING"
+    assert update_response.json()["data"]["draft_summary"] == "这是用户修订后的摘要初稿"
     assert update_response.json()["data"]["title"] == "第一版"
 
     delete_response = client.delete(f"/api/v1/tasks/{task_id}", headers=headers)
@@ -126,3 +127,25 @@ def test_video_summary_task_create_requires_owned_assets() -> None:
         headers={"Authorization": f"Bearer {bob_token}"},
     )
     assert create_response.status_code == 404
+
+
+def test_video_summary_task_update_rejects_workflow_state_write() -> None:
+    token = _login("alice-task-state")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "默认"},
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+
+    update_response = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"workflow_state": "WAITING_USER_APPROVAL"},
+        headers=headers,
+    )
+
+    assert update_response.status_code == 422

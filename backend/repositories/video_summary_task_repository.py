@@ -76,7 +76,7 @@ class VideoSummaryTaskRepository:
         *,
         owner_id: str,
         task_id: str,
-        workflow_state: str | None,
+        draft_summary: str | None,
         user_guidance: str | None,
         title: str | None,
     ) -> VideoSummaryTaskRecord | None:
@@ -87,7 +87,7 @@ class VideoSummaryTaskRepository:
                 return None
             updated = replace(
                 current,
-                workflow_state=current.workflow_state if workflow_state is None else workflow_state,
+                draft_summary=current.draft_summary if draft_summary is None else draft_summary,
                 user_guidance=current.user_guidance if user_guidance is None else user_guidance,
                 title=current.title if title is None else title,
                 updated_at=datetime.now(UTC),

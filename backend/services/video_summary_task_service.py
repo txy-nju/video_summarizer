@@ -70,7 +70,7 @@ class VideoSummaryTaskService:
         record = self._repository.update_by_owner_and_id(
             owner_id=owner_id,
             task_id=task_id,
-            workflow_state=payload.workflow_state,
+            draft_summary=payload.draft_summary,
             user_guidance=payload.user_guidance,
             title=payload.title,
         )
