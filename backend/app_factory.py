@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from backend.api.routes.auth_routes import router as auth_router
 from backend.api.routes.kb_routes import router as kb_router
+from backend.api.routes.video_summary_task_routes import router as video_summary_task_router
 from backend.api.routes.video_resource_routes import router as video_resource_router
 from backend.config import get_settings
 from backend.logging import setup_logging
@@ -30,6 +31,7 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(auth_router)
     app.include_router(kb_router)
     app.include_router(video_resource_router)
+    app.include_router(video_summary_task_router)
 
 
 def create_app() -> FastAPI:
