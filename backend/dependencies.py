@@ -1,6 +1,8 @@
 from functools import lru_cache
 
 from backend.config import Settings, get_settings
+from backend.db.session import SessionLocal
+from backend.repositories.user_repository import UserRepository
 from backend.services.auth_service import AuthService
 from backend.repositories.kb_repository import KnowledgeBaseRepository
 from backend.repositories.kb_video_relation_repository import KBVideoRelationRepository
@@ -19,13 +21,23 @@ from backend.services.global_qa_service import GlobalQAService
 
 def get_app_settings() -> Settings:
     """Global dependency hook for configuration access."""
-
     return get_settings()
 
 
 @lru_cache(maxsize=1)
+def get_user_repository() -> UserRepository:
+    """Create UserRepository with a new database session."""
+    db_session = SessionLocal()
+    return UserRepository(db_session=db_session)
+
+
+@lru_cache(maxsize=1)
 def get_auth_service() -> AuthService:
-    return AuthService(settings=get_settings())
+    """Create AuthService with UserRepository dependency."""
+    return AuthService(
+        user_repository=get_user_repository(),
+        settings=get_settings(),
+    )
 
 
 @lru_cache(maxsize=1)
