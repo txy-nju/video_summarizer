@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+import backend.dependencies as dependencies
 from backend.app_factory import create_app
+from backend.models.database import kb_video_relation_table
 
 
 app = create_app()
@@ -110,3 +113,56 @@ def test_video_resource_rejects_non_user_writable_fields() -> None:
         headers=headers,
     )
     assert update_response.status_code == 422
+
+
+def test_video_delete_strips_kb_video_relations() -> None:
+    token = _login("alice-video-cascade")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_kb_response = client.post(
+        "/api/v1/kbs",
+        json={
+            "name": "删除关系验证库",
+            "category": "test",
+            "description": "验证软删除时关系剥离",
+            "config": {
+                "retrieval": {"top_k": 5, "rerank": True},
+                "tool_preferences": {"allow_web_search": False},
+                "llm_policy": {"temperature": 0.2},
+            },
+        },
+        headers=headers,
+    )
+    assert create_kb_response.status_code == 201
+    kbid = create_kb_response.json()["data"]["kbid"]
+
+    create_video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert create_video_response.status_code == 201
+    video_id = create_video_response.json()["data"]["video_id"]
+
+    bind_response = client.post(f"/api/v1/kbs/{kbid}/videos", json={"video_id": video_id}, headers=headers)
+    assert bind_response.status_code == 200
+
+    db_session = dependencies.SessionLocal()
+    relation_rows_before = db_session.execute(
+        select(kb_video_relation_table.c.video_id).where(
+            kb_video_relation_table.c.kbid == kbid,
+            kb_video_relation_table.c.video_id == video_id,
+        )
+    ).all()
+    assert len(relation_rows_before) == 1
+
+    delete_response = client.delete(f"/api/v1/videos/{video_id}", headers=headers)
+    assert delete_response.status_code == 202
+
+    relation_rows_after = db_session.execute(
+        select(kb_video_relation_table.c.video_id).where(
+            kb_video_relation_table.c.kbid == kbid,
+            kb_video_relation_table.c.video_id == video_id,
+        )
+    ).all()
+    assert relation_rows_after == []
+
+    list_response = client.get(f"/api/v1/kbs/{kbid}/videos?page=1&page_size=20", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()["pagination"]["total"] == 0

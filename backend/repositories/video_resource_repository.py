@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from backend.models.database import VideoResource
+from backend.models.database import VideoResource, kb_video_relation_table
 from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 
 
@@ -124,6 +125,12 @@ class VideoResourceRepository:
                 row.deleted_at = datetime.now(UTC)
             if hasattr(row, "deletion_status"):
                 row.deletion_status = "PENDING_DELETE"
+
+            # Soft delete contract: strip KB-video relations in the same transaction
+            # so retrieval whitelist no longer includes deleted videos.
+            self._session.execute(
+                delete(kb_video_relation_table).where(kb_video_relation_table.c.video_id == video_id)
+            )
         else:
             self._session.delete(row)
 

@@ -79,10 +79,20 @@ def upgrade() -> None:
 
     op.create_table(
         "kb_video_relations",
-        sa.Column("relation_id", sa.String(length=36), primary_key=True),
-        sa.Column("kbid", sa.String(length=36), sa.ForeignKey("knowledge_bases.kbid"), nullable=False),
-        sa.Column("video_id", sa.String(length=36), sa.ForeignKey("video_resources.video_id"), nullable=False),
-        sa.Column("added_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "kbid",
+            sa.String(length=36),
+            sa.ForeignKey("knowledge_bases.kbid", ondelete="CASCADE"),
+            nullable=False,
+            primary_key=True,
+        ),
+        sa.Column(
+            "video_id",
+            sa.String(length=36),
+            sa.ForeignKey("video_resources.video_id", ondelete="CASCADE"),
+            nullable=False,
+            primary_key=True,
+        ),
         sa.UniqueConstraint("kbid", "video_id", name="uq_kb_video"),
     )
 
