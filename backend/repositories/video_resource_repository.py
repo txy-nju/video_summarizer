@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import Lock
 
-try:
-    from uuid import uuid7
-except ImportError:  # pragma: no cover
-    from uuid import uuid4 as uuid7
+from sqlalchemy.orm import Session
+
+from backend.models.database import VideoResource
+from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,47 +30,56 @@ class VideoResourceRecord:
 
 
 class VideoResourceRepository:
-    def __init__(self) -> None:
-        self._records_by_owner: dict[str, dict[str, VideoResourceRecord]] = {}
-        self._lock = Lock()
+    def __init__(self, db_session: Session) -> None:
+        self._session = db_session
 
     def create(self, *, owner_id: str, file_name: str) -> VideoResourceRecord:
-        record = VideoResourceRecord(
-            video_id=str(uuid7()),
+        entity = VideoResource(
             owner_id=owner_id,
             file_name=file_name,
             oss_key="",
             duration=0,
             full_transcript=None,
-            transcribe_status="UPLOADED",
+            transcribe_status=TranscribeStatus.UPLOADED,
             transcript_vector_ids=None,
             keyframes=None,
-            frame_extraction_status="UPLOADED",
+            frame_extraction_status=FrameExtractionStatus.UPLOADED,
             keyframes_oss_prefix=None,
             extract_completed_at=None,
-            is_deleted=False,
-            deleted_at=None,
-            deletion_status="NONE",
-            created_at=datetime.now(UTC),
         )
-        with self._lock:
-            owner_bucket = self._records_by_owner.setdefault(owner_id, {})
-            owner_bucket[record.video_id] = record
-        return record
+        # 模型中已定义软删除字段时，显式初始化；兼容未完成迁移场景
+        if hasattr(entity, "is_deleted"):
+            entity.is_deleted = False
+        if hasattr(entity, "deleted_at"):
+            entity.deleted_at = None
+        if hasattr(entity, "deletion_status"):
+            entity.deletion_status = "NONE"
+
+        self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return self._to_record(entity)
 
     def list_by_owner(self, owner_id: str) -> list[VideoResourceRecord]:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            visible_items = [item for item in owner_bucket.values() if not item.is_deleted]
-            return sorted(visible_items, key=lambda item: item.created_at, reverse=True)
+        query = self._session.query(VideoResource).filter(VideoResource.owner_id == owner_id)
+        if hasattr(VideoResource, "is_deleted"):
+            query = query.filter(VideoResource.is_deleted.is_(False))
+
+        rows = query.order_by(VideoResource.video_id.desc()).all()
+        return [self._to_record(row) for row in rows]
 
     def get_by_owner_and_id(self, owner_id: str, video_id: str) -> VideoResourceRecord | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            record = owner_bucket.get(video_id)
-            if record is None or record.is_deleted:
-                return None
-            return record
+        query = self._session.query(VideoResource).filter(
+            VideoResource.owner_id == owner_id,
+            VideoResource.video_id == video_id,
+        )
+        if hasattr(VideoResource, "is_deleted"):
+            query = query.filter(VideoResource.is_deleted.is_(False))
+
+        row = query.one_or_none()
+        if row is None:
+            return None
+        return self._to_record(row)
 
     def update_by_owner_and_id(
         self,
@@ -80,29 +88,66 @@ class VideoResourceRepository:
         video_id: str,
         file_name: str | None,
     ) -> VideoResourceRecord | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            current = owner_bucket.get(video_id)
-            if current is None or current.is_deleted:
-                return None
-            updated = replace(
-                current,
-                file_name=current.file_name if file_name is None else file_name,
-            )
-            owner_bucket[video_id] = updated
-            return updated
+        query = self._session.query(VideoResource).filter(
+            VideoResource.owner_id == owner_id,
+            VideoResource.video_id == video_id,
+        )
+        if hasattr(VideoResource, "is_deleted"):
+            query = query.filter(VideoResource.is_deleted.is_(False))
+
+        row = query.one_or_none()
+        if row is None:
+            return None
+
+        if file_name is not None:
+            row.file_name = file_name
+
+        self._session.commit()
+        self._session.refresh(row)
+        return self._to_record(row)
 
     def delete_by_owner_and_id(self, owner_id: str, video_id: str) -> bool:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            current = owner_bucket.get(video_id)
-            if current is None or current.is_deleted:
-                return False
+        row = self._session.query(VideoResource).filter(
+            VideoResource.owner_id == owner_id,
+            VideoResource.video_id == video_id,
+        ).one_or_none()
 
-            owner_bucket[video_id] = replace(
-                current,
-                is_deleted=True,
-                deleted_at=datetime.now(UTC),
-                deletion_status="PENDING_DELETE",
-            )
-            return True
+        if row is None:
+            return False
+
+        # 若模型已具备删除生命周期字段，则执行软删除；否则退化为物理删除保持接口语义。
+        if hasattr(row, "is_deleted"):
+            if bool(getattr(row, "is_deleted", False)):
+                return False
+            row.is_deleted = True
+            if hasattr(row, "deleted_at"):
+                row.deleted_at = datetime.now(UTC)
+            if hasattr(row, "deletion_status"):
+                row.deletion_status = "PENDING_DELETE"
+        else:
+            self._session.delete(row)
+
+        self._session.commit()
+        return True
+
+    @staticmethod
+    def _to_record(entity: VideoResource) -> VideoResourceRecord:
+        created_at = getattr(entity, "created_at", None) or datetime.now(UTC)
+        return VideoResourceRecord(
+            video_id=entity.video_id,
+            owner_id=entity.owner_id,
+            file_name=entity.file_name,
+            oss_key=entity.oss_key or "",
+            duration=entity.duration or 0,
+            full_transcript=entity.full_transcript,
+            transcribe_status=str(entity.transcribe_status.value if hasattr(entity.transcribe_status, "value") else entity.transcribe_status),
+            transcript_vector_ids=entity.transcript_vector_ids,
+            keyframes=entity.keyframes,
+            frame_extraction_status=str(entity.frame_extraction_status.value if hasattr(entity.frame_extraction_status, "value") else entity.frame_extraction_status),
+            keyframes_oss_prefix=entity.keyframes_oss_prefix,
+            extract_completed_at=entity.extract_completed_at,
+            is_deleted=bool(getattr(entity, "is_deleted", False)),
+            deleted_at=getattr(entity, "deleted_at", None),
+            deletion_status=str(getattr(entity, "deletion_status", "NONE")),
+            created_at=created_at,
+        )

@@ -61,7 +61,7 @@ def get_kb_service() -> KnowledgeBaseService:
 
 @lru_cache(maxsize=1)
 def get_video_resource_repository() -> VideoResourceRepository:
-    return VideoResourceRepository()
+    return VideoResourceRepository(db_session=SessionLocal())
 
 
 @lru_cache(maxsize=1)

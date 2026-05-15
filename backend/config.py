@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     jwt_refresh_token_expires_minutes: int = Field(default=10080, alias="JWT_REFRESH_TOKEN_EXPIRES_MINUTES")
 
     database_url: str = Field(
-        default="postgresql+psycopg2://postgres:postgres@localhost:5432/video_summarizer",
+        default="postgresql+psycopg2://postgres:123456@localhost:5432/video_summarizer",
         alias="DATABASE_URL",
     )
 
