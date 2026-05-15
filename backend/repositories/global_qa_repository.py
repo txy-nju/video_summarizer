@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import Lock
 
-try:
-    from uuid import uuid7
-except ImportError:  # pragma: no cover
-    from uuid import uuid4 as uuid7
+from sqlalchemy.orm import Session
+
+from backend.models.database import GlobalQARecord
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,11 +24,10 @@ class GlobalQARecordData:
 
 
 class GlobalQARepository:
-    """全局问答 Repository（内存实现，步骤 4 临时方案）"""
+    """全局问答 Repository（数据库实现）"""
 
-    def __init__(self) -> None:
-        self._records_by_owner: dict[str, dict[str, dict[str, GlobalQARecordData]]] = {}
-        self._lock = Lock()
+    def __init__(self, db_session: Session) -> None:
+        self._session = db_session
 
     def create(
         self,
@@ -40,36 +37,38 @@ class GlobalQARepository:
         question_content: str,
         attachments: list[dict],
     ) -> GlobalQARecordData:
-        now = datetime.now(UTC)
-        record = GlobalQARecordData(
-            qa_id=str(uuid7()),
+        entity = GlobalQARecord(
             chat_id=chat_id,
-            owner_id=owner_id,
             question_content=question_content,
             answer_content=None,
-            attachments=json.dumps(attachments),
-            cited_sources=json.dumps([]),
-            question_time=now,
+            attachments=attachments,
+            cited_sources=[],
         )
-        with self._lock:
-            owner_bucket = self._records_by_owner.setdefault(owner_id, {})
-            chat_bucket = owner_bucket.setdefault(chat_id, {})
-            chat_bucket[record.qa_id] = record
-        return record
+        self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return self._to_record(entity, owner_id=owner_id)
 
     def list_by_owner_and_chat(self, owner_id: str, chat_id: str) -> list[GlobalQARecordData]:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            chat_bucket = owner_bucket.get(chat_id, {})
-            return sorted(chat_bucket.values(), key=lambda item: item.question_time)
+        rows = (
+            self._session.query(GlobalQARecord)
+            .filter(GlobalQARecord.chat_id == chat_id)
+            .order_by(GlobalQARecord.question_time.asc())
+            .all()
+        )
+        return [self._to_record(row, owner_id=owner_id) for row in rows]
 
     def get_by_owner_chat_and_qa_id(
         self, owner_id: str, chat_id: str, qa_id: str
     ) -> GlobalQARecordData | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            chat_bucket = owner_bucket.get(chat_id, {})
-            return chat_bucket.get(qa_id)
+        row = (
+            self._session.query(GlobalQARecord)
+            .filter(GlobalQARecord.chat_id == chat_id, GlobalQARecord.qa_id == qa_id)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return self._to_record(row, owner_id=owner_id)
 
     def update_answer_by_owner_chat_and_qa_id(
         self,
@@ -79,33 +78,54 @@ class GlobalQARepository:
         answer_content: str,
         cited_sources: list[dict] | None = None,
     ) -> GlobalQARecordData | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            chat_bucket = owner_bucket.get(chat_id, {})
-            current = chat_bucket.get(qa_id)
-            if current is None:
-                return None
-            updated = replace(
-                current,
-                answer_content=answer_content,
-                cited_sources=json.dumps(cited_sources or []),
-            )
-            chat_bucket[qa_id] = updated
-            return updated
+        row = (
+            self._session.query(GlobalQARecord)
+            .filter(GlobalQARecord.chat_id == chat_id, GlobalQARecord.qa_id == qa_id)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+
+        row.answer_content = answer_content
+        row.cited_sources = cited_sources or []
+        self._session.commit()
+        self._session.refresh(row)
+        return self._to_record(row, owner_id=owner_id)
 
     def delete_by_owner_chat_and_qa_id(self, owner_id: str, chat_id: str, qa_id: str) -> bool:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            chat_bucket = owner_bucket.get(chat_id, {})
-            if qa_id in chat_bucket:
-                del chat_bucket[qa_id]
-                return True
-        return False
+        row = (
+            self._session.query(GlobalQARecord)
+            .filter(GlobalQARecord.chat_id == chat_id, GlobalQARecord.qa_id == qa_id)
+            .one_or_none()
+        )
+        if row is None:
+            return False
+
+        self._session.delete(row)
+        self._session.commit()
+        return True
 
     def delete_all_by_owner_and_chat(self, owner_id: str, chat_id: str) -> int:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            chat_bucket = owner_bucket.get(chat_id, {})
-            count = len(chat_bucket)
-            chat_bucket.clear()
+        rows = self._session.query(GlobalQARecord).filter(GlobalQARecord.chat_id == chat_id).all()
+        count = len(rows)
+        for row in rows:
+            self._session.delete(row)
+        if count > 0:
+            self._session.commit()
         return count
+
+    @staticmethod
+    def _to_record(entity: GlobalQARecord, *, owner_id: str) -> GlobalQARecordData:
+        question_time = getattr(entity, "question_time", None) or datetime.now(UTC)
+        attachments = entity.attachments or []
+        cited_sources = entity.cited_sources or []
+        return GlobalQARecordData(
+            qa_id=str(entity.qa_id),
+            chat_id=str(entity.chat_id),
+            owner_id=owner_id,
+            question_content=entity.question_content,
+            answer_content=entity.answer_content,
+            attachments=json.dumps(attachments),
+            cited_sources=json.dumps(cited_sources),
+            question_time=question_time,
+        )

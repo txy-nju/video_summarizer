@@ -71,7 +71,7 @@ def get_video_resource_service() -> VideoResourceService:
 
 @lru_cache(maxsize=1)
 def get_video_summary_task_repository() -> VideoSummaryTaskRepository:
-    return VideoSummaryTaskRepository()
+    return VideoSummaryTaskRepository(db_session=SessionLocal())
 
 
 @lru_cache(maxsize=1)
@@ -98,12 +98,12 @@ def get_video_qa_service() -> VideoQAService:
 
 @lru_cache(maxsize=1)
 def get_global_chat_repository() -> GlobalChatRepository:
-    return GlobalChatRepository()
+    return GlobalChatRepository(db_session=SessionLocal())
 
 
 @lru_cache(maxsize=1)
 def get_global_qa_repository() -> GlobalQARepository:
-    return GlobalQARepository()
+    return GlobalQARepository(db_session=SessionLocal())
 
 
 @lru_cache(maxsize=1)

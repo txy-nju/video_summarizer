@@ -50,6 +50,7 @@ async def create_global_qa_record(
     _ = kbid
     record = qa_service.create_qa_record(
         owner_id=current_user.user_id,
+        kbid=kbid,
         chat_id=chat_id,
         payload=payload,
     )
@@ -86,6 +87,7 @@ async def list_global_qa_records(
 
     items, pagination = qa_service.list_qa_records(
         owner_id=current_user.user_id,
+        kbid=kbid,
         chat_id=chat_id,
         page=page,
         page_size=page_size,
@@ -112,6 +114,7 @@ async def get_global_qa_record(
     _ = kbid
     record = qa_service.get_qa_record(
         owner_id=current_user.user_id,
+        kbid=kbid,
         chat_id=chat_id,
         qa_id=qa_id,
     )
@@ -139,6 +142,7 @@ async def update_global_qa_record(
     _ = kbid
     record = qa_service.update_qa_record(
         owner_id=current_user.user_id,
+        kbid=kbid,
         chat_id=chat_id,
         qa_id=qa_id,
         payload=payload,
@@ -166,6 +170,7 @@ async def delete_global_qa_record(
     _ = kbid
     success = qa_service.delete_qa_record(
         owner_id=current_user.user_id,
+        kbid=kbid,
         chat_id=chat_id,
         qa_id=qa_id,
     )

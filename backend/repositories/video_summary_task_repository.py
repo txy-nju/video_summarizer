@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import Lock
 
-try:
-    from uuid import uuid7
-except ImportError:  # pragma: no cover
-    from uuid import uuid4 as uuid7
+from sqlalchemy.orm import Session
+
+from backend.models.database import KnowledgeBase, VideoResource, VideoSummaryTask
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,9 +26,8 @@ class VideoSummaryTaskRecord:
 
 
 class VideoSummaryTaskRepository:
-    def __init__(self) -> None:
-        self._records_by_owner: dict[str, dict[str, VideoSummaryTaskRecord]] = {}
-        self._lock = Lock()
+    def __init__(self, db_session: Session) -> None:
+        self._session = db_session
 
     def create(
         self,
@@ -40,36 +37,34 @@ class VideoSummaryTaskRepository:
         video_id: str,
         user_initial_preference: str | None,
     ) -> VideoSummaryTaskRecord:
-        now = datetime.now(UTC)
-        record = VideoSummaryTaskRecord(
-            task_id=str(uuid7()),
-            owner_id=owner_id,
+        entity = VideoSummaryTask(
             kbid=kbid,
             video_id=video_id,
-            workflow_state="DRAFT_GENERATING",
-            user_initial_preference=user_initial_preference,
-            draft_summary=None,
-            user_guidance=None,
-            final_summary=None,
-            title=None,
-            summary_vector_ids=None,
-            created_at=now,
-            updated_at=now,
+            user_initial_preference=user_initial_preference
         )
-        with self._lock:
-            owner_bucket = self._records_by_owner.setdefault(owner_id, {})
-            owner_bucket[record.task_id] = record
-        return record
+        self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return self._to_record(entity, owner_id=owner_id)
 
     def list_by_owner(self, owner_id: str) -> list[VideoSummaryTaskRecord]:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            return sorted(owner_bucket.values(), key=lambda item: item.created_at, reverse=True)
+        rows = self._session.query(VideoSummaryTask).join(
+            KnowledgeBase,
+            VideoSummaryTask.kbid == KnowledgeBase.kbid,
+        ).join(
+            VideoResource,
+            VideoSummaryTask.video_id == VideoResource.video_id,
+        ).filter(
+            KnowledgeBase.owner_id == owner_id,
+            VideoResource.owner_id == owner_id,
+        ).order_by(VideoSummaryTask.created_at.desc()).all()
+        return [self._to_record(row, owner_id=owner_id) for row in rows]
 
     def get_by_owner_and_id(self, owner_id: str, task_id: str) -> VideoSummaryTaskRecord | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            return owner_bucket.get(task_id)
+        row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if row is None:
+            return None
+        return self._to_record(row, owner_id=owner_id)
 
     def update_by_owner_and_id(
         self,
@@ -80,23 +75,58 @@ class VideoSummaryTaskRepository:
         user_guidance: str | None,
         title: str | None,
     ) -> VideoSummaryTaskRecord | None:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            current = owner_bucket.get(task_id)
-            if current is None:
-                return None
-            updated = replace(
-                current,
-                draft_summary=current.draft_summary if draft_summary is None else draft_summary,
-                user_guidance=current.user_guidance if user_guidance is None else user_guidance,
-                title=current.title if title is None else title,
-                updated_at=datetime.now(UTC),
-            )
-            owner_bucket[task_id] = updated
-            return updated
+        row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if row is None:
+            return None
+
+        if draft_summary is not None:
+            row.draft_summary = draft_summary
+        if user_guidance is not None:
+            row.user_guidance = user_guidance
+        if title is not None:
+            row.title = title
+
+        self._session.commit()
+        self._session.refresh(row)
+        return self._to_record(row, owner_id=owner_id)
 
     def delete_by_owner_and_id(self, owner_id: str, task_id: str) -> bool:
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            removed = owner_bucket.pop(task_id, None)
-            return removed is not None
+        row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if row is None:
+            return False
+
+        self._session.delete(row)
+        self._session.commit()
+        return True
+
+    def _owned_task_query(self, owner_id: str):
+        return (
+            self._session.query(VideoSummaryTask)
+            .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
+            .join(VideoResource, VideoSummaryTask.video_id == VideoResource.video_id)
+            .filter(KnowledgeBase.owner_id == owner_id, VideoResource.owner_id == owner_id)
+        )
+
+    @staticmethod
+    def _to_record(
+        entity: VideoSummaryTask,
+        *,
+        owner_id: str,
+    ) -> VideoSummaryTaskRecord:
+        created = getattr(entity, "created_at", None) or datetime.now(UTC)
+        updated = getattr(entity, "updated_at", None) or created
+        return VideoSummaryTaskRecord(
+            task_id=str(entity.task_id),
+            owner_id=owner_id,
+            kbid=str(entity.kbid),
+            video_id=str(entity.video_id),
+            workflow_state=str(entity.workflow_state.value if hasattr(entity.workflow_state, "value") else entity.workflow_state),
+            user_initial_preference=entity.user_initial_preference,
+            draft_summary=entity.draft_summary,
+            user_guidance=entity.user_guidance,
+            final_summary=entity.final_summary,
+            title=entity.title,
+            summary_vector_ids=entity.summary_vector_ids,
+            created_at=created,
+            updated_at=updated,
+        )

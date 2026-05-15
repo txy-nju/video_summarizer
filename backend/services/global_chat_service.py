@@ -118,8 +118,8 @@ class GlobalChatService:
     def _to_chat_view(record) -> GlobalChatSessionView:
         """将 Repository 记录转换为视图"""
         return GlobalChatSessionView(
-            chat_id=record.chat_id,
-            kbid=record.kbid,
+            chat_id=str(record.chat_id),
+            kbid=str(record.kbid),
             chat_title=record.chat_title,
             created_at=record.created_at,
         )

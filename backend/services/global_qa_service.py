@@ -28,9 +28,14 @@ class GlobalQAService:
         self,
         *,
         owner_id: str,
+        kbid: str,
         chat_id: str,
         payload: GlobalQARecordCreateRequest,
     ) -> GlobalQARecordView | None:
+        chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
+        if chat is None:
+            return None
+
         attachments_data = [asdict(a) for a in payload.attachments]
         record = self._repository.create(
             owner_id=owner_id,
@@ -44,10 +49,15 @@ class GlobalQAService:
         self,
         *,
         owner_id: str,
+        kbid: str,
         chat_id: str,
         page: int,
         page_size: int,
     ) -> tuple[list[GlobalQARecordView], dict]:
+        chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
+        if chat is None:
+            return [], build_pagination(page=page, page_size=page_size, total=0)
+
         records = self._repository.list_by_owner_and_chat(owner_id, chat_id)
         normalized_page_size = normalize_page_size(page_size)
         start_index = max(page - 1, 0) * normalized_page_size
@@ -67,9 +77,14 @@ class GlobalQAService:
         self,
         *,
         owner_id: str,
+        kbid: str,
         chat_id: str,
         qa_id: str,
     ) -> GlobalQARecordView | None:
+        chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
+        if chat is None:
+            return None
+
         record = self._repository.get_by_owner_chat_and_qa_id(owner_id, chat_id, qa_id)
         if record is None:
             return None
@@ -79,10 +94,15 @@ class GlobalQAService:
         self,
         *,
         owner_id: str,
+        kbid: str,
         chat_id: str,
         qa_id: str,
         payload: GlobalQARecordUpdateRequest,
     ) -> GlobalQARecordView | None:
+        chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
+        if chat is None:
+            return None
+
         if not payload.regenerate:
             return None
 
@@ -96,9 +116,14 @@ class GlobalQAService:
         self,
         *,
         owner_id: str,
+        kbid: str,
         chat_id: str,
         qa_id: str,
     ) -> bool:
+        chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
+        if chat is None:
+            return False
+
         return self._repository.delete_by_owner_chat_and_qa_id(owner_id, chat_id, qa_id)
 
     @staticmethod
@@ -121,8 +146,8 @@ class GlobalQAService:
             pass
 
         return GlobalQARecordView(
-            qa_id=record.qa_id,
-            chat_id=record.chat_id,
+            qa_id=str(record.qa_id),
+            chat_id=str(record.chat_id),
             question_content=record.question_content,
             answer_content=record.answer_content,
             attachments=attachments,
