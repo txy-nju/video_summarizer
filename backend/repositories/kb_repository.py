@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from sqlalchemy import delete, insert, select
 from sqlalchemy.orm import Session
 
-from backend.models.database import KnowledgeBase
+from backend.models.database import KnowledgeBase, VideoResource, kb_video_relation_table
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,3 +124,88 @@ class KnowledgeBaseRepository:
             config=entity.config or {},
             created_at=created_at,
         )
+
+    def add_video_to_kb(self, owner_id: str, kbid: str, video_id: str) -> None:
+        """
+        Add a video to a knowledge base.
+        - Ownership check: kbid belongs to owner_id
+        - Idempotency: duplicate add returns success (no error)
+        - Implementation: append video to kb.videos ORM relationship
+        """
+        kb = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if kb is None:
+            return
+
+        video = (
+            self._session.query(VideoResource)
+            .filter(VideoResource.owner_id == owner_id, VideoResource.video_id == video_id)
+            .one_or_none()
+        )
+        if video is None:
+            return
+
+        exists = self._session.execute(
+            select(kb_video_relation_table.c.kbid).where(
+                kb_video_relation_table.c.kbid == kbid,
+                kb_video_relation_table.c.video_id == video_id,
+            )
+        ).first()
+        if exists is not None:
+            return
+
+        self._session.execute(
+            insert(kb_video_relation_table).values(kbid=kbid, video_id=video_id)
+        )
+        self._session.commit()
+
+    def remove_video_from_kb(self, owner_id: str, kbid: str, video_id: str) -> None:
+        """
+        Remove a video from a knowledge base.
+        - Ownership check: kbid belongs to owner_id
+        - Idempotency: duplicate remove returns success (no error)
+        - Implementation: remove video from kb.videos ORM relationship
+        """
+        kb = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if kb is None:
+            return
+
+        video = (
+            self._session.query(VideoResource)
+            .filter(VideoResource.owner_id == owner_id, VideoResource.video_id == video_id)
+            .one_or_none()
+        )
+        if video is None:
+            return
+
+        self._session.execute(
+            delete(kb_video_relation_table).where(
+                kb_video_relation_table.c.kbid == kbid,
+                kb_video_relation_table.c.video_id == video_id,
+            )
+        )
+        self._session.commit()
+
+    def get_linked_video_ids(self, owner_id: str, kbid: str) -> list[str]:
+        """
+        Get all video IDs linked to a knowledge base.
+        """
+        kb = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if kb is None:
+            return []
+
+        rows = self._session.execute(
+            select(kb_video_relation_table.c.video_id).where(kb_video_relation_table.c.kbid == kbid)
+        ).all()
+        return [str(row[0]) for row in rows]

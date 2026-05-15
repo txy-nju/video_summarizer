@@ -5,7 +5,6 @@ from uuid import uuid4
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.kb_repository import KnowledgeBaseRecord, KnowledgeBaseRepository
-from backend.repositories.kb_video_relation_repository import KBVideoRelationRepository
 from backend.repositories.video_resource_repository import VideoResourceRecord, VideoResourceRepository
 from backend.schemas.kb import KnowledgeBaseConfig, KnowledgeBaseCreateRequest, KnowledgeBaseUpdateRequest, KnowledgeBaseView
 from backend.schemas.kb import KnowledgeBaseVideoItem
@@ -16,11 +15,9 @@ class KnowledgeBaseService:
         self,
         repository: KnowledgeBaseRepository,
         video_repository: VideoResourceRepository,
-        kb_video_relation_repository: KBVideoRelationRepository,
     ) -> None:
         self._repository = repository
         self._video_repository = video_repository
-        self._kb_video_relation_repository = kb_video_relation_repository
 
     def create_knowledge_base(self, *, owner_id: str, payload: KnowledgeBaseCreateRequest) -> KnowledgeBaseView:
         record = self._repository.create(
@@ -75,9 +72,8 @@ class KnowledgeBaseService:
         return self._to_view(record)
 
     def delete_knowledge_base(self, *, owner_id: str, kbid: str) -> bool:
+        # Cascade delete of kb_video_relations is handled by database ON DELETE CASCADE
         deleted = self._repository.delete_by_owner_and_id(owner_id, kbid)
-        if deleted:
-            self._kb_video_relation_repository.remove_all_by_kbid(owner_id=owner_id, kbid=kbid)
         return deleted
 
     def add_video_to_knowledge_base(self, *, owner_id: str, kbid: str, video_id: str) -> bool:
@@ -86,7 +82,8 @@ class KnowledgeBaseService:
         if kb is None or video is None:
             return False
 
-        self._kb_video_relation_repository.add_relation(owner_id=owner_id, kbid=kbid, video_id=video_id)
+        # Use new Repository method that operates on ORM relationship
+        self._repository.add_video_to_kb(owner_id=owner_id, kbid=kbid, video_id=video_id)
         return True
 
     def list_knowledge_base_videos(self, *, owner_id: str, kbid: str, page: int, page_size: int) -> tuple[list[KnowledgeBaseVideoItem], dict] | None:
@@ -94,7 +91,7 @@ class KnowledgeBaseService:
         if kb is None:
             return None
 
-        linked_video_ids = set(self._kb_video_relation_repository.list_video_ids(owner_id=owner_id, kbid=kbid))
+        linked_video_ids = set(self._repository.get_linked_video_ids(owner_id, kbid))
         all_videos = self._video_repository.list_by_owner(owner_id)
         linked_videos = [video for video in all_videos if video.video_id in linked_video_ids]
 
@@ -119,7 +116,7 @@ class KnowledgeBaseService:
             return False
 
         # Delete semantics are idempotent; missing relation is treated as no-op success.
-        self._kb_video_relation_repository.remove_relation(owner_id=owner_id, kbid=kbid, video_id=video_id)
+        self._repository.remove_video_from_kb(owner_id=owner_id, kbid=kbid, video_id=video_id)
         return True
 
     def _to_view(self, record: KnowledgeBaseRecord) -> KnowledgeBaseView:

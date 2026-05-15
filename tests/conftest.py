@@ -20,7 +20,6 @@ _DEPENDENCY_CACHE_FUNCS = (
     "get_user_repository",
     "get_auth_service",
     "get_kb_repository",
-    "get_kb_video_relation_repository",
     "get_kb_service",
     "get_video_resource_repository",
     "get_video_resource_service",

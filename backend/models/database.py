@@ -2,9 +2,9 @@ from datetime import datetime
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Column, DateTime, Enum as SqlEnum, ForeignKey, String, Table, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 from backend.models.enums import FrameExtractionStatus, TranscribeStatus, WorkflowState
 
@@ -148,6 +148,16 @@ class VideoResource(Base):
         return validated
 
 
+# Many-to-Many Join Table: Knowledge Base <-> Video Resource (implicit, non-ORM table)
+kb_video_relation_table = Table(
+    "kb_video_relations",
+    Base.metadata,
+    Column("kbid", String(36), ForeignKey("knowledge_bases.kbid", ondelete="CASCADE"), primary_key=True),
+    Column("video_id", String(36), ForeignKey("video_resources.video_id", ondelete="CASCADE"), primary_key=True),
+    UniqueConstraint("kbid", "video_id", name="uq_kb_video"),
+)
+
+
 class KnowledgeBase(Base):
     __tablename__ = "knowledge_bases"
 
@@ -159,6 +169,14 @@ class KnowledgeBase(Base):
     vector_collection_name: Mapped[str | None] = mapped_column(String(255))
     config: Mapped[dict | None] = mapped_column(JSONB)
 
+    # M:N relationship with VideoResource via implicit join table
+    videos: Mapped[list["VideoResource"]] = relationship(
+        "VideoResource",
+        secondary=kb_video_relation_table,
+        backref="knowledge_bases",
+        lazy="noload",
+    )
+
     @validates("config")
     def validate_config(self, key: str, value: dict | None) -> dict | None:
         if value is None:
@@ -166,16 +184,6 @@ class KnowledgeBase(Base):
         if not isinstance(value, dict):
             raise ValueError(f"{key} must be an object")
         return _validate_model(value, KnowledgeBaseConfigSchema, key)
-
-
-class KBVideoRelation(Base):
-    __tablename__ = "kb_video_relations"
-    __table_args__ = (UniqueConstraint("kbid", "video_id", name="uq_kb_video"),)
-
-    relation_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid_str)
-    kbid: Mapped[str] = mapped_column(ForeignKey("knowledge_bases.kbid"), nullable=False)
-    video_id: Mapped[str] = mapped_column(ForeignKey("video_resources.video_id"), nullable=False)
-    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
 
 class VideoSummaryTask(Base):
