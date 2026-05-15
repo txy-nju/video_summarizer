@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from uuid import uuid4
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.kb_repository import KnowledgeBaseRecord, KnowledgeBaseRepository
@@ -27,7 +28,7 @@ class KnowledgeBaseService:
             name=payload.name,
             category=payload.category,
             description=payload.description,
-            vector_collection_name=None,
+            vector_collection_name=f"kb_{uuid4().hex}",
             config=payload.config.model_dump(),
         )
         return self._to_view(record)

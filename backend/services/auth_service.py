@@ -47,7 +47,7 @@ class AuthService:
             # Repository layer raises ValueError on duplicate username
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
 
-        return UserView(user_id=user_record.user_id, username=user_record.username)
+        return UserView(user_id=str(user_record.user_id), username=user_record.username)
 
     def authenticate_user(self, username: str, password: str, device_id: str) -> TokenResponseData:
         """Authenticate user and issue token pair.
@@ -107,7 +107,7 @@ class AuthService:
         if user_record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-        return UserView(user_id=user_record.user_id, username=user_record.username)
+        return UserView(user_id=str(user_record.user_id), username=user_record.username)
 
     def _issue_token_pair(self, *, user_id: str, username: str, device_id: str) -> TokenResponseData:
         """Internal: Issue access and refresh token pair.
@@ -123,7 +123,7 @@ class AuthService:
         access_token = create_token(
             secret_key=self._settings.jwt_secret_key,
             algorithm=self._settings.jwt_algorithm,
-            subject=user_id,
+            subject=str(user_id),
             token_type="access",
             expires_minutes=self._settings.jwt_access_token_expires_minutes,
             extra_claims={"username": username},
@@ -131,7 +131,7 @@ class AuthService:
         refresh_token = create_token(
             secret_key=self._settings.jwt_refresh_secret_key,
             algorithm=self._settings.jwt_algorithm,
-            subject=user_id,
+            subject=str(user_id),
             token_type="refresh",
             expires_minutes=self._settings.jwt_refresh_token_expires_minutes,
             extra_claims={"username": username, "device_id": device_id},
@@ -141,5 +141,5 @@ class AuthService:
             access_token=access_token,
             refresh_token=refresh_token,
             expires_in=self._settings.jwt_access_token_expires_minutes * 60,
-            user=UserView(user_id=user_id, username=username),
+            user=UserView(user_id=str(user_id), username=username),
         )

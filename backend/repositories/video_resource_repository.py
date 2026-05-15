@@ -134,8 +134,8 @@ class VideoResourceRepository:
     def _to_record(entity: VideoResource) -> VideoResourceRecord:
         created_at = getattr(entity, "created_at", None) or datetime.now(UTC)
         return VideoResourceRecord(
-            video_id=entity.video_id,
-            owner_id=entity.owner_id,
+            video_id=str(entity.video_id),
+            owner_id=str(entity.owner_id),
             file_name=entity.file_name,
             oss_key=entity.oss_key or "",
             duration=entity.duration or 0,

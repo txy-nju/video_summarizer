@@ -114,8 +114,8 @@ class KnowledgeBaseRepository:
     def _to_record(entity: KnowledgeBase) -> KnowledgeBaseRecord:
         created_at = getattr(entity, "created_at", None) or datetime.now(UTC)
         return KnowledgeBaseRecord(
-            kbid=entity.kbid,
-            owner_id=entity.owner_id,
+            kbid=str(entity.kbid),
+            owner_id=str(entity.owner_id),
             name=entity.name,
             category=entity.category,
             description=entity.description,
