@@ -78,7 +78,7 @@ def get_video_summary_task_service() -> VideoSummaryTaskService:
 
 @lru_cache(maxsize=1)
 def get_video_qa_repository() -> VideoQARepository:
-    return VideoQARepository()
+    return VideoQARepository(db_session=SessionLocal())
 
 
 @lru_cache(maxsize=1)

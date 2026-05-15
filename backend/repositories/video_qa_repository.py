@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from threading import Lock
 
-try:
-    from uuid import uuid7
-except ImportError:  # pragma: no cover
-    from uuid import uuid4 as uuid7
+from sqlalchemy.orm import Session
+
+from backend.models.database import KnowledgeBase, VideoQARecord, VideoSummaryTask
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,12 +24,10 @@ class VideoQARecordData:
 
 
 class VideoQARepository:
-    """内存 Repository 实现（步骤 4 临时方案）"""
+    """数据库 Repository 实现"""
 
-    def __init__(self) -> None:
-        # 按 owner_id -> task_id -> qa_id 三层嵌套存储
-        self._records_by_owner: dict[str, dict[str, dict[str, VideoQARecordData]]] = {}
-        self._lock = Lock()
+    def __init__(self, db_session: Session) -> None:
+        self._session = db_session
 
     def create(
         self,
@@ -44,71 +40,120 @@ class VideoQARepository:
         attachments: list[dict],
     ) -> VideoQARecordData:
         """创建新的问答记录"""
-        now = datetime.now(UTC)
-        record = VideoQARecordData(
-            qa_id=str(uuid7()),
+        task = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if task is None:
+            raise ValueError("Task not found")
+
+        entity = VideoQARecord(
             task_id=task_id,
-            owner_id=owner_id,
             start_time=start_time,
             end_time=end_time,
             question_content=question_content,
             answer_content=None,
-            attachments=json.dumps(attachments),
-            question_time=now,
+            attachments=attachments,
         )
-        with self._lock:
-            owner_bucket = self._records_by_owner.setdefault(owner_id, {})
-            task_bucket = owner_bucket.setdefault(task_id, {})
-            task_bucket[record.qa_id] = record
-        return record
+        self._session.add(entity)
+        self._session.commit()
+        self._session.refresh(entity)
+        return self._to_record(entity, owner_id=owner_id)
 
     def list_by_owner_and_task(self, owner_id: str, task_id: str) -> list[VideoQARecordData]:
         """查询某个任务下的所有问答"""
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            task_bucket = owner_bucket.get(task_id, {})
-            return sorted(task_bucket.values(), key=lambda item: item.question_time)
+        rows = (
+            self._owned_qa_query(owner_id)
+            .filter(VideoQARecord.task_id == task_id)
+            .order_by(VideoQARecord.question_time.asc())
+            .all()
+        )
+        return [self._to_record(row, owner_id=owner_id) for row in rows]
 
     def get_by_owner_task_and_qa_id(
         self, owner_id: str, task_id: str, qa_id: str
     ) -> VideoQARecordData | None:
         """获取单条问答记录"""
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            task_bucket = owner_bucket.get(task_id, {})
-            return task_bucket.get(qa_id)
+        row = (
+            self._owned_qa_query(owner_id)
+            .filter(VideoQARecord.task_id == task_id, VideoQARecord.qa_id == qa_id)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return self._to_record(row, owner_id=owner_id)
 
     def update_answer_by_owner_task_and_qa_id(
         self, owner_id: str, task_id: str, qa_id: str, answer_content: str
     ) -> VideoQARecordData | None:
         """更新问答的回答内容（重新生成场景）"""
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            task_bucket = owner_bucket.get(task_id, {})
-            current = task_bucket.get(qa_id)
-            if current is None:
-                return None
-            updated = replace(current, answer_content=answer_content)
-            task_bucket[qa_id] = updated
-            return updated
+        row = (
+            self._owned_qa_query(owner_id)
+            .filter(VideoQARecord.task_id == task_id, VideoQARecord.qa_id == qa_id)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+
+        row.answer_content = answer_content
+        self._session.commit()
+        self._session.refresh(row)
+        return self._to_record(row, owner_id=owner_id)
 
     def delete_by_owner_task_and_qa_id(
         self, owner_id: str, task_id: str, qa_id: str
     ) -> bool:
         """删除单条问答记录"""
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            task_bucket = owner_bucket.get(task_id, {})
-            if qa_id in task_bucket:
-                del task_bucket[qa_id]
-                return True
-        return False
+        row = (
+            self._owned_qa_query(owner_id)
+            .filter(VideoQARecord.task_id == task_id, VideoQARecord.qa_id == qa_id)
+            .one_or_none()
+        )
+        if row is None:
+            return False
+
+        self._session.delete(row)
+        self._session.commit()
+        return True
 
     def delete_all_by_owner_and_task(self, owner_id: str, task_id: str) -> int:
         """删除某个任务下的所有问答（级联删除支持）"""
-        with self._lock:
-            owner_bucket = self._records_by_owner.get(owner_id, {})
-            task_bucket = owner_bucket.get(task_id, {})
-            count = len(task_bucket)
-            task_bucket.clear()
+        rows = (
+            self._owned_qa_query(owner_id)
+            .filter(VideoQARecord.task_id == task_id)
+            .all()
+        )
+        count = len(rows)
+        for row in rows:
+            self._session.delete(row)
+        if count > 0:
+            self._session.commit()
         return count
+
+    def _owned_task_query(self, owner_id: str):
+        return (
+            self._session.query(VideoSummaryTask)
+            .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
+            .filter(KnowledgeBase.owner_id == owner_id)
+        )
+
+    def _owned_qa_query(self, owner_id: str):
+        return (
+            self._session.query(VideoQARecord)
+            .join(VideoSummaryTask, VideoQARecord.task_id == VideoSummaryTask.task_id)
+            .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
+            .filter(KnowledgeBase.owner_id == owner_id)
+        )
+
+    @staticmethod
+    def _to_record(entity: VideoQARecord, *, owner_id: str) -> VideoQARecordData:
+        question_time = getattr(entity, "question_time", None) or datetime.now(UTC)
+        attachments = entity.attachments or []
+        return VideoQARecordData(
+            qa_id=str(entity.qa_id),
+            task_id=str(entity.task_id),
+            owner_id=owner_id,
+            start_time=entity.start_time or "",
+            end_time=entity.end_time or "",
+            question_content=entity.question_content,
+            answer_content=entity.answer_content,
+            attachments=json.dumps(attachments),
+            question_time=question_time,
+        )

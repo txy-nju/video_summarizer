@@ -1,6 +1,6 @@
 """mobile upload and device tokens
 
-Revision ID: 004_mobile_upload_and_device_tokens
+Revision ID: 004_mobile_upload_device_tokens
 Revises: 003_global_retrieval_domain
 Create Date: 2026-05-13 12:15:00
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision = "004_mobile_upload_and_device_tokens"
+revision = "004_mobile_upload_device_tokens"
 down_revision = "003_global_retrieval_domain"
 branch_labels = None
 depends_on = None
