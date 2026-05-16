@@ -17,10 +17,21 @@ import logging
 from celery import chord, group
 
 from backend.db.session import SessionLocal
-from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _mark_video_resource_ready(video_id: str) -> bool:
+    db = SessionLocal()
+    try:
+        from backend.repositories.video_resource_repository import VideoResourceRepository
+        from backend.services.video_resource_service import VideoResourceService
+
+        service = VideoResourceService(repository=VideoResourceRepository(db_session=db))
+        return service.mark_extract_completed_if_ready(video_id=video_id)
+    finally:
+        db.close()
 
 
 @celery_app.task(
@@ -32,17 +43,16 @@ def async_mark_video_resource_ready(results: list, video_id: str) -> dict:
     Chord 回调：转录与关键帧抽取并行完成后，填充 extract_completed_at。
     当且仅当两个子任务均状态为 COMPLETED 时才更新，否则仅记录日志。
     """
-    db = SessionLocal()
     try:
-        repo = VideoResourceRepository(db)
-        repo.update_extract_completed_at(video_id)
+        marked = _mark_video_resource_ready(video_id)
+        if not marked:
+            logger.warning("async_mark_video_resource_ready: video_id=%s not found", video_id)
+            return {"video_id": video_id, "status": "NOT_FOUND"}
         logger.info("async_mark_video_resource_ready: video_id=%s marked ready", video_id)
         return {"video_id": video_id, "status": "READY"}
     except Exception:
         logger.exception("async_mark_video_resource_ready failed for video_id=%s", video_id)
         raise
-    finally:
-        db.close()
 
 
 @celery_app.task(

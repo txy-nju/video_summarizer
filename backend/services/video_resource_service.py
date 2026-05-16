@@ -110,6 +110,15 @@ class VideoResourceService:
             )
             return False
 
+    def mark_extract_completed_if_ready(self, *, video_id: str) -> bool:
+        """System-only hook: set extract_completed_at when dual extraction status is ready."""
+        video = self._repository.get_by_id_system(video_id)
+        if video is None:
+            return False
+
+        self._repository.update_extract_completed_at(video_id)
+        return True
+
     def _to_view(self, record: VideoResourceRecord) -> VideoResourceView:
         payload = asdict(record)
         keyframes = payload.get("keyframes")
