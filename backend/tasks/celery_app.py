@@ -22,6 +22,7 @@ celery_app = Celery(
         "backend.tasks.global_retrieval_tasks",
         "backend.tasks.video_cleanup_tasks",
         "backend.tasks.upload_finalize_tasks",
+        "backend.services.domain_event_listener",
     ],
 )
 

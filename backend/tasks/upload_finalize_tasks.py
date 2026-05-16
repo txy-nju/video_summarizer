@@ -4,11 +4,13 @@
 职责（严格限定）：
 1. 调用 UploadService 合并分片。
 2. 创建 VideoResource 记录并写入 oss_key。
-3. 发布 VideoUploadedEvent → 由 VideoResourceService.trigger_processing_after_upload 触发 async_process_video。
+3. 通过领域事件总线（Redis Streams）发布 VideoUploadedEvent，
+   由 domain_event_listener 独立消费并触发 async_process_video。
 
-约束：
-- 不得直接调用 async_process_video（解耦上传域与内容加工域）。
-- oss_key 在 OSS 集成前暂存本地文件路径；后续替换为真实 OSS 对象键。
+约束（已对齐步骤 5.6 边界）：
+- upload_finalize_tasks 不 import VideoResourceService，不直接调用 async_process_video。
+- 跨域协作仅通过 DomainEventBus.publish() → Redis XADD 发布事件。
+- 消费方 domain_event_listener 独立生命周期，发布方不感知。
 """
 
 from __future__ import annotations
@@ -69,8 +71,9 @@ def async_finalize_upload(upload_id: str) -> dict:
         UploadRepository(redis_client).cleanup_chunks(upload_id)
         UploadRepository(redis_client).update_state(upload_id, "done")
 
-        # Step 3: 发布 VideoUploadedEvent → 内容加工域触发处理
-        _trigger_video_processing(video_id)
+        # Step 3: 发布 VideoUploadedEvent → 领域事件总线（Redis Streams）
+        #         上传域不感知消费方；domain_event_listener 独立消费并触发 async_process_video
+        _publish_video_uploaded_event(video_id=video_id, owner_id=owner_id, oss_key=oss_key)
 
         logger.info(
             "async_finalize_upload completed: upload_id=%s, video_id=%s, oss_key=%s",
@@ -123,21 +126,39 @@ def _create_video_resource_and_set_oss_key(
         db.close()
 
 
-def _trigger_video_processing(video_id: str) -> None:
-    """发布 VideoUploadedEvent，由内容加工域服务层监听并触发 async_process_video。"""
-    from backend.db.session import SessionLocal
-    from backend.repositories.video_resource_repository import VideoResourceRepository
-    from backend.services.video_resource_service import VideoResourceService
+def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str) -> None:
+    """通过领域事件总线（Redis Streams）发布 VideoUploadedEvent。
 
-    db = SessionLocal()
+    发布方不感知消费方：只发 XADD，不知道谁会 XREADGROUP。
+    消费方 domain_event_listener 独立监听并触发 async_process_video。
+    """
     try:
-        repo = VideoResourceRepository(db_session=db)
-        service = VideoResourceService(repository=repo)
-        triggered = service.trigger_processing_after_upload(video_id=video_id)
-        logger.info(
-            "VideoUploadedEvent dispatched for video_id=%s, triggered=%s",
-            video_id,
-            triggered,
+        import redis as redis_lib
+
+        from backend.schemas.domain_event import DomainEvent
+        from backend.services.domain_event_bus import DomainEventBus
+
+        redis_client = redis_lib.Redis.from_url(
+            "redis://localhost:6379/2", decode_responses=True
         )
-    finally:
-        db.close()
+        bus = DomainEventBus(redis_client)
+
+        event = DomainEvent(
+            event_type="video_uploaded",
+            scope="video_resource",
+            scope_id=video_id,
+            payload={
+                "video_id": video_id,
+                "owner_id": owner_id,
+                "oss_key": oss_key,
+            },
+        )
+        msg_id = bus.publish(event)
+        logger.info(
+            "VideoUploadedEvent published: event_id=%s, video_id=%s, stream_msg_id=%s",
+            event.event_id,
+            video_id,
+            msg_id,
+        )
+    except Exception:
+        logger.exception("Failed to publish VideoUploadedEvent for video_id=%s", video_id)
