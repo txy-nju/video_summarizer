@@ -4,6 +4,7 @@ from dataclasses import asdict
 import logging
 
 from backend.api.pagination import build_pagination, normalize_page_size
+from backend.models.enums import TranscribeStatus
 from backend.repositories.video_resource_repository import VideoResourceRecord, VideoResourceRepository
 from backend.schemas.video_resource import KeyFrameItem, VideoResourceCreateRequest, VideoResourceUpdateRequest, VideoResourceView
 
@@ -109,6 +110,26 @@ class VideoResourceService:
                 exc,
             )
             return False
+
+    def get_video_resource_for_system(self, *, video_id: str) -> VideoResourceRecord | None:
+        """System-only query hook for background workers."""
+        return self._repository.get_by_id_system(video_id)
+
+    def mark_transcription_in_progress(self, *, video_id: str) -> None:
+        """System-only hook: set transcribe status to TRANSCRIBING."""
+        self._repository.update_transcription_status(video_id, TranscribeStatus.TRANSCRIBING)
+
+    def mark_transcription_completed(self, *, video_id: str, full_transcript: str) -> None:
+        """System-only hook: set transcribe status to COMPLETED with transcript payload."""
+        self._repository.update_transcription_status(
+            video_id,
+            TranscribeStatus.COMPLETED,
+            full_transcript=full_transcript,
+        )
+
+    def mark_transcription_failed(self, *, video_id: str) -> None:
+        """System-only hook: set transcribe status to FAILED."""
+        self._repository.update_transcription_status(video_id, TranscribeStatus.FAILED)
 
     def mark_extract_completed_if_ready(self, *, video_id: str) -> bool:
         """System-only hook: set extract_completed_at when dual extraction status is ready."""

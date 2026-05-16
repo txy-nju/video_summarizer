@@ -10,11 +10,18 @@ import os
 from pathlib import Path
 
 from backend.db.session import SessionLocal
-from backend.models.enums import TranscribeStatus
-from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _create_video_resource_service():
+    db = SessionLocal()
+    from backend.repositories.video_resource_repository import VideoResourceRepository
+    from backend.services.video_resource_service import VideoResourceService
+
+    service = VideoResourceService(repository=VideoResourceRepository(db_session=db))
+    return service, db
 
 
 @celery_app.task(
@@ -29,12 +36,11 @@ def async_transcribe_video(self, video_id: str) -> dict:
     转录指定视频的音轨，结果写入 video_resources.full_transcript。
     仅由 async_process_video（通过 celery.group）触发，禁止直接调用。
     """
-    db = SessionLocal()
+    service, db = _create_video_resource_service()
     try:
-        repo = VideoResourceRepository(db)
-        repo.update_transcription_status(video_id, TranscribeStatus.TRANSCRIBING)
+        service.mark_transcription_in_progress(video_id=video_id)
 
-        video = repo.get_by_id_system(video_id)
+        video = service.get_video_resource_for_system(video_id=video_id)
         if video is None:
             logger.error("async_transcribe_video: video_id=%s not found", video_id)
             return {"video_id": video_id, "status": "NOT_FOUND"}
@@ -60,11 +66,7 @@ def async_transcribe_video(self, video_id: str) -> dict:
             transcriber = AudioTranscriber(api_key=api_key, base_url=base_url)
             transcript = transcriber.transcribe(audio_path)
 
-        repo.update_transcription_status(
-            video_id,
-            TranscribeStatus.COMPLETED,
-            full_transcript=transcript,
-        )
+        service.mark_transcription_completed(video_id=video_id, full_transcript=transcript)
         logger.info(
             "async_transcribe_video completed: video_id=%s, transcript_length=%d",
             video_id,
@@ -76,9 +78,9 @@ def async_transcribe_video(self, video_id: str) -> dict:
         logger.exception("async_transcribe_video failed for video_id=%s", video_id)
         # 写入 FAILED 状态（幂等，忽略二次错误）
         try:
-            fail_repo = VideoResourceRepository(SessionLocal())
-            fail_repo.update_transcription_status(video_id, TranscribeStatus.FAILED)
-            fail_repo._session.close()
+            fail_service, fail_db = _create_video_resource_service()
+            fail_service.mark_transcription_failed(video_id=video_id)
+            fail_db.close()
         except Exception:
             pass
         raise self.retry(exc=exc)
