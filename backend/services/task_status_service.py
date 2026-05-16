@@ -22,6 +22,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 _CELERY_STATE_MAP: dict[str, str] = {
@@ -37,6 +41,11 @@ _CELERY_STATE_MAP: dict[str, str] = {
 
 class TaskStatusService:
     """查询 Celery 任务状态并转换为统一格式。"""
+
+    @staticmethod
+    def record_observable_event(event: dict) -> None:
+        """Record lightweight observable events for task/status diagnostics."""
+        logger.info("task_status_observable_event", extra={"event": event})
 
     def get_task_status(self, celery_task_id: str, task_type: str = "") -> dict:
         """

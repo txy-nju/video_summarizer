@@ -95,6 +95,8 @@ class VideoSummaryState(TypedDict):
     keyframes_base_path: str        # 关键帧文件引用模式下的根目录
     user_prompt: str                # 用户具体的总结侧重点
     structured_global_context: Dict[str, Any]  # 写入: outline_bootstrap_node；消费: map worker 与后续上下文增强阶段
+    data_preparation_status: Dict[str, Any]  # 写入: data_preparation_node；消费: 状态透传/可观测
+    data_preparation_events: List[Dict[str, Any]]  # 写入: data_preparation_node；消费: 状态服务与前端诊断
     
     # 中间态数据
     aggregated_chunk_insights: str  # 写入: chunk_aggregator_node；消费: fusion_drafter_node / hallucination_grader_node

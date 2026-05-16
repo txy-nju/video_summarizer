@@ -74,7 +74,7 @@ async def _prepare_keyframes_async(
     keyframes: list[dict[str, Any]],
     max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     fetch_timeout: float = _DEFAULT_FETCH_TIMEOUT,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """
     并发预取关键帧图片，返回每帧增加 image（base64）字段的列表。
     已有 image 字段的帧跳过拉取。
@@ -82,12 +82,12 @@ async def _prepare_keyframes_async(
     sem = asyncio.Semaphore(max_concurrency)
     per_frame_timeout = max(1.0, fetch_timeout / max(len(keyframes), 1))
 
-    async def fetch_one(frame: dict[str, Any]) -> dict[str, Any]:
+    async def fetch_one(frame: dict[str, Any]) -> tuple[dict[str, Any], str]:
         if frame.get("image"):
-            return frame
+            return frame, "already"
         source_key = frame.get("oss_key") or frame.get("frame_file")
         if not source_key:
-            return frame
+            return frame, "missing_source"
         async with sem:
             try:
                 raw = await asyncio.wait_for(
@@ -95,21 +95,57 @@ async def _prepare_keyframes_async(
                     timeout=per_frame_timeout,
                 )
                 if raw:
-                    return {**frame, "image": base64.b64encode(raw).decode("utf-8")}
+                    return {**frame, "image": base64.b64encode(raw).decode("utf-8")}, "fetched"
             except asyncio.TimeoutError:
                 logger.warning(
                     "data_preparation_node: timeout fetching keyframe oss_key=%s", source_key
                 )
+                return frame, "timeout"
             except Exception as exc:
                 logger.warning(
                     "data_preparation_node: failed to fetch keyframe oss_key=%s: %s",
                     source_key,
                     exc,
                 )
-        return frame  # 降级：不含 image
+                return frame, "error"
+        return frame, "not_found"
 
     tasks = [fetch_one(f) for f in keyframes]
-    return list(await asyncio.gather(*tasks))
+    pairs = list(await asyncio.gather(*tasks))
+    enriched = [item for item, _ in pairs]
+    stats = {
+        "fetched": sum(1 for _, s in pairs if s == "fetched"),
+        "already": sum(1 for _, s in pairs if s == "already"),
+        "timeout": sum(1 for _, s in pairs if s == "timeout"),
+        "error": sum(1 for _, s in pairs if s == "error"),
+        "missing_source": sum(1 for _, s in pairs if s == "missing_source"),
+        "not_found": sum(1 for _, s in pairs if s == "not_found"),
+    }
+    return enriched, stats
+
+
+def _record_observable_event(event: dict[str, Any]) -> None:
+    try:
+        from backend.services.task_status_service import TaskStatusService
+
+        TaskStatusService.record_observable_event(event)
+    except Exception as exc:
+        logger.debug("data_preparation_node: observable event sink unavailable: %s", exc)
+
+
+def _build_recoverable_error(
+    *,
+    message: str,
+    details: dict[str, Any],
+    retry_after: int = 5,
+) -> dict[str, Any]:
+    return {
+        "code": "DATA_PREPARATION_DEGRADED",
+        "message": message,
+        "details": details,
+        "is_retryable": True,
+        "retry_after": retry_after,
+    }
 
 
 def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
@@ -125,32 +161,145 @@ def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
     """
     keyframes: list[dict[str, Any]] = state.get("keyframes") or []
     if not keyframes:
-        return {}
+        return {
+            "data_preparation_status": {
+                "status": "skipped",
+                "fetched": 0,
+                "total": 0,
+                "error": None,
+            }
+        }
 
     # 若所有帧已有 image 数据，跳过预取
     missing = [f for f in keyframes if not f.get("image")]
     if not missing:
-        return {}
+        return {
+            "data_preparation_status": {
+                "status": "completed",
+                "fetched": len(keyframes),
+                "total": len(keyframes),
+                "error": None,
+            }
+        }
 
     try:
-        enriched = asyncio.run(_prepare_keyframes_async(keyframes))
-        fetched_count = sum(1 for f in enriched if f.get("image"))
+        enriched, stats = asyncio.run(_prepare_keyframes_async(keyframes))
+        fetched_count = stats.get("fetched", 0)
+        missing_count = len(missing)
+        failed_count = max(0, missing_count - fetched_count)
         logger.info(
             "data_preparation_node: prefetched %d/%d keyframe images",
             fetched_count,
             len(enriched),
         )
-        return {"keyframes": enriched}
+
+        if failed_count > 0:
+            error_payload = _build_recoverable_error(
+                message="Keyframe prefetch partially failed; continue with degraded context.",
+                details={
+                    "total_keyframes": len(keyframes),
+                    "missing_images": missing_count,
+                    "fetched_images": fetched_count,
+                    "timeout_count": stats.get("timeout", 0),
+                    "error_count": stats.get("error", 0),
+                    "not_found_count": stats.get("not_found", 0),
+                },
+                retry_after=5,
+            )
+            event = {
+                "event_type": "status_update",
+                "scope": "video_summary_task",
+                "scope_id": str(state.get("thread_id", "")),
+                "node": "data_preparation_node",
+                "status": "DEGRADED",
+                "progress": 100,
+                "payload": error_payload,
+            }
+            _record_observable_event(event)
+            return {
+                "keyframes": enriched,
+                "data_preparation_status": {
+                    "status": "degraded",
+                    "fetched": fetched_count,
+                    "total": len(keyframes),
+                    "error": error_payload,
+                },
+                "data_preparation_events": [event],
+            }
+
+        return {
+            "keyframes": enriched,
+            "data_preparation_status": {
+                "status": "completed",
+                "fetched": len(keyframes),
+                "total": len(keyframes),
+                "error": None,
+            },
+        }
     except RuntimeError as exc:
         # asyncio.run() 在已有事件循环时会抛出 RuntimeError；降级回退
         logger.warning("data_preparation_node: asyncio.run() conflict, using fallback: %s", exc)
         try:
             loop = asyncio.get_event_loop()
-            enriched = loop.run_until_complete(_prepare_keyframes_async(keyframes))
-            return {"keyframes": enriched}
+            enriched, _stats = loop.run_until_complete(_prepare_keyframes_async(keyframes))
+            return {
+                "keyframes": enriched,
+                "data_preparation_status": {
+                    "status": "completed",
+                    "fetched": len(enriched),
+                    "total": len(keyframes),
+                    "error": None,
+                },
+            }
         except Exception as inner:
             logger.warning("data_preparation_node: fallback also failed: %s", inner)
-            return {}
+            error_payload = _build_recoverable_error(
+                message="data_preparation fallback failed",
+                details={"exception": str(inner)},
+                retry_after=5,
+            )
+            event = {
+                "event_type": "status_update",
+                "scope": "video_summary_task",
+                "scope_id": str(state.get("thread_id", "")),
+                "node": "data_preparation_node",
+                "status": "DEGRADED",
+                "progress": 100,
+                "payload": error_payload,
+            }
+            _record_observable_event(event)
+            return {
+                "data_preparation_status": {
+                    "status": "degraded",
+                    "fetched": 0,
+                    "total": len(keyframes),
+                    "error": error_payload,
+                },
+                "data_preparation_events": [event],
+            }
     except Exception as exc:
         logger.warning("data_preparation_node: degraded fallback due to: %s", exc)
-        return {}
+        error_payload = _build_recoverable_error(
+            message="data_preparation degraded due to runtime error",
+            details={"exception": str(exc)},
+            retry_after=5,
+        )
+        event = {
+            "event_type": "status_update",
+            "scope": "video_summary_task",
+            "scope_id": str(state.get("thread_id", "")),
+            "node": "data_preparation_node",
+            "status": "DEGRADED",
+            "progress": 100,
+            "payload": error_payload,
+        }
+        _record_observable_event(event)
+        return {
+            "data_preparation_status": {
+                "status": "degraded",
+                "fetched": 0,
+                "total": len(keyframes),
+                "error": error_payload,
+            },
+            "data_preparation_events": [event],
+        }
