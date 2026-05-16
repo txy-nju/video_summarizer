@@ -137,6 +137,90 @@ class VideoResourceRepository:
         self._session.commit()
         return True
 
+    # -------------------------------------------------------------------------
+    # System-only methods (Celery tasks, not request-scoped)
+    # These bypass owner check and are for background workers only.
+    # -------------------------------------------------------------------------
+
+    def get_by_id_system(self, video_id: str) -> VideoResourceRecord | None:
+        """Bypass owner check; for background worker use only."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return None
+        return self._to_record(row)
+
+    def update_transcription_status(
+        self,
+        video_id: str,
+        status: TranscribeStatus,
+        *,
+        full_transcript: str | None = None,
+    ) -> None:
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return
+        row.transcribe_status = status
+        if full_transcript is not None:
+            row.full_transcript = full_transcript
+        self._session.commit()
+
+    def update_frame_extraction(
+        self,
+        video_id: str,
+        status: FrameExtractionStatus,
+        *,
+        keyframes: list[dict] | None = None,
+        keyframes_oss_prefix: str | None = None,
+    ) -> None:
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return
+        row.frame_extraction_status = status
+        if keyframes is not None:
+            row.keyframes = keyframes
+        if keyframes_oss_prefix is not None:
+            row.keyframes_oss_prefix = keyframes_oss_prefix
+        self._session.commit()
+
+    def update_extract_completed_at(self, video_id: str) -> None:
+        """Set extract_completed_at when both transcription and frame extraction are done."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return
+        if (
+            row.transcribe_status == TranscribeStatus.COMPLETED
+            and row.frame_extraction_status == FrameExtractionStatus.COMPLETED
+        ):
+            row.extract_completed_at = datetime.now(UTC)
+            self._session.commit()
+
+    def update_deletion_status(self, video_id: str, deletion_status: str) -> None:
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return
+        if hasattr(row, "deletion_status"):
+            row.deletion_status = deletion_status
+        self._session.commit()
+
+    def physical_delete(self, video_id: str) -> None:
+        """Physical delete after all external resources are cleaned up."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is not None:
+            self._session.delete(row)
+            self._session.commit()
+
     @staticmethod
     def _to_record(entity: VideoResource) -> VideoResourceRecord:
         created_at = getattr(entity, "created_at", None) or datetime.now(UTC)

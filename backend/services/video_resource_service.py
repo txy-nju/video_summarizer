@@ -1,10 +1,26 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import logging
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.video_resource_repository import VideoResourceRecord, VideoResourceRepository
 from backend.schemas.video_resource import KeyFrameItem, VideoResourceCreateRequest, VideoResourceUpdateRequest, VideoResourceView
+
+
+logger = logging.getLogger(__name__)
+
+
+def _dispatch_async_cascade_delete(video_id: str) -> None:
+    from backend.tasks.video_cleanup_tasks import async_cascade_delete_video
+
+    async_cascade_delete_video.delay(video_id)
+
+
+def _dispatch_async_process_video(video_id: str) -> None:
+    from backend.tasks.video_summary_tasks import async_process_video
+
+    async_process_video.delay(video_id)
 
 
 class VideoResourceService:
@@ -57,7 +73,42 @@ class VideoResourceService:
         return self._to_view(record)
 
     def delete_video_resource(self, *, owner_id: str, video_id: str) -> bool:
-        return self._repository.delete_by_owner_and_id(owner_id, video_id)
+        deleted = self._repository.delete_by_owner_and_id(owner_id, video_id)
+        if not deleted:
+            return False
+
+        # API 线程只做软删除受理；跨存储清理由异步任务执行。
+        try:
+            _dispatch_async_cascade_delete(video_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to dispatch async_cascade_delete_video for video_id=%s: %s",
+                video_id,
+                exc,
+            )
+
+        return True
+
+    def trigger_processing_after_upload(self, *, video_id: str) -> bool:
+        """System-only hook: trigger async extraction pipeline after upload is finalized."""
+        video = self._repository.get_by_id_system(video_id)
+        if video is None:
+            return False
+        if video.is_deleted:
+            return False
+        if not (video.oss_key and video.oss_key.strip()):
+            return False
+
+        try:
+            _dispatch_async_process_video(video_id)
+            return True
+        except Exception as exc:
+            logger.warning(
+                "Failed to dispatch async_process_video for video_id=%s: %s",
+                video_id,
+                exc,
+            )
+            return False
 
     def _to_view(self, record: VideoResourceRecord) -> VideoResourceView:
         payload = asdict(record)

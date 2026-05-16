@@ -28,6 +28,18 @@ class Settings(BaseSettings):
         alias="DATABASE_URL",
     )
 
+    celery_broker_url: str = Field(
+        default="redis://localhost:6379/0",
+        alias="CELERY_BROKER_URL",
+    )
+    celery_result_backend: str = Field(
+        default="redis://localhost:6379/1",
+        alias="CELERY_RESULT_BACKEND",
+    )
+
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -17,3 +17,5 @@ python-dotenv
 ffmpeg-python
 langgraph
 jieba
+celery[redis]
+redis

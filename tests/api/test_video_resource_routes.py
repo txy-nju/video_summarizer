@@ -5,6 +5,9 @@ from sqlalchemy import select
 
 import backend.dependencies as dependencies
 from backend.app_factory import create_app
+from backend.models.database import VideoResource
+from backend.repositories.video_resource_repository import VideoResourceRepository
+from backend.services.video_resource_service import VideoResourceService
 from backend.models.database import kb_video_relation_table
 
 
@@ -143,26 +146,82 @@ def test_video_delete_strips_kb_video_relations() -> None:
     bind_response = client.post(f"/api/v1/kbs/{kbid}/videos", json={"video_id": video_id}, headers=headers)
     assert bind_response.status_code == 200
 
-    db_session = dependencies.SessionLocal()
-    relation_rows_before = db_session.execute(
-        select(kb_video_relation_table.c.video_id).where(
-            kb_video_relation_table.c.kbid == kbid,
-            kb_video_relation_table.c.video_id == video_id,
-        )
-    ).all()
-    assert len(relation_rows_before) == 1
+    with dependencies.SessionLocal() as db_session:
+        relation_rows_before = db_session.execute(
+            select(kb_video_relation_table.c.video_id).where(
+                kb_video_relation_table.c.kbid == kbid,
+                kb_video_relation_table.c.video_id == video_id,
+            )
+        ).all()
+        assert len(relation_rows_before) == 1
 
     delete_response = client.delete(f"/api/v1/videos/{video_id}", headers=headers)
     assert delete_response.status_code == 202
 
-    relation_rows_after = db_session.execute(
-        select(kb_video_relation_table.c.video_id).where(
-            kb_video_relation_table.c.kbid == kbid,
-            kb_video_relation_table.c.video_id == video_id,
-        )
-    ).all()
-    assert relation_rows_after == []
+    with dependencies.SessionLocal() as db_session:
+        relation_rows_after = db_session.execute(
+            select(kb_video_relation_table.c.video_id).where(
+                kb_video_relation_table.c.kbid == kbid,
+                kb_video_relation_table.c.video_id == video_id,
+            )
+        ).all()
+        assert relation_rows_after == []
 
     list_response = client.get(f"/api/v1/kbs/{kbid}/videos?page=1&page_size=20", headers=headers)
     assert list_response.status_code == 200
     assert list_response.json()["pagination"]["total"] == 0
+
+
+def test_video_delete_dispatches_async_cleanup(monkeypatch) -> None:
+    token = _login("alice-video-cleanup-dispatch")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert create_video_response.status_code == 201
+    video_id = create_video_response.json()["data"]["video_id"]
+
+    captured: dict[str, str] = {}
+
+    def _fake_delay(v_id: str):
+        captured["video_id"] = v_id
+
+    monkeypatch.setattr(
+        "backend.services.video_resource_service._dispatch_async_cascade_delete",
+        _fake_delay,
+    )
+
+    delete_response = client.delete(f"/api/v1/videos/{video_id}", headers=headers)
+    assert delete_response.status_code == 202
+    assert captured.get("video_id") == video_id
+
+
+def test_trigger_processing_after_upload_dispatches_async_process(monkeypatch) -> None:
+    token = _login("alice-video-process-dispatch")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert create_video_response.status_code == 201
+    video_id = create_video_response.json()["data"]["video_id"]
+
+    with dependencies.SessionLocal() as db_session:
+        row = db_session.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None
+        row.oss_key = f"videos/owner/{video_id}/original.mp4"
+        db_session.commit()
+
+    captured: dict[str, str] = {}
+
+    def _fake_dispatch(v_id: str) -> None:
+        captured["video_id"] = v_id
+
+    monkeypatch.setattr(
+        "backend.services.video_resource_service._dispatch_async_process_video",
+        _fake_dispatch,
+    )
+
+    with dependencies.SessionLocal() as db_session:
+        service = VideoResourceService(repository=VideoResourceRepository(db_session=db_session))
+        dispatched = service.trigger_processing_after_upload(video_id=video_id)
+
+    assert dispatched is True
+    assert captured.get("video_id") == video_id

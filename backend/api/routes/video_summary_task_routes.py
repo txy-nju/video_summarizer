@@ -46,7 +46,15 @@ async def create_video_summary_task(
     current_user: UserView = Depends(get_current_user),
     task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
 ):
-    task = task_service.create_video_summary_task(owner_id=current_user.user_id, payload=payload)
+    try:
+        task = task_service.create_video_summary_task(owner_id=current_user.user_id, payload=payload)
+    except ValueError as exc:
+        if str(exc) == "video_not_ready":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Video is not ready for summarization. Transcription and keyframe extraction must both complete first.",
+            )
+        raise
     if task is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -30,6 +30,14 @@ class VideoSummaryTaskService:
         if kb is None or video is None:
             return None
 
+        # 验证视频资源已就绪（转录与关键帧抽取均完成）
+        if (
+            video.extract_completed_at is None
+            or video.transcribe_status != "COMPLETED"
+            or video.frame_extraction_status != "COMPLETED"
+        ):
+            raise ValueError("video_not_ready")
+
         record = self._repository.create(
             owner_id=owner_id,
             kbid=payload.kbid,

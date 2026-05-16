@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from backend.app_factory import create_app
+from backend.dependencies import SessionLocal
+from backend.models.database import VideoResource
+from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 
 
 app = create_app()
@@ -36,6 +41,20 @@ def _login(username: str, password: str = "Secret123!") -> str:
     return login_response.json()["data"]["access_token"]
 
 
+def _mark_video_ready(video_id: str) -> None:
+    """测试辅助：直接标记视频为已就绪状态（模拟 Celery 转录 + 抽帧任务完成）。"""
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row:
+            row.transcribe_status = TranscribeStatus.COMPLETED
+            row.frame_extraction_status = FrameExtractionStatus.COMPLETED
+            row.extract_completed_at = datetime.now(UTC)
+            db.commit()
+    finally:
+        db.close()
+
+
 def _prepare_task(token: str) -> str:
     """准备一个任务用于测试问答"""
     headers = {"Authorization": f"Bearer {token}"}
@@ -46,6 +65,9 @@ def _prepare_task(token: str) -> str:
     video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
     assert video_response.status_code == 201
     video_id = video_response.json()["data"]["video_id"]
+
+    # 模拟 Celery 提取任务完成，标记视频就绪
+    _mark_video_ready(video_id)
 
     create_response = client.post(
         "/api/v1/tasks",

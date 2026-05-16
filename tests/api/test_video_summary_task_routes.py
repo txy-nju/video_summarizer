@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from backend.app_factory import create_app
+from backend.dependencies import SessionLocal
+from backend.models.database import VideoResource
+from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 
 
 app = create_app()
@@ -36,6 +41,34 @@ def _login(username: str, password: str = "Secret123!") -> str:
     return login_response.json()["data"]["access_token"]
 
 
+def _mark_video_ready(video_id: str) -> None:
+    """测试辅助：直接标记视频为已就绪状态（模拟 Celery 转录 + 抽帧任务完成）。"""
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row:
+            row.transcribe_status = TranscribeStatus.COMPLETED
+            row.frame_extraction_status = FrameExtractionStatus.COMPLETED
+            row.extract_completed_at = datetime.now(UTC)
+            db.commit()
+    finally:
+        db.close()
+
+
+def _mark_video_inconsistent_ready(video_id: str) -> None:
+    """测试辅助：制造 extract_completed_at 非空但双状态不一致的异常就绪态。"""
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row:
+            row.transcribe_status = TranscribeStatus.COMPLETED
+            row.frame_extraction_status = FrameExtractionStatus.EXTRACTING
+            row.extract_completed_at = datetime.now(UTC)
+            db.commit()
+    finally:
+        db.close()
+
+
 def _prepare_assets(token: str) -> tuple[str, str]:
     headers = {"Authorization": f"Bearer {token}"}
     kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=headers)
@@ -45,6 +78,8 @@ def _prepare_assets(token: str) -> tuple[str, str]:
     video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
     assert video_response.status_code == 201
     video_id = video_response.json()["data"]["video_id"]
+    # 模拟 Celery 提取任务完成，标记视频就绪
+    _mark_video_ready(video_id)
     return kbid, video_id
 
 
@@ -147,3 +182,28 @@ def test_video_summary_task_update_rejects_workflow_state_write() -> None:
     )
 
     assert update_response.status_code == 422
+
+
+def test_video_summary_task_create_rejects_inconsistent_ready_state() -> None:
+    token = _login("alice-task-inconsistent-ready")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=headers)
+    assert kb_response.status_code == 201
+    kbid = kb_response.json()["data"]["kbid"]
+
+    video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert video_response.status_code == 201
+    video_id = video_response.json()["data"]["video_id"]
+    _mark_video_inconsistent_ready(video_id)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={
+            "kbid": kbid,
+            "video_id": video_id,
+            "user_initial_preference": "请生成结构化摘要",
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 422

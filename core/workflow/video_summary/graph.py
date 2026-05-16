@@ -19,6 +19,7 @@ from core.workflow.video_summary.nodes.chunk_synthesizer import chunk_synthesize
 from core.workflow.video_summary.nodes.chunk_aggregator import chunk_aggregator_node
 from core.workflow.video_summary.nodes.human_gate import human_gate_node
 from core.workflow.video_summary.nodes.fusion_drafter import fusion_drafter_node
+from core.workflow.video_summary.nodes.data_preparation_node import data_preparation_node
 
 # 质量审查节点
 from core.workflow.video_summary.nodes.hallucination_grader import hallucination_grader_node
@@ -46,6 +47,7 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     # 2. 注册节点
     workflow.add_node("chunk_planner_node", chunk_planner_node) # type: ignore
     workflow.add_node("outline_bootstrap_node", outline_bootstrap_node) # type: ignore
+    workflow.add_node("data_preparation_node", data_preparation_node) # type: ignore
     workflow.add_node("map_dispatch_node", map_dispatch_node) # type: ignore
     workflow.add_node("synthesis_barrier_node", synthesis_barrier_node) # type: ignore
     workflow.add_node("chunk_audio_worker_node", chunk_audio_worker_node) # type: ignore
@@ -58,7 +60,8 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     # 3. 编排拓扑连线
     workflow.add_edge(START, "chunk_planner_node")
     workflow.add_edge("chunk_planner_node", "outline_bootstrap_node")
-    workflow.add_edge("outline_bootstrap_node", "map_dispatch_node")
+    workflow.add_edge("outline_bootstrap_node", "data_preparation_node")
+    workflow.add_edge("data_preparation_node", "map_dispatch_node")
 
     workflow.add_conditional_edges("map_dispatch_node", route_audio_send_tasks)
     workflow.add_conditional_edges("map_dispatch_node", route_vision_send_tasks)
