@@ -16,6 +16,26 @@ from backend.repositories.global_chat_repository import GlobalChatRepository
 from backend.repositories.global_qa_repository import GlobalQARepository
 from backend.services.global_chat_service import GlobalChatService
 from backend.services.global_qa_service import GlobalQAService
+import redis as redis_lib
+import socket
+from backend.config import get_settings as _get_settings
+from backend.services.progress_event_bus import ProgressEventBus
+from backend.websocket.manager import ConnectionManager
+
+
+# ------------------------------------------------------------------
+# WebSocket / 进度事件依赖
+# ------------------------------------------------------------------
+@lru_cache(maxsize=1)
+def get_progress_event_bus() -> ProgressEventBus:
+    settings = _get_settings()
+    r = redis_lib.Redis.from_url(settings.celery_broker_url)
+    import socket
+    return ProgressEventBus(redis_client=r, instance_id=socket.gethostname())
+
+@lru_cache(maxsize=1)
+def get_connection_manager() -> ConnectionManager:
+    return ConnectionManager(event_bus=get_progress_event_bus())
 
 
 def get_app_settings() -> Settings:

@@ -4,8 +4,8 @@
 - 项目：video_summarizer（后端 FastAPI）
 - 文档语言：中文
 - 目标读者：前端开发者（联调与 SDK 封装）
-- 生成日期：2026-05-15
-- 路由覆盖统计：38 个（/health 1 个 + 业务路由 37 个）
+- 生成日期：2026-05-16
+- 路由覆盖统计：43 个（/health 1 个 + 业务路由 42 个）
 - 依据源码层级：
   1. 路由注册与 controller：backend/app_factory.py, backend/api/routes/*.py
   2. 请求/响应模型：backend/schemas/*.py, backend/schemas/common.py, backend/auth/models.py
@@ -21,6 +21,12 @@
   - Authorization: Bearer <access_token>
   - x-request-id: 可选，客户端可传；不传由服务端生成
   - x-trace-id: 可选，客户端可传；不传复用 request_id
+
+### 2.1.1 TUS 分片上传 Header（仅 file_upload 路由）
+- Tus-Resumable: 1.0.0（PATCH/HEAD 响应会返回；PATCH 请求若提供且非 1.0.0 则 412）
+- Upload-Offset: 当前字节偏移（PATCH 请求必传；HEAD/PATCH 响应返回最新 offset）
+- Upload-Length: 文件总字节数（HEAD 响应返回）
+- Content-Type: application/offset+octet-stream（PATCH 推荐值；当前实现未强校验该值）
 
 ### 2.2 时间与命名
 - 时间：UTC，ISO 8601，如 2026-05-13T08:30:00Z（来自 MetaInfo）
@@ -128,6 +134,11 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 | global-qa | GET | /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id} | 是 | 200 | GlobalQARecordResponse |
 | global-qa | PATCH | /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id} | 是 | 200 | GlobalQARecordResponse |
 | global-qa | DELETE | /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id} | 是 | 200 | GlobalQARecordDeleteResponse |
+| file_upload | POST | /api/v1/uploads | 是 | 201 | InitUploadResponse |
+| file_upload | HEAD | /api/v1/uploads/{upload_id} | 是 | 204 | Response（TUS headers） |
+| file_upload | PATCH | /api/v1/uploads/{upload_id} | 是 | 200/204 | Response（TUS headers） |
+| file_upload | DELETE | /api/v1/uploads/{upload_id} | 是 | 200 | UploadCancelResponse（运行时返回 dict） |
+| file_upload | GET | /api/v1/uploads/{upload_id} | 是 | 200 | ChunkStatusResponse |
 
 ## 5. 公共 JSON 结构说明（前端重点）
 
@@ -918,6 +929,110 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 }
 ```
 
+### 6.9 file_upload（TUS 分片上传）
+
+#### POST /api/v1/uploads
+- 鉴权：是
+- 请求体模型：InitUploadRequest
+- 字段约束：
+  - file_name: string, min 1, max 512
+  - total_size: int, gt 0, le 10737418240（10GB）
+- 请求示例：
+```json
+{
+  "file_name": "demo.mp4",
+  "total_size": 31457280
+}
+```
+- 成功响应（201）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6",
+  "chunk_size": 10485760,
+  "expires_at": "2026-05-17T12:00:00+00:00"
+}
+```
+
+#### HEAD /api/v1/uploads/{upload_id}
+- 鉴权：是
+- 请求 JSON（等价表达）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6"
+}
+```
+- 成功响应：204，无 body；通过 header 返回进度
+  - Tus-Resumable: 1.0.0
+  - Upload-Offset: 0
+  - Upload-Length: 31457280
+  - Cache-Control: no-store
+
+#### PATCH /api/v1/uploads/{upload_id}
+- 鉴权：是
+- 请求头：
+  - Upload-Offset: int（必填）
+  - Tus-Resumable: 可选；若传且非 1.0.0 返回 412
+- 请求体：二进制分片（application/offset+octet-stream）
+- 服务器分片规则：固定 10 MiB（10485760 字节）
+- 请求示例（伪 JSON 等价表达，二进制体用占位）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6",
+  "headers": {
+    "Upload-Offset": 0,
+    "Tus-Resumable": "1.0.0",
+    "Content-Type": "application/offset+octet-stream"
+  },
+  "body": "<binary_chunk_bytes>"
+}
+```
+- 未完成时响应：204，无 body
+  - Tus-Resumable: 1.0.0
+  - Upload-Offset: <最新 uploaded_size>
+- 全部分片完成时响应：200，无 body
+  - Tus-Resumable: 1.0.0
+  - Upload-Offset: <total_size>
+
+#### DELETE /api/v1/uploads/{upload_id}
+- 鉴权：是
+- 请求 JSON（等价表达）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6"
+}
+```
+- 成功响应（200）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6",
+  "status": "cancelled"
+}
+```
+
+#### GET /api/v1/uploads/{upload_id}
+- 鉴权：是
+- 用途：查询上传进度（JSON 轮询接口，非 TUS 标准）
+- 请求 JSON（等价表达）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6"
+}
+```
+- 成功响应（200）：
+```json
+{
+  "upload_id": "1f496d4a-e9f9-4f5b-a1d7-4d78429b17f6",
+  "uploaded_size": 10485760,
+  "total_size": 31457280,
+  "uploaded_chunks": [0]
+}
+```
+- 字段语义：
+  - upload_id：上传会话 ID（当前实现为 UUID4 字符串）
+  - uploaded_size：已完成分片累计字节
+  - total_size：文件总字节
+  - uploaded_chunks：已完成分片索引（升序）
+
 ## 7. 字段语义说明（按业务对象）
 
 ### 7.1 KnowledgeBase.config
@@ -952,6 +1067,15 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 - attachments：附件元数据数组（持久化主键为 oss_key，不传二进制）
 - cited_sources：回答证据链数组，用于前端引用跳转
 
+### 7.4 Upload（分片上传）字段
+- file_name：客户端原始文件名；用于展示与后续默认对象键生成
+- total_size：客户端声明的完整文件字节数（上限 10GB）
+- chunk_size：服务端固定分片大小（10 MiB），前端应以此值切片
+- expires_at：上传会话过期时间（UTC ISO 8601）
+- upload_id：上传会话标识（当前运行时由 uuid4 生成）
+- uploaded_size：已上传总字节数（用于断点续传偏移）
+- uploaded_chunks：已完成分片索引列表（用于前端校验丢片/重传）
+
 ## 8. 错误码与状态映射
 
 | 场景 | HTTP | 结构 | 说明 |
@@ -959,6 +1083,8 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 | 鉴权缺失/无效 | 401 | {"detail": "..."} | get_current_user / refresh 校验失败 |
 | 资源不存在 | 404 | {"detail": "..."} | owner 校验失败或 ID 不存在 |
 | 参数不一致 | 400 | {"detail": "..."} | 如 path 与 body 的 task_id/kbid 不一致 |
+| 上传分片非法 | 400 | {"detail": "..."} | 空分片、分片大小不符、会话状态非法、offset 推导出的 chunk_index 非法 |
+| TUS 版本不匹配 | 412 | {"detail": "..."} | PATCH 请求 Tus-Resumable 非 1.0.0 |
 | 业务冲突 | 409 | {"detail": "..."} | register 用户名重复 |
 | 模型校验失败 | 422 | FastAPI validation | 字段缺失/越界/extra 字段 |
 | 未捕获异常 | 500 | {"status":"error","message":"Internal Server Error"} | 全局异常处理 |
@@ -966,7 +1092,7 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 ## 9. 一致性检查报告（route-schema-plan）
 
 ### 9.1 覆盖性
-- 已覆盖 app_factory.py 中注册的全部 8 组路由（含 system /health）。
+- 已覆盖 app_factory.py 中注册的全部 9 组路由（含 system /health 与 file_upload）。
 - 已覆盖所有 controller 路径、方法、响应模型。
 
 ### 9.2 已确认一致项
@@ -980,6 +1106,8 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 3. GET 列表接口的 fields 目前仅校验，不做响应字段裁剪。
 4. /api/v1/kbs/{kbid}/chats/{chat_id}/qa 路由函数中存在 `_ = kbid` 赋值，但实际 owner/kbid 校验在 service 层执行。
 5. QA 的 PATCH regenerate 目前为“意图占位”，不在接口内直接回写新回答。
+6. upload schema 注释声明 upload_id 语义为 UUIDv7，但运行时代码 `UploadService.initiate_upload()` 当前使用 `uuid.uuid4()` 生成；文档已按运行时行为记录。
+7. file_upload 路由响应未使用 `SuccessResponse/ErrorResponse` 信封，而是直接返回 JSON DTO 或空 body + TUS headers。
 
 ## 10. 前端联调建议（基于当前实现）
 1. 统一拦截 401/404/422/500，优先兼容 FastAPI detail 结构。
@@ -987,3 +1115,4 @@ auth 路由响应模型未包含 meta/pagination，仅返回 status + data。
 3. 对 fields 参数只作为校验用途，不要依赖其实现响应裁剪。
 4. DELETE /api/v1/videos/{video_id} 需按 202 受理语义处理，前端可做异步刷新。
 5. 对 QA regenerate 流程，当前应视为触发意图，不应假定立即得到新 answer_content。
+6. 对分片上传建议优先按 HEAD 返回的 `Upload-Offset` 做断点续传，并在 PATCH 完成后以 GET/HEAD 双通道校验进度一致性。
