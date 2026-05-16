@@ -9,11 +9,18 @@ import logging
 from pathlib import Path
 
 from backend.db.session import SessionLocal
-from backend.models.enums import FrameExtractionStatus
-from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _create_video_resource_service():
+    db = SessionLocal()
+    from backend.repositories.video_resource_repository import VideoResourceRepository
+    from backend.services.video_resource_service import VideoResourceService
+
+    service = VideoResourceService(repository=VideoResourceRepository(db_session=db))
+    return service, db
 
 
 def _build_oss_key(owner_id: str, video_id: str, frame_filename: str) -> str:
@@ -64,12 +71,11 @@ def async_extract_keyframes(self, video_id: str) -> dict:
     base64 图片数据不入库；oss_key 按计划命名规则生成。
     仅由 async_process_video（通过 celery.group）触发，禁止直接调用。
     """
-    db = SessionLocal()
+    service, db = _create_video_resource_service()
     try:
-        repo = VideoResourceRepository(db)
-        repo.update_frame_extraction(video_id, FrameExtractionStatus.EXTRACTING)
+        service.mark_frame_extraction_in_progress(video_id=video_id)
 
-        video = repo.get_by_id_system(video_id)
+        video = service.get_video_resource_for_system(video_id=video_id)
         if video is None:
             logger.error("async_extract_keyframes: video_id=%s not found", video_id)
             return {"video_id": video_id, "status": "NOT_FOUND"}
@@ -90,9 +96,8 @@ def async_extract_keyframes(self, video_id: str) -> dict:
         keyframes_for_db = _sanitize_frames_for_db(raw_frames, video.owner_id, video_id)
         oss_prefix = f"frames/{video.owner_id}/{video_id}/"
 
-        repo.update_frame_extraction(
-            video_id,
-            FrameExtractionStatus.COMPLETED,
+        service.mark_frame_extraction_completed(
+            video_id=video_id,
             keyframes=keyframes_for_db,
             keyframes_oss_prefix=oss_prefix,
         )
@@ -110,9 +115,9 @@ def async_extract_keyframes(self, video_id: str) -> dict:
     except Exception as exc:
         logger.exception("async_extract_keyframes failed for video_id=%s", video_id)
         try:
-            fail_repo = VideoResourceRepository(SessionLocal())
-            fail_repo.update_frame_extraction(video_id, FrameExtractionStatus.FAILED)
-            fail_repo._session.close()
+            fail_service, fail_db = _create_video_resource_service()
+            fail_service.mark_frame_extraction_failed(video_id=video_id)
+            fail_db.close()
         except Exception:
             pass
         raise self.retry(exc=exc)

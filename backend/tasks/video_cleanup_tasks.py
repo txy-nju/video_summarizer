@@ -13,11 +13,19 @@ from __future__ import annotations
 
 import logging
 
-from backend.db.session import SessionLocal
-from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+def _create_video_resource_service():
+    """工厂：为每次任务调用创建独立 DB session + service 实例。"""
+    from backend.db.session import SessionLocal
+    from backend.repositories.video_resource_repository import VideoResourceRepository
+    from backend.services.video_resource_service import VideoResourceService
+
+    db = SessionLocal()
+    return VideoResourceService(VideoResourceRepository(db)), db
 
 
 @celery_app.task(
@@ -33,18 +41,16 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
     幂等：重复调用不产生额外副作用。
     仅由软删除接口触发（通过 VideoResourceService），禁止在请求线程内直接调用。
     """
-    db = SessionLocal()
+    service, db = _create_video_resource_service()
     try:
-        repo = VideoResourceRepository(db)
-
-        video = repo.get_by_id_system(video_id)
+        video = service.get_video_resource_for_system(video_id=video_id)
         if video is None:
             # 已物理删除或从未存在，视为成功
             logger.info("async_cascade_delete_video: video_id=%s already gone", video_id)
             return {"video_id": video_id, "status": "NOT_FOUND"}
 
         # 推进状态：PENDING_DELETE -> DELETING
-        repo.update_deletion_status(video_id, "DELETING")
+        service.mark_deletion_in_progress(video_id=video_id)
 
         # 1. OSS 清理（占位实现；step 5.5 后接入真实 OSS client）
         if video.oss_key:
@@ -66,7 +72,7 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
             # TODO: vector_store.delete_vectors(video.transcript_vector_ids)
 
         # 3. 数据库物理删除
-        repo.physical_delete(video_id)
+        service.purge_video(video_id=video_id)
 
         logger.info("async_cascade_delete_video: video_id=%s purged", video_id)
         return {"video_id": video_id, "deletion_status": "PURGED"}
@@ -74,9 +80,8 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
     except Exception as exc:
         logger.exception("async_cascade_delete_video failed for video_id=%s", video_id)
         try:
-            fail_db = SessionLocal()
-            fail_repo = VideoResourceRepository(fail_db)
-            fail_repo.update_deletion_status(video_id, "DELETE_FAILED")
+            fail_service, fail_db = _create_video_resource_service()
+            fail_service.mark_deletion_failed(video_id=video_id)
             fail_db.close()
         except Exception:
             pass

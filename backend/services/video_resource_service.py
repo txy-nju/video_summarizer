@@ -4,7 +4,7 @@ from dataclasses import asdict
 import logging
 
 from backend.api.pagination import build_pagination, normalize_page_size
-from backend.models.enums import TranscribeStatus
+from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 from backend.repositories.video_resource_repository import VideoResourceRecord, VideoResourceRepository
 from backend.schemas.video_resource import KeyFrameItem, VideoResourceCreateRequest, VideoResourceUpdateRequest, VideoResourceView
 
@@ -131,6 +131,29 @@ class VideoResourceService:
         """System-only hook: set transcribe status to FAILED."""
         self._repository.update_transcription_status(video_id, TranscribeStatus.FAILED)
 
+    def mark_frame_extraction_in_progress(self, *, video_id: str) -> None:
+        """System-only hook: set frame extraction status to EXTRACTING."""
+        self._repository.update_frame_extraction(video_id, FrameExtractionStatus.EXTRACTING)
+
+    def mark_frame_extraction_completed(
+        self,
+        *,
+        video_id: str,
+        keyframes: list[dict],
+        keyframes_oss_prefix: str,
+    ) -> None:
+        """System-only hook: set frame extraction status to COMPLETED with extracted keyframes."""
+        self._repository.update_frame_extraction(
+            video_id,
+            FrameExtractionStatus.COMPLETED,
+            keyframes=keyframes,
+            keyframes_oss_prefix=keyframes_oss_prefix,
+        )
+
+    def mark_frame_extraction_failed(self, *, video_id: str) -> None:
+        """System-only hook: set frame extraction status to FAILED."""
+        self._repository.update_frame_extraction(video_id, FrameExtractionStatus.FAILED)
+
     def mark_extract_completed_if_ready(self, *, video_id: str) -> bool:
         """System-only hook: set extract_completed_at when dual extraction status is ready."""
         video = self._repository.get_by_id_system(video_id)
@@ -139,6 +162,18 @@ class VideoResourceService:
 
         self._repository.update_extract_completed_at(video_id)
         return True
+
+    def mark_deletion_in_progress(self, *, video_id: str) -> None:
+        """System-only hook: advance deletion state machine to DELETING."""
+        self._repository.update_deletion_status(video_id, "DELETING")
+
+    def mark_deletion_failed(self, *, video_id: str) -> None:
+        """System-only hook: record cleanup failure as DELETE_FAILED."""
+        self._repository.update_deletion_status(video_id, "DELETE_FAILED")
+
+    def purge_video(self, *, video_id: str) -> None:
+        """System-only hook: physical delete after all external resources are cleaned."""
+        self._repository.physical_delete(video_id)
 
     def _to_view(self, record: VideoResourceRecord) -> VideoResourceView:
         payload = asdict(record)
