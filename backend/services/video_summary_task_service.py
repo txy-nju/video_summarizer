@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from datetime import UTC, datetime
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -198,6 +199,89 @@ class VideoSummaryTaskService:
             task_id=task_id,
             next_state="FAILED",
         )
+
+    def dispatch_start_analysis_workflow(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        trace_id: str,
+    ) -> dict[str, str]:
+        """Validate task/video context and dispatch phase-1 analysis Celery task."""
+        task = self._repository.get_by_owner_and_id(owner_id, task_id)
+        if task is None:
+            raise LookupError("Video summary task not found")
+
+        video = self._video_repository.get_by_owner_and_id(owner_id=owner_id, video_id=task.video_id)
+        if video is None:
+            raise LookupError("Video resource not found")
+
+        transcript = video.full_transcript or ""
+        keyframes = video.keyframes or []
+
+        from backend.tasks.workflow_runtime_tasks import async_execute_analysis_workflow
+
+        task_result = async_execute_analysis_workflow.apply_async(
+            args=[
+                owner_id,
+                task_id,
+                transcript,
+                keyframes,
+                task.user_initial_preference or "",
+                trace_id,
+            ],
+            queue="default",
+        )
+
+        return {
+            "task_id": task_id,
+            "celery_task_id": task_result.id,
+            "thread_id": task_id,
+            "workflow_state": "DRAFT_GENERATING",
+            "accepted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "message": "Phase-1 analysis workflow dispatched",
+        }
+
+    def dispatch_approve_and_finalize_workflow(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        edited_aggregated_chunk_insights: str,
+        human_guidance: str,
+        trace_id: str,
+    ) -> dict[str, str]:
+        """Validate approval state and dispatch phase-2 finalization Celery task."""
+        task = self._repository.get_by_owner_and_id(owner_id, task_id)
+        if task is None:
+            raise LookupError("Video summary task not found")
+
+        if task.workflow_state != "WAITING_USER_APPROVAL":
+            raise ValueError(
+                f"Task must be in WAITING_USER_APPROVAL state, got {task.workflow_state}"
+            )
+
+        from backend.tasks.workflow_runtime_tasks import async_execute_finalization_workflow
+
+        task_result = async_execute_finalization_workflow.apply_async(
+            args=[
+                owner_id,
+                task_id,
+                edited_aggregated_chunk_insights,
+                human_guidance,
+                trace_id,
+            ],
+            queue="default",
+        )
+
+        return {
+            "task_id": task_id,
+            "celery_task_id": task_result.id,
+            "thread_id": task_id,
+            "workflow_state": "FINAL_GENERATING",
+            "accepted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "message": "Phase-2 finalization workflow dispatched",
+        }
 
     def _to_view(self, record: VideoSummaryTaskRecord) -> VideoSummaryTaskView:
         payload = asdict(record)

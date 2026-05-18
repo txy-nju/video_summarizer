@@ -12,7 +12,7 @@ from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
 from backend.dependencies import (
     get_video_summary_task_service,
-    get_video_qa_repository,
+    get_video_qa_service,
     get_workflow_orchestration_service,
 )
 from backend.schemas.common import MetaInfo, PaginationInfo
@@ -30,8 +30,8 @@ from backend.schemas.video_summary_task import (
     TimeTravelQARequest,
 )
 from backend.services.video_summary_task_service import VideoSummaryTaskService
+from backend.services.video_qa_service import VideoQAService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
-from backend.repositories.video_qa_repository import VideoQARepository
 
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["video-summary-tasks"])
@@ -53,22 +53,6 @@ _ALLOWED_FIELDS = {
 
 def _build_meta(request: Request) -> MetaInfo:
     return MetaInfo(request_id=getattr(request.state, "request_id", "-"))
-
-
-def _seconds_to_hms(total_seconds: int) -> str:
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
-    seconds = total_seconds % 60
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
-def _compute_time_window(timestamp: str, window_seconds: int) -> tuple[str, str]:
-    hours, minutes, seconds = (int(part) for part in timestamp.split(":"))
-    center_seconds = hours * 3600 + minutes * 60 + seconds
-    half_window = max(window_seconds // 2, 0)
-    start_seconds = max(center_seconds - half_window, 0)
-    end_seconds = center_seconds + half_window
-    return _seconds_to_hms(start_seconds), _seconds_to_hms(end_seconds)
 
 
 def _chunk_text(text: str, chunk_size: int = 64) -> list[str]:
@@ -191,52 +175,20 @@ async def start_analysis_workflow(
 
     State transition: task.workflow_state = DRAFT_GENERATING (until analysis completes)
     """
-    from backend.dependencies import get_video_resource_repository
-    
-    _ = payload  # payload currently unused but reserved for future extensibility
+    _ = payload, workflow_service
 
-    # Get task to verify existence and permissions
-    task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
-
-    # Get video resource to load transcript and keyframes
-    video_repo = get_video_resource_repository()
-    video = video_repo.get_by_owner_and_id(owner_id=current_user.user_id, video_id=task.video_id)
-    if video is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
-
-    # Load transcript and keyframes
-    transcript = video.full_transcript or ""
-    keyframes = video.keyframes or []
-
-    # Get trace ID for correlation
     trace_id = str(getattr(request.state, "request_id", ""))
-
-    # Dispatch async workflow task
-    from backend.tasks.workflow_runtime_tasks import async_execute_analysis_workflow
-
-    task_result = async_execute_analysis_workflow.apply_async(
-        args=[
-            current_user.user_id,
-            task_id,
-            transcript,
-            keyframes,
-            task.user_initial_preference or "",
-            trace_id,
-        ],
-        queue="default",
-    )
+    try:
+        response_data = task_service.dispatch_start_analysis_workflow(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            trace_id=trace_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return StartAnalysisWorkflowResponse(
-        data={
-            "task_id": task_id,
-            "celery_task_id": task_result.id,
-            "thread_id": task_id,
-            "workflow_state": "DRAFT_GENERATING",
-            "accepted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "message": "Phase-1 analysis workflow dispatched",
-        },
+        data=response_data,
         meta=_build_meta(request),
     )
 
@@ -258,44 +210,27 @@ async def approve_and_finalize_workflow(
     Precondition: task.workflow_state must be WAITING_USER_APPROVAL
     State transition: task.workflow_state = FINAL_GENERATING (until finalization completes)
     """
-    # Get task to verify existence and permissions
-    task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+    _ = workflow_service
 
-    # Verify task is in approval gate
-    if task.workflow_state != "WAITING_USER_APPROVAL":
+    trace_id = str(getattr(request.state, "request_id", ""))
+    try:
+        response_data = task_service.dispatch_approve_and_finalize_workflow(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            edited_aggregated_chunk_insights=payload.edited_aggregated_chunk_insights or "",
+            human_guidance=payload.human_guidance or "",
+            trace_id=trace_id,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Task must be in WAITING_USER_APPROVAL state, got {task.workflow_state}",
-        )
-
-    # Get trace ID for correlation
-    trace_id = str(getattr(request.state, "request_id", ""))
-
-    # Dispatch async finalization task
-    from backend.tasks.workflow_runtime_tasks import async_execute_finalization_workflow
-
-    task_result = async_execute_finalization_workflow.apply_async(
-        args=[
-            current_user.user_id,
-            task_id,
-            payload.edited_aggregated_chunk_insights or "",
-            payload.human_guidance or "",
-            trace_id,
-        ],
-        queue="default",
-    )
+            detail=str(exc),
+        ) from exc
 
     return ApproveAndFinalizeResponse(
-        data={
-            "task_id": task_id,
-            "celery_task_id": task_result.id,
-            "thread_id": task_id,
-            "workflow_state": "FINAL_GENERATING",
-            "accepted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "message": "Phase-2 finalization workflow dispatched",
-        },
+        data=response_data,
         meta=_build_meta(request),
     )
 
@@ -308,7 +243,7 @@ async def time_travel_qa_stream(
     current_user: UserView = Depends(get_current_user),
     task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
     workflow_service: WorkflowOrchestrationService = Depends(get_workflow_orchestration_service),
-    qa_repository: VideoQARepository = Depends(get_video_qa_repository),
+    qa_service: VideoQAService = Depends(get_video_qa_service),
 ):
     """SSE stream output for time travel Q&A result."""
     task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
@@ -337,21 +272,16 @@ async def time_travel_qa_stream(
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Time travel Q&A failed: {str(e)}")
 
-    start_time, end_time = _compute_time_window(payload.timestamp, payload.window_seconds)
-    qa_record = qa_repository.create(
+    qa_record = qa_service.create_time_travel_qa_record(
         owner_id=current_user.user_id,
         task_id=task_id,
-        start_time=start_time,
-        end_time=end_time,
+        timestamp=payload.timestamp,
         question_content=payload.question,
-        attachments=[],
+        answer_content=answer,
+        window_seconds=payload.window_seconds,
     )
-    qa_repository.update_answer_by_owner_task_and_qa_id(
-        current_user.user_id,
-        task_id,
-        qa_record.qa_id,
-        answer,
-    )
+    if qa_record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
 
     produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 

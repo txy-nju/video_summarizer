@@ -16,6 +16,9 @@ from backend.repositories.global_chat_repository import GlobalChatRepository
 from backend.repositories.global_qa_repository import GlobalQARepository
 from backend.services.global_chat_service import GlobalChatService
 from backend.services.global_qa_service import GlobalQAService
+from backend.services.device_service import DeviceService
+from backend.repositories.upload_repository import UploadRepository
+from backend.services.upload_service import UploadService
 import redis as redis_lib
 import socket
 from backend.config import get_settings as _get_settings
@@ -136,6 +139,13 @@ def get_global_qa_service() -> GlobalQAService:
     )
 
 
+@lru_cache(maxsize=1)
+def get_upload_service() -> UploadService:
+    """Create UploadService for TUS upload session orchestration."""
+    redis_client = redis_lib.Redis.from_url("redis://localhost:6379/2", decode_responses=True)
+    return UploadService(repository=UploadRepository(redis_client=redis_client))
+
+
 # ------------------------------------------------------------------
 # FCM / Device 依赖
 # ------------------------------------------------------------------
@@ -188,6 +198,16 @@ def get_workflow_orchestration_service() -> WorkflowOrchestrationService:
 def get_device_repository() -> DeviceRepository:
     """Create DeviceRepository for FCM device token management."""
     return DeviceRepository(db_session=SessionLocal())
+
+
+def get_device_service() -> DeviceService:
+    """Create request-scoped DeviceService for device token operations."""
+    db_session = SessionLocal()
+    try:
+        repository = DeviceRepository(db_session=db_session)
+        yield DeviceService(repository=repository)
+    finally:
+        db_session.close()
 
 
 @lru_cache(maxsize=1)

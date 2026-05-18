@@ -21,25 +21,17 @@ from fastapi.responses import Response
 
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
+from backend.dependencies import get_upload_service
 from backend.schemas.upload import (
     ChunkStatusResponse,
     InitUploadRequest,
     InitUploadResponse,
 )
+from backend.services.upload_service import UploadService
 
 router = APIRouter(prefix="/api/v1/uploads", tags=["file_upload"])
 
 _TUS_VERSION = "1.0.0"
-
-
-def _get_upload_service():
-    import redis as redis_lib
-
-    from backend.repositories.upload_repository import UploadRepository
-    from backend.services.upload_service import UploadService
-
-    redis_client = redis_lib.Redis.from_url("redis://localhost:6379/2", decode_responses=True)
-    return UploadService(UploadRepository(redis_client))
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -47,9 +39,9 @@ async def initiate_upload(
     payload: InitUploadRequest,
     request: Request,
     current_user: UserView = Depends(get_current_user),
+    service: UploadService = Depends(get_upload_service),
 ) -> InitUploadResponse:
     """初始化 TUS 上传会话。"""
-    service = _get_upload_service()
     return service.initiate_upload(owner_id=current_user.user_id, payload=payload)
 
 
@@ -58,6 +50,7 @@ async def get_upload_status(
     upload_id: str,
     request: Request,
     current_user: UserView = Depends(get_current_user),
+    service: UploadService = Depends(get_upload_service),
 ) -> Response:
     """TUS 兼容：查询上传进度。
 
@@ -66,7 +59,6 @@ async def get_upload_status(
     - Upload-Offset: <已上传字节数>
     - Upload-Length: <总字节数>
     """
-    service = _get_upload_service()
     status_info = service.get_upload_status(upload_id=upload_id, owner_id=current_user.user_id)
 
     if status_info is None:
@@ -86,6 +78,7 @@ async def upload_chunk(
     upload_id: str,
     request: Request,
     current_user: UserView = Depends(get_current_user),
+    service: UploadService = Depends(get_upload_service),
     upload_offset: int = Header(..., alias="Upload-Offset"),
     content_type: str = Header(default="application/offset+octet-stream"),
 ) -> Response:
@@ -96,8 +89,6 @@ async def upload_chunk(
     - Content-Type: application/offset+octet-stream
     - Body：分片二进制数据
     """
-    service = _get_upload_service()
-
     # 验证 TUS 协议版本
     tus_version = request.headers.get("Tus-Resumable", "")
     if tus_version and tus_version != _TUS_VERSION:
@@ -149,9 +140,9 @@ async def upload_chunk(
 async def cancel_upload(
     upload_id: str,
     current_user: UserView = Depends(get_current_user),
+    service: UploadService = Depends(get_upload_service),
 ) -> dict:
     """取消上传会话并清理已上传的分片文件。"""
-    service = _get_upload_service()
     result = service.cancel_upload(upload_id=upload_id, owner_id=current_user.user_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Upload session not found")
@@ -162,9 +153,9 @@ async def cancel_upload(
 async def get_upload_info(
     upload_id: str,
     current_user: UserView = Depends(get_current_user),
+    service: UploadService = Depends(get_upload_service),
 ) -> ChunkStatusResponse:
     """查询上传进度（JSON 格式，非 TUS 标准，方便前端轮询）。"""
-    service = _get_upload_service()
     status_info = service.get_upload_status(upload_id=upload_id, owner_id=current_user.user_id)
     if status_info is None:
         raise HTTPException(status_code=404, detail="Upload session not found")

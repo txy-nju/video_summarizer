@@ -127,6 +127,40 @@ class VideoQAService:
             return False
         return self._repository.delete_by_owner_task_and_qa_id(owner_id, task_id, qa_id)
 
+    def create_time_travel_qa_record(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        timestamp: str,
+        question_content: str,
+        answer_content: str,
+        window_seconds: int,
+    ) -> VideoQARecordView | None:
+        """Persist time-travel Q&A record with computed evidence window."""
+        task = self._task_repository.get_by_owner_and_id(owner_id, task_id)
+        if task is None:
+            return None
+
+        start_time, end_time = self._compute_time_window(timestamp, window_seconds)
+        record = self._repository.create(
+            owner_id=owner_id,
+            task_id=task_id,
+            start_time=start_time,
+            end_time=end_time,
+            question_content=question_content,
+            attachments=[],
+        )
+        updated = self._repository.update_answer_by_owner_task_and_qa_id(
+            owner_id,
+            task_id,
+            record.qa_id,
+            answer_content,
+        )
+        if updated is None:
+            return None
+        return self._to_view(updated)
+
     @staticmethod
     def _to_view(record) -> VideoQARecordView:
         """将 Repository 记录转换为视图"""
@@ -148,6 +182,22 @@ class VideoQAService:
             attachments=attachments,
             question_time=record.question_time,
         )
+
+    @staticmethod
+    def _compute_time_window(timestamp: str, window_seconds: int) -> tuple[str, str]:
+        hours, minutes, seconds = (int(part) for part in timestamp.split(":"))
+        center_seconds = hours * 3600 + minutes * 60 + seconds
+        half_window = max(window_seconds // 2, 0)
+        start_seconds = max(center_seconds - half_window, 0)
+        end_seconds = center_seconds + half_window
+        return VideoQAService._seconds_to_hms(start_seconds), VideoQAService._seconds_to_hms(end_seconds)
+
+    @staticmethod
+    def _seconds_to_hms(total_seconds: int) -> str:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 # ============================================
