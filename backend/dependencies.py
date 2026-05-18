@@ -134,3 +134,14 @@ def get_global_qa_service() -> GlobalQAService:
         repository=get_global_qa_repository(),
         chat_repository=get_global_chat_repository(),
     )
+
+
+# ------------------------------------------------------------------
+# FCM / Device 依赖
+# ------------------------------------------------------------------
+from backend.notifications.fcm_service import FCMService
+
+
+@lru_cache(maxsize=1)
+def get_fcm_service() -> FCMService:
+    return FCMService()

@@ -13,6 +13,7 @@ from backend.api.routes.video_resource_routes import router as video_resource_ro
 from backend.api.routes.global_chat_routes import router as global_chat_router
 from backend.api.routes.global_qa_routes import router as global_qa_router
 from backend.api.routes.file_upload import router as file_upload_router
+from backend.api.routes.devices import router as devices_router
 from backend.websocket.handlers import router as websocket_router
 from backend.config import get_settings
 from backend.logging import setup_logging
@@ -41,6 +42,7 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(global_chat_router)
     app.include_router(global_qa_router)
     app.include_router(file_upload_router)
+    app.include_router(devices_router)
     app.include_router(websocket_router)
 
 

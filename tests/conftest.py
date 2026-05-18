@@ -37,10 +37,12 @@ _DEPENDENCY_CACHE_FUNCS = (
     "get_global_qa_repository",
     "get_global_chat_service",
     "get_global_qa_service",
+    "get_fcm_service",
 )
 
 _TRUNCATE_SQL = """
 TRUNCATE TABLE
+    device_tokens,
     global_qa_records,
     global_chat_sessions,
     video_qa_records,

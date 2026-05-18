@@ -136,6 +136,10 @@ class VideoResource(Base):
     keyframes_oss_prefix: Mapped[str | None] = mapped_column(String(512))
     extract_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_status: Mapped[str] = mapped_column(String(32), default="NONE", nullable=False)
+
     @validates("transcript_vector_ids")
     def validate_transcript_vector_ids(self, key: str, value: dict | list | None) -> list[str] | None:
         return _validate_vector_ids(value, key)
@@ -266,3 +270,15 @@ class GlobalQARecord(Base):
         if value is None:
             return None
         return _validate_model_list(value, CitedSourceSchema, key)
+
+
+class DeviceToken(Base):
+    __tablename__ = "device_tokens"
+
+    device_token_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid_str)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.user_id"), nullable=False, index=True)
+    device_token: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    platform: Mapped[str] = mapped_column(String(32), nullable=False)
+    app_version: Mapped[str | None] = mapped_column(String(32))
+    device_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
