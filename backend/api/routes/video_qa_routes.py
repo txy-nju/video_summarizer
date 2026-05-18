@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-import json
-from datetime import UTC, datetime
-from typing import Iterator
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
 
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
@@ -38,17 +33,6 @@ _ALLOWED_FIELDS = {
 
 def _build_meta(request: Request) -> MetaInfo:
     return MetaInfo(request_id=getattr(request.state, "request_id", "-"))
-
-
-def _chunk_text(text: str, chunk_size: int = 64) -> list[str]:
-    if not text:
-        return [""]
-    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
-
-
-def _sse_event(event: str, data: dict) -> str:
-    payload = json.dumps(data, ensure_ascii=False)
-    return f"event: {event}\ndata: {payload}\n\n"
 
 
 @router.post("/{task_id}/qa", response_model=VideoQARecordResponse, status_code=status.HTTP_201_CREATED)
@@ -129,76 +113,6 @@ async def get_video_qa(
             detail="QA record not found",
         )
     return VideoQARecordResponse(data=record, meta=_build_meta(request))
-
-
-@router.get("/{task_id}/qa/{qa_id}/stream", status_code=status.HTTP_200_OK)
-async def stream_video_qa_answer(
-    task_id: str,
-    qa_id: str,
-    current_user: UserView = Depends(get_current_user),
-    service: VideoQAService = Depends(get_video_qa_service),
-):
-    """SSE stream output for a stored QA answer."""
-    record = service.get_qa_record(
-        owner_id=current_user.user_id,
-        task_id=task_id,
-        qa_id=qa_id,
-    )
-    if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
-
-    answer = record.answer_content or ""
-    produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-    def _event_iter() -> Iterator[str]:
-        try:
-            yield _sse_event(
-                "start",
-                {
-                    "task_id": task_id,
-                    "qa_id": qa_id,
-                    "timestamp": produced_at,
-                },
-            )
-            for seq, chunk in enumerate(_chunk_text(answer), start=1):
-                yield _sse_event(
-                    "delta",
-                    {
-                        "task_id": task_id,
-                        "qa_id": qa_id,
-                        "chunk": chunk,
-                        "sequence": seq,
-                        "timestamp": produced_at,
-                    },
-                )
-            yield _sse_event(
-                "done",
-                {
-                    "task_id": task_id,
-                    "qa_id": qa_id,
-                    "answer_content": answer,
-                    "timestamp": produced_at,
-                },
-            )
-        except Exception as exc:
-            yield _sse_event(
-                "error",
-                {
-                    "task_id": task_id,
-                    "qa_id": qa_id,
-                    "message": str(exc),
-                    "timestamp": produced_at,
-                },
-            )
-
-    return StreamingResponse(
-        _event_iter(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
-    )
 
 
 @router.patch("/{task_id}/qa/{qa_id}", response_model=VideoQARecordResponse)
