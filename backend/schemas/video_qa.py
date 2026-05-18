@@ -44,7 +44,8 @@ class TimeTravelQAStreamRequest(BaseModel):
         validation_alias=AliasChoices("question", "question_content"),
     )
     attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=10)
-    window_seconds: int = Field(default=20, ge=5, le=300, description="Evidence window in seconds")
+    # window_seconds omitted => route falls back to RAG streaming path
+    window_seconds: int | None = Field(default=None, ge=5, le=300, description="Evidence window in seconds")
 
 
 class VideoQARecordView(BaseModel):

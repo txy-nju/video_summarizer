@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Iterator
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.global_chat_repository import GlobalChatRepository
@@ -11,6 +12,7 @@ from backend.schemas.global_qa import (
     GlobalQARecordUpdateRequest,
     GlobalQARecordView,
 )
+from backend.services.rag_agent_service import RagAgentService
 
 
 class GlobalQAService:
@@ -20,9 +22,11 @@ class GlobalQAService:
         self,
         repository: GlobalQARepository,
         chat_repository: GlobalChatRepository,
+        rag_agent_service: RagAgentService,
     ) -> None:
         self._repository = repository
         self._chat_repository = chat_repository
+        self._rag_agent_service = rag_agent_service
 
     def create_qa_record(
         self,
@@ -43,7 +47,60 @@ class GlobalQAService:
             question_content=payload.question_content,
             attachments=attachments_data,
         )
-        return self._to_qa_view(record)
+
+        rag_answer = self._rag_agent_service.answer_global_question(
+            owner_id=owner_id,
+            kbid=kbid,
+            question_content=payload.question_content,
+            attachments=attachments_data,
+        )
+        updated = self._repository.update_answer_by_owner_chat_and_qa_id(
+            owner_id=owner_id,
+            chat_id=chat_id,
+            qa_id=record.qa_id,
+            answer_content=rag_answer.answer_content,
+            cited_sources=rag_answer.cited_sources,
+        )
+        if updated is None:
+            return self._to_qa_view(record)
+        return self._to_qa_view(updated)
+
+    def create_qa_record_stream(
+        self,
+        *,
+        owner_id: str,
+        kbid: str,
+        chat_id: str,
+        payload: GlobalQARecordCreateRequest,
+    ) -> tuple[GlobalQARecordView, Iterator[str]] | tuple[None, None]:
+        """创建问答记录并返回流式回答块迭代器。"""
+        chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
+        if chat is None:
+            return None, None
+
+        attachments_data = [asdict(a) for a in payload.attachments]
+        record = self._repository.create(
+            owner_id=owner_id,
+            chat_id=chat_id,
+            question_content=payload.question_content,
+            attachments=attachments_data,
+        )
+
+        rag_answer, chunks = self._rag_agent_service.stream_global_question(
+            owner_id=owner_id,
+            kbid=kbid,
+            question_content=payload.question_content,
+            attachments=attachments_data,
+        )
+        updated = self._repository.update_answer_by_owner_chat_and_qa_id(
+            owner_id=owner_id,
+            chat_id=chat_id,
+            qa_id=record.qa_id,
+            answer_content=rag_answer.answer_content,
+            cited_sources=rag_answer.cited_sources,
+        )
+        view = self._to_qa_view(updated if updated is not None else record)
+        return view, chunks
 
     def list_qa_records(
         self,

@@ -103,6 +103,7 @@ def _override_workflow_service(stub_service: object):
         app.dependency_overrides.pop(get_workflow_orchestration_service, None)
 
 
+
 def test_video_qa_crud_flow() -> None:
     token = _login("alice-qa")
     headers = {"Authorization": f"Bearer {token}"}
@@ -240,3 +241,36 @@ def test_time_travel_qa_stream_returns_sse_events() -> None:
     attachments = list_response.json()["data"][0]["attachments"]
     assert len(attachments) == 1
     assert attachments[0]["name"] == "frame-note.png"
+
+
+def test_time_travel_qa_stream_without_window_uses_rag_stream() -> None:
+    token = _login("alice-qa-rag-stream")
+    headers = {"Authorization": f"Bearer {token}"}
+    task_id = _prepare_task(token)
+    _set_task_workflow_state(task_id, WorkflowState.WAITING_USER_APPROVAL)
+
+    response = client.post(
+        f"/api/v1/tasks/{task_id}/time-travel-qa/stream",
+        json={
+            "timestamp": "00:20:00",
+            "question_content": "无区间也要流式",
+            "attachments": [],
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "event: start" in body
+    assert "event: delta" in body
+    assert "event: done" in body
+    assert "[RAG] 已基于任务" in body
+
+    list_response = client.get(f"/api/v1/tasks/{task_id}/qa?page=1&page_size=20", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()["pagination"]["total"] == 1
+    qa_record = list_response.json()["data"][0]
+    assert qa_record["answer_content"].startswith("[RAG] 已基于任务")
+    assert qa_record["start_time"] == "00:20:00"
+    assert qa_record["end_time"] == "00:20:00"

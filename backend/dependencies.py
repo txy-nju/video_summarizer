@@ -16,6 +16,7 @@ from backend.repositories.global_chat_repository import GlobalChatRepository
 from backend.repositories.global_qa_repository import GlobalQARepository
 from backend.services.global_chat_service import GlobalChatService
 from backend.services.global_qa_service import GlobalQAService
+from backend.services.rag_agent_service import RagAgentService
 from backend.services.device_service import DeviceService
 from backend.repositories.upload_repository import UploadRepository
 from backend.services.upload_service import UploadService
@@ -109,6 +110,7 @@ def get_video_qa_service() -> VideoQAService:
     return VideoQAService(
         repository=get_video_qa_repository(),
         task_repository=get_video_summary_task_repository(),
+        rag_agent_service=get_rag_agent_service(),
     )
 
 
@@ -136,7 +138,13 @@ def get_global_qa_service() -> GlobalQAService:
     return GlobalQAService(
         repository=get_global_qa_repository(),
         chat_repository=get_global_chat_repository(),
+        rag_agent_service=get_rag_agent_service(),
     )
+
+
+@lru_cache(maxsize=1)
+def get_rag_agent_service() -> RagAgentService:
+    return RagAgentService()
 
 
 @lru_cache(maxsize=1)

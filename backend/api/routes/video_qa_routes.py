@@ -209,14 +209,23 @@ async def time_travel_qa_stream(
 
     trace_id = str(getattr(request.state, "request_id", ""))
     try:
-        answer = await workflow_service.start_time_travel_qa_async(
-            owner_id=current_user.user_id,
-            task_id=task_id,
-            timestamp=payload.timestamp,
-            question=payload.question_content,
-            window_seconds=payload.window_seconds,
-            trace_id=trace_id,
-        )
+        if payload.window_seconds is None:
+            answer, output_chunks = service.answer_without_window_via_rag(
+                owner_id=current_user.user_id,
+                task_id=task_id,
+                question_content=payload.question_content,
+                attachments=payload.attachments,
+            )
+        else:
+            answer = await workflow_service.start_time_travel_qa_async(
+                owner_id=current_user.user_id,
+                task_id=task_id,
+                timestamp=payload.timestamp,
+                question=payload.question_content,
+                window_seconds=payload.window_seconds,
+                trace_id=trace_id,
+            )
+            output_chunks = _chunk_text(answer)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except Exception as exc:
@@ -249,7 +258,7 @@ async def time_travel_qa_stream(
                     "timestamp": produced_at,
                 },
             )
-            for seq, chunk in enumerate(_chunk_text(answer), start=1):
+            for seq, chunk in enumerate(output_chunks, start=1):
                 yield _sse_event(
                     "delta",
                     {

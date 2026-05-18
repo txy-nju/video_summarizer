@@ -20,9 +20,11 @@ class VideoQAService:
         self,
         repository: VideoQARepository,
         task_repository: VideoSummaryTaskRepository,
+        rag_agent_service,
     ) -> None:
         self._repository = repository
         self._task_repository = task_repository
+        self._rag_agent_service = rag_agent_service
 
     def create_qa_record(
         self,
@@ -127,6 +129,24 @@ class VideoQAService:
             return False
         return self._repository.delete_by_owner_task_and_qa_id(owner_id, task_id, qa_id)
 
+    def answer_without_window_via_rag(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        question_content: str,
+        attachments: list[AttachmentInfo],
+    ) -> tuple[str, list[str]]:
+        rag_chunks = list(
+            self._rag_agent_service.stream_video_question(
+                owner_id=owner_id,
+                task_id=task_id,
+                question_content=question_content,
+                attachments=[asdict(a) for a in attachments],
+            )
+        )
+        return "".join(rag_chunks), rag_chunks
+
     def create_time_travel_qa_record(
         self,
         *,
@@ -136,14 +156,17 @@ class VideoQAService:
         question_content: str,
         answer_content: str,
         attachments: list[AttachmentInfo],
-        window_seconds: int,
+        window_seconds: int | None,
     ) -> VideoQARecordView | None:
-        """Persist time-travel Q&A record with computed evidence window."""
+        """Persist time-travel or no-window RAG Q&A record."""
         task = self._task_repository.get_by_owner_and_id(owner_id, task_id)
         if task is None:
             return None
 
-        start_time, end_time = self._compute_time_window(timestamp, window_seconds)
+        if window_seconds is None:
+            start_time, end_time = timestamp, timestamp
+        else:
+            start_time, end_time = self._compute_time_window(timestamp, window_seconds)
         record = self._repository.create(
             owner_id=owner_id,
             task_id=task_id,
