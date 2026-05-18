@@ -73,15 +73,6 @@ class ApproveAndFinalizeResponse(BaseModel):
 
 
 # Time travel Q&A DTO
-class TimeTravelQARequest(BaseModel):
-    """Ask a question about a specific timestamp in the video."""
-    model_config = ConfigDict(extra="forbid")
-
-    timestamp: str = Field(pattern=r"^\d{2}:\d{2}:\d{2}$", description="Target timestamp (HH:MM:SS)")
-    question: str = Field(min_length=1, max_length=5000)
-    window_seconds: int = Field(default=20, ge=5, le=300, description="Evidence window in seconds")
-
-
 class VideoSummaryTaskView(BaseModel):
     task_id: str
     kbid: str

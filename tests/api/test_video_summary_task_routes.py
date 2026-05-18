@@ -347,36 +347,3 @@ def test_approve_and_finalize_dispatches_celery_task_when_waiting(monkeypatch) -
     assert args[3] == "更强调可执行建议"
     assert dispatched["queue"] == "default"
 
-
-def test_time_travel_qa_stream_returns_sse_events() -> None:
-    token = _login("alice-task-time-travel-stream")
-    headers = {"Authorization": f"Bearer {token}"}
-    kbid, video_id = _prepare_assets(token)
-
-    create_response = client.post(
-        "/api/v1/tasks",
-        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "默认"},
-        headers=headers,
-    )
-    assert create_response.status_code == 201
-    task_id = create_response.json()["data"]["task_id"]
-    _set_task_workflow_state(task_id, WorkflowState.WAITING_USER_APPROVAL)
-
-    class _StubWorkflowService:
-        async def start_time_travel_qa_async(self, **kwargs):
-            return "这是SSE时间旅行回答"
-
-    with _override_workflow_service(_StubWorkflowService()):
-        response = client.post(
-            f"/api/v1/tasks/{task_id}/time-travel-qa/stream",
-            json={"timestamp": "00:10:00", "question": "这里在讲什么?", "window_seconds": 20},
-            headers=headers,
-        )
-
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/event-stream")
-    body = response.text
-    assert "event: start" in body
-    assert "event: delta" in body
-    assert "event: done" in body
-    assert "这是SSE时间旅行回答" in body

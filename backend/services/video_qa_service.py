@@ -135,6 +135,7 @@ class VideoQAService:
         timestamp: str,
         question_content: str,
         answer_content: str,
+        attachments: list[AttachmentInfo],
         window_seconds: int,
     ) -> VideoQARecordView | None:
         """Persist time-travel Q&A record with computed evidence window."""
@@ -149,7 +150,7 @@ class VideoQAService:
             start_time=start_time,
             end_time=end_time,
             question_content=question_content,
-            attachments=[],
+            attachments=[asdict(a) for a in attachments],
         )
         updated = self._repository.update_answer_by_owner_task_and_qa_id(
             owner_id,

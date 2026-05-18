@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
 from backend.app_factory import create_app
-from backend.dependencies import SessionLocal
-from backend.models.database import VideoResource
-from backend.models.enums import FrameExtractionStatus, TranscribeStatus
+from backend.dependencies import SessionLocal, get_workflow_orchestration_service
+from backend.models.database import VideoResource, VideoSummaryTask
+from backend.models.enums import FrameExtractionStatus, TranscribeStatus, WorkflowState
 
 
 app = create_app()
@@ -80,6 +81,26 @@ def _prepare_task(token: str) -> str:
     )
     assert create_response.status_code == 201
     return create_response.json()["data"]["task_id"]
+
+
+def _set_task_workflow_state(task_id: str, state: WorkflowState) -> None:
+    db = SessionLocal()
+    try:
+        row = db.query(VideoSummaryTask).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if row:
+            row.workflow_state = state
+            db.commit()
+    finally:
+        db.close()
+
+
+@contextmanager
+def _override_workflow_service(stub_service: object):
+    app.dependency_overrides[get_workflow_orchestration_service] = lambda: stub_service
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_workflow_orchestration_service, None)
 
 
 def test_video_qa_crud_flow() -> None:
@@ -174,3 +195,48 @@ def test_video_qa_owner_isolation() -> None:
     # Bob 不能访问 Alice 的任务的问答
     list_response = client.get(f"/api/v1/tasks/{alice_task_id}/qa", headers=bob_headers)
     assert list_response.status_code == 404 or list_response.json()["pagination"]["total"] == 0
+
+
+def test_time_travel_qa_stream_returns_sse_events() -> None:
+    token = _login("alice-qa-time-travel-stream")
+    headers = {"Authorization": f"Bearer {token}"}
+    task_id = _prepare_task(token)
+    _set_task_workflow_state(task_id, WorkflowState.WAITING_USER_APPROVAL)
+
+    class _StubWorkflowService:
+        async def start_time_travel_qa_async(self, **kwargs):
+            return "这是SSE时间旅行回答"
+
+    with _override_workflow_service(_StubWorkflowService()):
+        response = client.post(
+            f"/api/v1/tasks/{task_id}/time-travel-qa/stream",
+            json={
+                "timestamp": "00:10:00",
+                "question_content": "这里在讲什么?",
+                "attachments": [
+                    {
+                        "name": "frame-note.png",
+                        "oss_key": "attachments/usr_001/qa_stream/frame-note.png",
+                        "mime_type": "image/png",
+                        "size_bytes": 2048,
+                    }
+                ],
+                "window_seconds": 20,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "event: start" in body
+    assert "event: delta" in body
+    assert "event: done" in body
+    assert "这是SSE时间旅行回答" in body
+
+    list_response = client.get(f"/api/v1/tasks/{task_id}/qa?page=1&page_size=20", headers=headers)
+    assert list_response.status_code == 200
+    assert list_response.json()["pagination"]["total"] == 1
+    attachments = list_response.json()["data"][0]["attachments"]
+    assert len(attachments) == 1
+    assert attachments[0]["name"] == "frame-note.png"

@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+import json
+from typing import Iterator
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import StreamingResponse
 
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
-from backend.dependencies import get_video_qa_service
+from backend.dependencies import (
+    get_video_qa_service,
+    get_video_summary_task_service,
+    get_workflow_orchestration_service,
+)
 from backend.schemas.common import MetaInfo, PaginationInfo
 from backend.schemas.video_qa import (
+    TimeTravelQAStreamRequest,
     VideoQARecordCreateRequest,
     VideoQARecordDeleteData,
     VideoQARecordDeleteResponse,
@@ -15,7 +25,9 @@ from backend.schemas.video_qa import (
     VideoQARecordResponse,
     VideoQARecordUpdateRequest,
 )
+from backend.services.video_summary_task_service import VideoSummaryTaskService
 from backend.services.video_qa_service import VideoQAService
+from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
 
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["video-qa"])
@@ -33,6 +45,17 @@ _ALLOWED_FIELDS = {
 
 def _build_meta(request: Request) -> MetaInfo:
     return MetaInfo(request_id=getattr(request.state, "request_id", "-"))
+
+
+def _chunk_text(text: str, chunk_size: int = 64) -> list[str]:
+    if not text:
+        return [""]
+    return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
+
+
+def _sse_event(event: str, data: dict) -> str:
+    payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
 
 
 @router.post("/{task_id}/qa", response_model=VideoQARecordResponse, status_code=status.HTTP_201_CREATED)
@@ -161,4 +184,104 @@ async def delete_video_qa(
     return VideoQARecordDeleteResponse(
         data=VideoQARecordDeleteData(qa_id=qa_id),
         meta=_build_meta(request),
+    )
+
+
+@router.post("/{task_id}/time-travel-qa/stream", status_code=status.HTTP_200_OK)
+async def time_travel_qa_stream(
+    task_id: str,
+    payload: TimeTravelQAStreamRequest,
+    request: Request,
+    current_user: UserView = Depends(get_current_user),
+    task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
+    workflow_service: WorkflowOrchestrationService = Depends(get_workflow_orchestration_service),
+    service: VideoQAService = Depends(get_video_qa_service),
+):
+    task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
+    if task is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+
+    if task.workflow_state not in ("WAITING_USER_APPROVAL", "FINAL_GENERATING", "COMPLETED"):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Task must have completed analysis phase to support time travel Q&A",
+        )
+
+    trace_id = str(getattr(request.state, "request_id", ""))
+    try:
+        answer = await workflow_service.start_time_travel_qa_async(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            timestamp=payload.timestamp,
+            question=payload.question_content,
+            window_seconds=payload.window_seconds,
+            trace_id=trace_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Time travel Q&A failed: {str(exc)}",
+        ) from exc
+
+    qa_record = service.create_time_travel_qa_record(
+        owner_id=current_user.user_id,
+        task_id=task_id,
+        timestamp=payload.timestamp,
+        question_content=payload.question_content,
+        answer_content=answer,
+        attachments=payload.attachments,
+        window_seconds=payload.window_seconds,
+    )
+    if qa_record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+
+    produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+    def _event_iter() -> Iterator[str]:
+        try:
+            yield _sse_event(
+                "start",
+                {
+                    "task_id": task_id,
+                    "qa_id": qa_record.qa_id,
+                    "timestamp": produced_at,
+                },
+            )
+            for seq, chunk in enumerate(_chunk_text(answer), start=1):
+                yield _sse_event(
+                    "delta",
+                    {
+                        "task_id": task_id,
+                        "qa_id": qa_record.qa_id,
+                        "chunk": chunk,
+                        "sequence": seq,
+                        "timestamp": produced_at,
+                    },
+                )
+            yield _sse_event(
+                "done",
+                {
+                    "task_id": task_id,
+                    "qa_id": qa_record.qa_id,
+                    "answer_content": answer,
+                    "timestamp": produced_at,
+                },
+            )
+        except Exception as exc:
+            yield _sse_event(
+                "error",
+                {
+                    "task_id": task_id,
+                    "qa_id": qa_record.qa_id,
+                    "message": str(exc),
+                    "timestamp": produced_at,
+                },
+            )
+
+    return StreamingResponse(
+        _event_iter(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
