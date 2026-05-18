@@ -20,7 +20,6 @@ Triggered by:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
@@ -54,8 +53,11 @@ def _build_orchestration_service() -> Any:
     from backend.services.progress_event_bus import ProgressEventBus
     from backend.services.progress_publish_service import ProgressPublishService
     from backend.services.task_status_service import TaskStatusService
+    from backend.services.workflow_notification_service import WorkflowNotificationService
     from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
     from backend.config import get_settings
+    from backend.notifications.fcm_service import FCMService
+    from backend.repositories.device_repository import DeviceRepository
 
     db = SessionLocal()
     settings = get_settings()
@@ -66,12 +68,17 @@ def _build_orchestration_service() -> Any:
         event_bus = ProgressEventBus(redis_url=settings.redis_url, instance_id="worker")
         progress_pub = ProgressPublishService(event_bus=event_bus, instance_id="worker")
         task_status_svc = TaskStatusService()
+        notification_svc = WorkflowNotificationService(
+            fcm_service=FCMService(),
+            device_repository=DeviceRepository(db_session=db),
+        )
 
         return WorkflowOrchestrationService(
             task_repository=task_repo,
             video_repository=video_repo,
             progress_publisher=progress_pub,
             task_status_service=task_status_svc,
+            notification_service=notification_svc,
         )
     except Exception as e:
         logger.error(f"Failed to build orchestration service: {e}", exc_info=True)
@@ -81,11 +88,13 @@ def _build_orchestration_service() -> Any:
 
 @celery_app.task(
     name="backend.tasks.workflow_runtime_tasks.async_execute_analysis_workflow",
+    bind=True,
     acks_late=True,
     max_retries=3,
     default_retry_delay=60,
 )
 def async_execute_analysis_workflow(
+    self,
     owner_id: str,
     task_id: str,
     transcript: str,
@@ -161,11 +170,13 @@ def async_execute_analysis_workflow(
 
 @celery_app.task(
     name="backend.tasks.workflow_runtime_tasks.async_execute_finalization_workflow",
+    bind=True,
     acks_late=True,
     max_retries=3,
     default_retry_delay=60,
 )
 def async_execute_finalization_workflow(
+    self,
     owner_id: str,
     task_id: str,
     edited_aggregated_chunk_insights: str = "",
@@ -241,11 +252,13 @@ def async_execute_finalization_workflow(
 
 @celery_app.task(
     name="backend.tasks.workflow_runtime_tasks.async_execute_time_travel_qa",
+    bind=True,
     acks_late=True,
     max_retries=2,
     default_retry_delay=30,
 )
 def async_execute_time_travel_qa(
+    self,
     owner_id: str,
     task_id: str,
     timestamp: str,

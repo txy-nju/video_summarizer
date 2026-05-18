@@ -20,6 +20,7 @@ class WorkflowState(str, Enum):
     WAITING_USER_APPROVAL = "WAITING_USER_APPROVAL"
     FINAL_GENERATING = "FINAL_GENERATING"
     COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
 
 
 class DeletionStatus(str, Enum):

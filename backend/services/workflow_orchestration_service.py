@@ -29,6 +29,7 @@ from backend.repositories.video_resource_repository import VideoResourceReposito
 from backend.repositories.video_summary_task_repository import VideoSummaryTaskRepository
 from backend.services.progress_publish_service import ProgressPublishService
 from backend.services.task_status_service import TaskStatusService
+from backend.services.workflow_notification_service import WorkflowNotificationService
 from backend.websocket.schemas import WSEventType, WSScope, WSStage
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class WorkflowOrchestrationService:
         video_repository: VideoResourceRepository,
         progress_publisher: ProgressPublishService,
         task_status_service: TaskStatusService,
+        notification_service: WorkflowNotificationService | None = None,
     ):
         """Initialize orchestration service dependencies.
 
@@ -63,6 +65,7 @@ class WorkflowOrchestrationService:
         self._video_repository = video_repository
         self._progress_publisher = progress_publisher
         self._task_status_service = task_status_service
+        self._notification_service = notification_service
 
     def _build_workflow_callback(
         self,
@@ -228,6 +231,14 @@ class WorkflowOrchestrationService:
                 trace_id=trace_id,
             )
 
+            if self._notification_service:
+                self._notification_service.notify_workflow_approval_required(
+                    user_id=owner_id,
+                    task_id=task_id,
+                    chunk_count=result.get("chunk_count", 0),
+                    task_title=updated_task.title,
+                )
+
             logger.info(
                 f"[WorkflowOrch] Phase-1 completed: task_id={task_id}, thread_id={thread_id}, workflow_state=WAITING_USER_APPROVAL"
             )
@@ -259,6 +270,13 @@ class WorkflowOrchestrationService:
                 message=f"Phase-1 analysis failed: {str(e)}",
                 trace_id=trace_id,
             )
+
+            if self._notification_service:
+                self._notification_service.notify_workflow_failed(
+                    user_id=owner_id,
+                    task_id=task_id,
+                    error_message=str(e),
+                )
 
             raise
 
@@ -349,6 +367,13 @@ class WorkflowOrchestrationService:
                 trace_id=trace_id,
             )
 
+            if self._notification_service:
+                self._notification_service.notify_workflow_completed(
+                    user_id=owner_id,
+                    task_id=task_id,
+                    task_title=updated_task.title,
+                )
+
             logger.info(
                 f"[WorkflowOrch] Phase-2 completed: task_id={task_id}, summary_len={len(final_summary)}, workflow_state=COMPLETED"
             )
@@ -372,6 +397,13 @@ class WorkflowOrchestrationService:
                 message=f"Phase-2 finalization failed: {str(e)}",
                 trace_id=trace_id,
             )
+
+            if self._notification_service:
+                self._notification_service.notify_workflow_failed(
+                    user_id=owner_id,
+                    task_id=task_id,
+                    error_message=str(e),
+                )
 
             raise
 
@@ -412,7 +444,7 @@ class WorkflowOrchestrationService:
             user_id=owner_id,
             scope=WSScope.VIDEO_SUMMARY_TASK,
             scope_id=task_id,
-            stage=WSStage.TIME_TRAVEL,
+            stage=WSStage.RAG_RETRIEVAL,
             status="RUNNING",
             message=f"Time travel Q&A at {timestamp}",
             trace_id=trace_id,

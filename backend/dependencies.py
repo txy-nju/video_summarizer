@@ -180,6 +180,7 @@ def get_workflow_orchestration_service() -> WorkflowOrchestrationService:
         video_repository=get_video_resource_repository(),
         progress_publisher=get_progress_publish_service(),
         task_status_service=get_task_status_service(),
+        notification_service=get_workflow_notification_service(),
     )
 
 

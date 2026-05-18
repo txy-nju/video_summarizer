@@ -207,8 +207,9 @@ class WorkflowNotificationService:
                 try:
                     request = FCMPushRequest(
                         user_id=user_id,
-                        device_token=device.device_token,
-                        payload=payload,
+                        title=payload.title,
+                        body=payload.body,
+                        data=payload.data,
                     )
                     self._fcm_service.send(request=request)
                     success_count += 1
