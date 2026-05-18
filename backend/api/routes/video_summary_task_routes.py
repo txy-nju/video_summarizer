@@ -28,7 +28,6 @@ from backend.schemas.video_summary_task import (
     ApproveAndFinalizeRequest,
     ApproveAndFinalizeResponse,
     TimeTravelQARequest,
-    TimeTravelQAResponse,
 )
 from backend.services.video_summary_task_service import VideoSummaryTaskService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
@@ -296,80 +295,6 @@ async def approve_and_finalize_workflow(
             "workflow_state": "FINAL_GENERATING",
             "accepted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "message": "Phase-2 finalization workflow dispatched",
-        },
-        meta=_build_meta(request),
-    )
-
-
-@router.post("/{task_id}/time-travel-qa", response_model=TimeTravelQAResponse, status_code=status.HTTP_200_OK)
-async def time_travel_qa(
-    task_id: str,
-    payload: TimeTravelQARequest,
-    request: Request,
-    current_user: UserView = Depends(get_current_user),
-    task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
-    workflow_service: WorkflowOrchestrationService = Depends(get_workflow_orchestration_service),
-    qa_repository: VideoQARepository = Depends(get_video_qa_repository),
-):
-    """Answer a question based on checkpoint recovery at specific timestamp.
-
-    Can be called at any time after analysis completes (checkpoint available).
-    Uses evidence window to extract context and generate evidence-based answer.
-
-    Note: This endpoint is synchronous (runs in executor to avoid blocking).
-    """
-    # Get task to verify existence and permissions
-    task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
-    if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
-
-    # Verify task has checkpoint (checkpoint created after phase-1)
-    if task.workflow_state not in ("WAITING_USER_APPROVAL", "FINAL_GENERATING", "COMPLETED"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Task must have completed analysis phase to support time travel Q&A",
-        )
-
-    # Get trace ID for correlation
-    trace_id = str(getattr(request.state, "request_id", ""))
-
-    try:
-        answer = await workflow_service.start_time_travel_qa_async(
-            owner_id=current_user.user_id,
-            task_id=task_id,
-            timestamp=payload.timestamp,
-            question=payload.question,
-            window_seconds=payload.window_seconds,
-            trace_id=trace_id,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Time travel Q&A failed: {str(e)}")
-
-    # Persist time-travel Q&A as a VideoQARecord for later retrieval.
-    start_time, end_time = _compute_time_window(payload.timestamp, payload.window_seconds)
-    qa_record = qa_repository.create(
-        owner_id=current_user.user_id,
-        task_id=task_id,
-        start_time=start_time,
-        end_time=end_time,
-        question_content=payload.question,
-        attachments=[],
-    )
-    qa_repository.update_answer_by_owner_task_and_qa_id(
-        current_user.user_id,
-        task_id,
-        qa_record.qa_id,
-        answer,
-    )
-
-    return TimeTravelQAResponse(
-        data={
-            "answer": answer,
-            "timestamp": payload.timestamp,
-            "window_seconds": payload.window_seconds,
-            "message": "Time travel Q&A completed",
         },
         meta=_build_meta(request),
     )

@@ -270,7 +270,7 @@ def async_execute_time_travel_qa(
     Time travel Q&A: answer questions based on checkpoint recovery + timestamp context.
 
     Triggers:
-    - From API: POST /api/v1/tasks/{task_id}/time-travel-qa
+    - Internal async entry for timestamp Q&A execution
     - Can be called at any time after analysis phase completes
 
     Args:

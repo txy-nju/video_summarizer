@@ -82,19 +82,6 @@ class TimeTravelQARequest(BaseModel):
     window_seconds: int = Field(default=20, ge=5, le=300, description="Evidence window in seconds")
 
 
-class TimeTravelQAResponse(BaseModel):
-    """Response for time travel Q&A."""
-    status: str = "success"
-    data: dict[str, Any] = Field(
-        description={
-            "answer": "Answer text with evidence context",
-            "timestamp": "Queried timestamp",
-            "window_seconds": "Evidence window used",
-        }
-    )
-    meta: MetaInfo
-
-
 class VideoSummaryTaskView(BaseModel):
     task_id: str
     kbid: str
