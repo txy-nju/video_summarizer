@@ -99,6 +99,32 @@ class VideoSummaryTaskRepository:
         self._session.commit()
         return True
 
+    def update_state_by_owner_and_id(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        workflow_state: str,
+    ) -> VideoSummaryTaskRecord | None:
+        """Update workflow_state for a task (used by workflow orchestration).
+
+        Args:
+            owner_id: User ID for authorization
+            task_id: Task ID to update
+            workflow_state: New workflow state (DRAFT_GENERATING, WAITING_USER_APPROVAL, FINAL_GENERATING, COMPLETED, FAILED)
+
+        Returns:
+            Updated record or None if task not found
+        """
+        row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if row is None:
+            return None
+
+        row.workflow_state = workflow_state
+        self._session.commit()
+        self._session.refresh(row)
+        return self._to_record(row, owner_id=owner_id)
+
     def _owned_task_query(self, owner_id: str):
         return (
             self._session.query(VideoSummaryTask)

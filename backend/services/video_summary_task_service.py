@@ -13,6 +13,15 @@ from backend.schemas.video_summary_task import (
 )
 
 
+_WORKFLOW_TRANSITIONS: dict[str, set[str]] = {
+    "DRAFT_GENERATING": {"WAITING_USER_APPROVAL", "FAILED"},
+    "WAITING_USER_APPROVAL": {"FINAL_GENERATING", "FAILED"},
+    "FINAL_GENERATING": {"COMPLETED", "FAILED"},
+    "COMPLETED": set(),
+    "FAILED": set(),
+}
+
+
 class VideoSummaryTaskService:
     def __init__(
         self,
@@ -88,6 +97,105 @@ class VideoSummaryTaskService:
 
     def delete_video_summary_task(self, *, owner_id: str, task_id: str) -> bool:
         return self._repository.delete_by_owner_and_id(owner_id, task_id)
+
+    def transition_workflow_state(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        next_state: str,
+        draft_summary: str | None = None,
+        user_guidance: str | None = None,
+        title: str | None = None,
+    ) -> VideoSummaryTaskView | None:
+        """System-only transition hook for workflow lifecycle orchestration."""
+        record = self._repository.get_by_owner_and_id(owner_id, task_id)
+        if record is None:
+            return None
+
+        current_state = record.workflow_state
+        if current_state == next_state:
+            return self._to_view(record)
+
+        allowed = _WORKFLOW_TRANSITIONS.get(current_state, set())
+        if next_state not in allowed:
+            raise ValueError(f"invalid_workflow_transition:{current_state}->{next_state}")
+
+        if any(value is not None for value in (draft_summary, user_guidance, title)):
+            updated = self._repository.update_by_owner_and_id(
+                owner_id=owner_id,
+                task_id=task_id,
+                draft_summary=draft_summary,
+                user_guidance=user_guidance,
+                title=title,
+            )
+            if updated is None:
+                return None
+
+        transitioned = self._repository.update_state_by_owner_and_id(
+            owner_id=owner_id,
+            task_id=task_id,
+            workflow_state=next_state,
+        )
+        if transitioned is None:
+            return None
+        return self._to_view(transitioned)
+
+    def mark_analysis_completed(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        aggregated_chunk_insights: str,
+        title: str | None = None,
+    ) -> VideoSummaryTaskView | None:
+        return self.transition_workflow_state(
+            owner_id=owner_id,
+            task_id=task_id,
+            next_state="WAITING_USER_APPROVAL",
+            draft_summary=aggregated_chunk_insights,
+            title=title,
+        )
+
+    def mark_finalization_started(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        user_guidance: str | None = None,
+    ) -> VideoSummaryTaskView | None:
+        return self.transition_workflow_state(
+            owner_id=owner_id,
+            task_id=task_id,
+            next_state="FINAL_GENERATING",
+            user_guidance=user_guidance,
+        )
+
+    def mark_finalization_completed(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        final_summary: str,
+    ) -> VideoSummaryTaskView | None:
+        return self.transition_workflow_state(
+            owner_id=owner_id,
+            task_id=task_id,
+            next_state="COMPLETED",
+            draft_summary=final_summary,
+        )
+
+    def mark_workflow_failed(self, *, owner_id: str, task_id: str) -> VideoSummaryTaskView | None:
+        record = self._repository.get_by_owner_and_id(owner_id, task_id)
+        if record is None:
+            return None
+        if record.workflow_state in ("COMPLETED", "FAILED"):
+            raise ValueError(f"invalid_workflow_transition:{record.workflow_state}->FAILED")
+        return self.transition_workflow_state(
+            owner_id=owner_id,
+            task_id=task_id,
+            next_state="FAILED",
+        )
 
     def _to_view(self, record: VideoSummaryTaskRecord) -> VideoSummaryTaskView:
         payload = asdict(record)

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from backend.app_factory import create_app
-from backend.dependencies import SessionLocal
-from backend.models.database import VideoResource
-from backend.models.enums import FrameExtractionStatus, TranscribeStatus
+from backend.dependencies import SessionLocal, get_workflow_orchestration_service
+from backend.models.database import VideoResource, VideoSummaryTask
+from backend.models.enums import FrameExtractionStatus, TranscribeStatus, WorkflowState
 
 
 app = create_app()
@@ -81,6 +83,26 @@ def _prepare_assets(token: str) -> tuple[str, str]:
     # 模拟 Celery 提取任务完成，标记视频就绪
     _mark_video_ready(video_id)
     return kbid, video_id
+
+
+def _set_task_workflow_state(task_id: str, state: WorkflowState) -> None:
+    db = SessionLocal()
+    try:
+        row = db.query(VideoSummaryTask).filter(VideoSummaryTask.task_id == task_id).one_or_none()
+        if row:
+            row.workflow_state = state
+            db.commit()
+    finally:
+        db.close()
+
+
+@contextmanager
+def _override_workflow_service(stub_service: object):
+    app.dependency_overrides[get_workflow_orchestration_service] = lambda: stub_service
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(get_workflow_orchestration_service, None)
 
 
 def test_video_summary_task_crud_flow() -> None:
@@ -207,3 +229,179 @@ def test_video_summary_task_create_rejects_inconsistent_ready_state() -> None:
         headers=headers,
     )
     assert create_response.status_code == 422
+
+
+def test_start_analysis_workflow_dispatches_celery_task(monkeypatch) -> None:
+    token = _login("alice-task-start-analysis")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "给我一个结构化总结"},
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+
+    dispatched: dict[str, object] = {}
+
+    def _fake_apply_async(*, args, queue):
+        dispatched["args"] = args
+        dispatched["queue"] = queue
+        return SimpleNamespace(id="celery-analysis-001")
+
+    monkeypatch.setattr(
+        "backend.tasks.workflow_runtime_tasks.async_execute_analysis_workflow.apply_async",
+        _fake_apply_async,
+    )
+
+    with _override_workflow_service(SimpleNamespace()):
+        response = client.post(f"/api/v1/tasks/{task_id}/start-analysis", json={}, headers=headers)
+    assert response.status_code == 202
+    payload = response.json()["data"]
+    assert payload["task_id"] == task_id
+    assert payload["workflow_state"] == "DRAFT_GENERATING"
+    assert payload["thread_id"] == task_id
+    assert payload["celery_task_id"] == "celery-analysis-001"
+    assert payload["accepted_at"].endswith("Z")
+
+    args = dispatched["args"]
+    assert args[1] == task_id
+    assert args[2] == ""
+    assert args[3] == []
+    assert dispatched["queue"] == "default"
+
+
+def test_approve_and_finalize_requires_waiting_state() -> None:
+    token = _login("alice-task-approve-state")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "默认"},
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+
+    with _override_workflow_service(SimpleNamespace()):
+        response = client.post(
+            f"/api/v1/tasks/{task_id}/approve-and-finalize",
+            json={
+                "edited_aggregated_chunk_insights": "编辑后的分析",
+                "human_guidance": "更强调可执行建议",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 422
+
+
+def test_approve_and_finalize_dispatches_celery_task_when_waiting(monkeypatch) -> None:
+    token = _login("alice-task-approve-finalize")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "默认"},
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+    _set_task_workflow_state(task_id, WorkflowState.WAITING_USER_APPROVAL)
+
+    dispatched: dict[str, object] = {}
+
+    def _fake_apply_async(*, args, queue):
+        dispatched["args"] = args
+        dispatched["queue"] = queue
+        return SimpleNamespace(id="celery-final-001")
+
+    monkeypatch.setattr(
+        "backend.tasks.workflow_runtime_tasks.async_execute_finalization_workflow.apply_async",
+        _fake_apply_async,
+    )
+
+    with _override_workflow_service(SimpleNamespace()):
+        response = client.post(
+            f"/api/v1/tasks/{task_id}/approve-and-finalize",
+            json={
+                "edited_aggregated_chunk_insights": "编辑后的分析",
+                "human_guidance": "更强调可执行建议",
+            },
+            headers=headers,
+        )
+    assert response.status_code == 202
+    payload = response.json()["data"]
+    assert payload["task_id"] == task_id
+    assert payload["workflow_state"] == "FINAL_GENERATING"
+    assert payload["thread_id"] == task_id
+    assert payload["celery_task_id"] == "celery-final-001"
+    assert payload["accepted_at"].endswith("Z")
+
+    args = dispatched["args"]
+    assert args[1] == task_id
+    assert args[2] == "编辑后的分析"
+    assert args[3] == "更强调可执行建议"
+    assert dispatched["queue"] == "default"
+
+
+def test_time_travel_qa_returns_answer_when_task_ready() -> None:
+    token = _login("alice-task-time-travel")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "默认"},
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+    _set_task_workflow_state(task_id, WorkflowState.WAITING_USER_APPROVAL)
+
+    class _StubWorkflowService:
+        async def start_time_travel_qa_async(self, **kwargs):
+            assert kwargs["task_id"] == task_id
+            assert kwargs["timestamp"] == "00:10:00"
+            assert kwargs["question"] == "这里在讲什么?"
+            assert kwargs["window_seconds"] == 20
+            return "这是基于证据窗口的回答"
+
+    with _override_workflow_service(_StubWorkflowService()):
+        response = client.post(
+            f"/api/v1/tasks/{task_id}/time-travel-qa",
+            json={"timestamp": "00:10:00", "question": "这里在讲什么?", "window_seconds": 20},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["answer"] == "这是基于证据窗口的回答"
+    assert payload["timestamp"] == "00:10:00"
+    assert payload["window_seconds"] == 20
+
+
+def test_time_travel_qa_rejects_when_analysis_not_ready() -> None:
+    token = _login("alice-task-time-travel-invalid")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "默认"},
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+
+    with _override_workflow_service(SimpleNamespace()):
+        response = client.post(
+            f"/api/v1/tasks/{task_id}/time-travel-qa",
+            json={"timestamp": "00:10:00", "question": "这里在讲什么?", "window_seconds": 20},
+            headers=headers,
+        )
+
+    assert response.status_code == 422

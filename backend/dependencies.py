@@ -145,3 +145,54 @@ from backend.notifications.fcm_service import FCMService
 @lru_cache(maxsize=1)
 def get_fcm_service() -> FCMService:
     return FCMService()
+
+
+# ------------------------------------------------------------------
+# 工作流编排依赖
+# ------------------------------------------------------------------
+from backend.services.progress_publish_service import ProgressPublishService
+from backend.services.task_status_service import TaskStatusService
+from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
+from backend.services.workflow_notification_service import WorkflowNotificationService
+from backend.repositories.device_repository import DeviceRepository
+
+
+@lru_cache(maxsize=1)
+def get_progress_publish_service() -> ProgressPublishService:
+    """Create ProgressPublishService for unified progress event publishing."""
+    return ProgressPublishService(
+        event_bus=get_progress_event_bus(),
+        instance_id=socket.gethostname(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_task_status_service() -> TaskStatusService:
+    """Create TaskStatusService for observable event tracking."""
+    return TaskStatusService()
+
+
+@lru_cache(maxsize=1)
+def get_workflow_orchestration_service() -> WorkflowOrchestrationService:
+    """Create WorkflowOrchestrationService for workflow execution."""
+    return WorkflowOrchestrationService(
+        task_repository=get_video_summary_task_repository(),
+        video_repository=get_video_resource_repository(),
+        progress_publisher=get_progress_publish_service(),
+        task_status_service=get_task_status_service(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_device_repository() -> DeviceRepository:
+    """Create DeviceRepository for FCM device token management."""
+    return DeviceRepository(db_session=SessionLocal())
+
+
+@lru_cache(maxsize=1)
+def get_workflow_notification_service() -> WorkflowNotificationService:
+    """Create WorkflowNotificationService for FCM push orchestration."""
+    return WorkflowNotificationService(
+        fcm_service=get_fcm_service(),
+        device_repository=get_device_repository(),
+    )
