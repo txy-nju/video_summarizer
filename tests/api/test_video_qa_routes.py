@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.app_factory import create_app
 from backend.dependencies import SessionLocal
-from backend.models.database import VideoResource
+from backend.models.database import VideoQARecord, VideoResource
 from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 
 
@@ -174,3 +174,41 @@ def test_video_qa_owner_isolation() -> None:
     # Bob 不能访问 Alice 的任务的问答
     list_response = client.get(f"/api/v1/tasks/{alice_task_id}/qa", headers=bob_headers)
     assert list_response.status_code == 404 or list_response.json()["pagination"]["total"] == 0
+
+
+def test_video_qa_stream_returns_sse_events() -> None:
+    token = _login("alice-qa-stream")
+    headers = {"Authorization": f"Bearer {token}"}
+    task_id = _prepare_task(token)
+
+    create_response = client.post(
+        f"/api/v1/tasks/{task_id}/qa",
+        json={
+            "task_id": task_id,
+            "start_time": "00:10:00",
+            "end_time": "00:12:00",
+            "question_content": "这段视频讲的是什么?",
+            "attachments": [],
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    qa_id = create_response.json()["data"]["qa_id"]
+
+    db = SessionLocal()
+    try:
+        row = db.query(VideoQARecord).filter(VideoQARecord.qa_id == qa_id).one_or_none()
+        assert row is not None
+        row.answer_content = "这是SSE问答输出"
+        db.commit()
+    finally:
+        db.close()
+
+    response = client.get(f"/api/v1/tasks/{task_id}/qa/{qa_id}/stream", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    body = response.text
+    assert "event: start" in body
+    assert "event: delta" in body
+    assert "event: done" in body
+    assert "这是SSE问答输出" in body

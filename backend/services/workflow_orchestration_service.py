@@ -227,6 +227,11 @@ class WorkflowOrchestrationService:
                 user_id=owner_id,
                 scope=WSScope.VIDEO_SUMMARY_TASK,
                 scope_id=task_id,
+                result={
+                    "task_id": task_id,
+                    "workflow_state": "WAITING_USER_APPROVAL",
+                    "draft_summary": result.get("aggregated_chunk_insights", ""),
+                },
                 message="Phase-1 analysis completed. Awaiting human approval.",
                 trace_id=trace_id,
             )
@@ -351,7 +356,7 @@ class WorkflowOrchestrationService:
             updated_task = self._task_repository.update_by_owner_and_id(
                 owner_id=owner_id,
                 task_id=task_id,
-                draft_summary=final_summary,
+                final_summary=final_summary,
                 workflow_state="COMPLETED",
             )
 
@@ -363,6 +368,11 @@ class WorkflowOrchestrationService:
                 user_id=owner_id,
                 scope=WSScope.VIDEO_SUMMARY_TASK,
                 scope_id=task_id,
+                result={
+                    "task_id": task_id,
+                    "workflow_state": "COMPLETED",
+                    "final_summary": final_summary,
+                },
                 message="Phase-2 finalization completed. Workflow finished.",
                 trace_id=trace_id,
             )

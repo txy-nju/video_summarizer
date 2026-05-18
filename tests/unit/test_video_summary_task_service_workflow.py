@@ -33,9 +33,11 @@ class _FakeTaskRepo:
         *,
         owner_id: str,
         task_id: str,
-        draft_summary: str | None,
-        user_guidance: str | None,
-        title: str | None,
+        draft_summary: str | None = None,
+        user_guidance: str | None = None,
+        title: str | None = None,
+        final_summary: str | None = None,
+        workflow_state: str | None = None,
     ) -> VideoSummaryTaskRecord | None:
         if owner_id != self.record.owner_id or task_id != self.record.task_id:
             return None
@@ -43,7 +45,9 @@ class _FakeTaskRepo:
             self.record,
             draft_summary=draft_summary if draft_summary is not None else self.record.draft_summary,
             user_guidance=user_guidance if user_guidance is not None else self.record.user_guidance,
+            final_summary=final_summary if final_summary is not None else self.record.final_summary,
             title=title if title is not None else self.record.title,
+            workflow_state=workflow_state if workflow_state is not None else self.record.workflow_state,
             updated_at=datetime.now(UTC),
         )
         return self.record
@@ -100,7 +104,7 @@ def test_transition_workflow_state_enforces_monotonic_path() -> None:
         final_summary="final output",
     )
     assert repo.record.workflow_state == "COMPLETED"
-    assert repo.record.draft_summary == "final output"
+    assert repo.record.final_summary == "final output"
 
 
 def test_transition_workflow_state_rejects_invalid_jump() -> None:

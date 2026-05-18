@@ -14,6 +14,7 @@ class _TaskRecord:
     workflow_state: str
     title: str | None = None
     draft_summary: str | None = None
+    final_summary: str | None = None
 
 
 class _TaskRepo:
@@ -31,13 +32,25 @@ class _TaskRepo:
         self.record = replace(self.record, workflow_state=workflow_state)
         return self.record
 
-    def update_by_owner_and_id(self, *, owner_id: str, task_id: str, draft_summary=None, title=None, workflow_state=None):
+    def update_by_owner_and_id(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        draft_summary=None,
+        user_guidance=None,
+        title=None,
+        final_summary=None,
+        workflow_state=None,
+    ):
         if not self.get_by_owner_and_id(owner_id, task_id):
             return None
         if draft_summary is not None:
             self.record = replace(self.record, draft_summary=draft_summary)
         if title is not None:
             self.record = replace(self.record, title=title)
+        if final_summary is not None:
+            self.record = replace(self.record, final_summary=final_summary)
         if workflow_state is not None:
             self.record = replace(self.record, workflow_state=workflow_state)
         return self.record
@@ -148,6 +161,7 @@ def test_workflow_orchestration_slice_analysis_finalize_and_time_travel(monkeypa
     )
     assert phase2 == "final-summary"
     assert task_repo.record.workflow_state == "COMPLETED"
+    assert task_repo.record.final_summary == "final-summary"
 
     qa = asyncio.run(
         service.start_time_travel_qa_async(
@@ -161,7 +175,21 @@ def test_workflow_orchestration_slice_analysis_finalize_and_time_travel(monkeypa
     )
     assert qa == "time-travel-answer"
 
-    assert any(event[0] == "completed" for event in progress.events)
+    completed_events = [event for event in progress.events if event[0] == "completed"]
+    assert len(completed_events) >= 2
+
+    phase1_completed = next(
+        evt for evt in completed_events if evt[1].get("message") == "Phase-1 analysis completed. Awaiting human approval."
+    )
+    assert phase1_completed[1]["result"]["workflow_state"] == "WAITING_USER_APPROVAL"
+    assert phase1_completed[1]["result"]["draft_summary"] == "analysis-content"
+
+    phase2_completed = next(
+        evt for evt in completed_events if evt[1].get("message") == "Phase-2 finalization completed. Workflow finished."
+    )
+    assert phase2_completed[1]["result"]["workflow_state"] == "COMPLETED"
+    assert phase2_completed[1]["result"]["final_summary"] == "final-summary"
+
     assert any(
         call[0] == "approval_required"
         and call[1].get("user_id") == "user-1"

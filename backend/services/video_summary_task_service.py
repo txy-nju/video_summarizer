@@ -107,6 +107,7 @@ class VideoSummaryTaskService:
         draft_summary: str | None = None,
         user_guidance: str | None = None,
         title: str | None = None,
+        final_summary: str | None = None,
     ) -> VideoSummaryTaskView | None:
         """System-only transition hook for workflow lifecycle orchestration."""
         record = self._repository.get_by_owner_and_id(owner_id, task_id)
@@ -121,13 +122,14 @@ class VideoSummaryTaskService:
         if next_state not in allowed:
             raise ValueError(f"invalid_workflow_transition:{current_state}->{next_state}")
 
-        if any(value is not None for value in (draft_summary, user_guidance, title)):
+        if any(value is not None for value in (draft_summary, user_guidance, title, final_summary)):
             updated = self._repository.update_by_owner_and_id(
                 owner_id=owner_id,
                 task_id=task_id,
                 draft_summary=draft_summary,
                 user_guidance=user_guidance,
                 title=title,
+                final_summary=final_summary,
             )
             if updated is None:
                 return None
@@ -182,7 +184,7 @@ class VideoSummaryTaskService:
             owner_id=owner_id,
             task_id=task_id,
             next_state="COMPLETED",
-            draft_summary=final_summary,
+            final_summary=final_summary,
         )
 
     def mark_workflow_failed(self, *, owner_id: str, task_id: str) -> VideoSummaryTaskView | None:

@@ -71,9 +71,11 @@ class VideoSummaryTaskRepository:
         *,
         owner_id: str,
         task_id: str,
-        draft_summary: str | None,
-        user_guidance: str | None,
-        title: str | None,
+        draft_summary: str | None = None,
+        user_guidance: str | None = None,
+        title: str | None = None,
+        final_summary: str | None = None,
+        workflow_state: str | None = None,
     ) -> VideoSummaryTaskRecord | None:
         row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
         if row is None:
@@ -85,6 +87,10 @@ class VideoSummaryTaskRepository:
             row.user_guidance = user_guidance
         if title is not None:
             row.title = title
+        if final_summary is not None:
+            row.final_summary = final_summary
+        if workflow_state is not None:
+            row.workflow_state = workflow_state
 
         self._session.commit()
         self._session.refresh(row)
