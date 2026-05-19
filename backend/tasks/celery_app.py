@@ -40,3 +40,29 @@ celery_app.conf.update(
     # 结果保留时长：24 小时
     result_expires=86400,
 )
+
+
+# ---------------------------------------------------------------------------
+# Domain event listener auto-start (daemon thread on worker ready)
+# ---------------------------------------------------------------------------
+from celery.signals import worker_ready
+
+
+@worker_ready.connect
+def _start_domain_event_listener(**kwargs: object) -> None:
+    """当 Celery worker 就绪时，在独立守护线程中启动域事件监听器。
+
+    该监听器阻塞式消费 Redis Streams 中的 VideoUploadedEvent，
+    并在收到事件后触发 async_process_video（转录 + 抽帧并行）。
+    """
+    import threading
+
+    from backend.services.domain_event_listener import run_domain_event_listener
+
+    thread = threading.Thread(target=run_domain_event_listener, daemon=True, name="domain-event-listener")
+    thread.start()
+
+    import logging
+
+    _logger = logging.getLogger(__name__)
+    _logger.info("Domain event listener started in daemon thread (worker_ready signal).")
