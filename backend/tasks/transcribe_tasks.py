@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 from backend.db.session import SessionLocal
+from backend.infrastructure.storage.oss_client import get_object_storage_client
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -45,19 +45,19 @@ def async_transcribe_video(self, video_id: str) -> dict:
             logger.error("async_transcribe_video: video_id=%s not found", video_id)
             return {"video_id": video_id, "status": "NOT_FOUND"}
 
-        # 通过 oss_key 定位本地视频文件（step 5.5 后替换为 OSS 下载）
-        video_path = Path(video.oss_key) if video.oss_key else None
-        if video_path is None or not video_path.exists():
+        if not (video.oss_key and video.oss_key.strip()):
             raise FileNotFoundError(
-                f"Video file not accessible for video_id={video_id}, oss_key={video.oss_key!r}. "
-                "Ensure the file is available locally or configure OSS access."
+                f"Video object key missing for video_id={video_id}, oss_key={video.oss_key!r}."
             )
 
         from core.extraction.infrastructure.extractor import MediaExtractor
         from core.extraction.infrastructure.transcriber import AudioTranscriber
 
+        storage_client = get_object_storage_client()
+
         extractor = MediaExtractor()
-        audio_path = extractor.extract_audio(video_path)
+        with storage_client.materialize_to_local_path(video.oss_key) as video_path:
+            audio_path = extractor.extract_audio(video_path)
 
         transcript = ""
         if audio_path:

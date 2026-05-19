@@ -71,6 +71,21 @@ def _mark_video_inconsistent_ready(video_id: str) -> None:
         db.close()
 
 
+def _mark_video_ready_with_object_key(video_id: str) -> None:
+    """测试辅助：视频以对象键形式就绪（非本地绝对路径）。"""
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row:
+            row.oss_key = f"videos/{row.owner_id}/{video_id}/original.mp4"
+            row.transcribe_status = TranscribeStatus.COMPLETED
+            row.frame_extraction_status = FrameExtractionStatus.COMPLETED
+            row.extract_completed_at = datetime.now(UTC)
+            db.commit()
+    finally:
+        db.close()
+
+
 def _prepare_assets(token: str) -> tuple[str, str]:
     headers = {"Authorization": f"Bearer {token}"}
     kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=headers)
@@ -229,6 +244,34 @@ def test_video_summary_task_create_rejects_inconsistent_ready_state() -> None:
         headers=headers,
     )
     assert create_response.status_code == 422
+
+
+def test_video_summary_task_create_accepts_ready_video_with_object_key() -> None:
+    token = _login("alice-task-object-key-ready")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    kb_response = client.post("/api/v1/kbs", json=KB_PAYLOAD, headers=headers)
+    assert kb_response.status_code == 201
+    kbid = kb_response.json()["data"]["kbid"]
+
+    video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert video_response.status_code == 201
+    video_id = video_response.json()["data"]["video_id"]
+    _mark_video_ready_with_object_key(video_id)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={
+            "kbid": kbid,
+            "video_id": video_id,
+            "user_initial_preference": "请输出面向业务的结构化摘要",
+        },
+        headers=headers,
+    )
+    assert create_response.status_code == 201
+    payload = create_response.json()["data"]
+    assert payload["video_id"] == video_id
+    assert payload["kbid"] == kbid
 
 
 def test_start_analysis_workflow_dispatches_celery_task(monkeypatch) -> None:

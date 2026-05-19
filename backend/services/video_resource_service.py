@@ -4,6 +4,7 @@ from dataclasses import asdict
 import logging
 
 from backend.api.pagination import build_pagination, normalize_page_size
+from backend.infrastructure.storage.oss_client import get_object_storage_client
 from backend.models.enums import FrameExtractionStatus, TranscribeStatus
 from backend.repositories.video_resource_repository import VideoResourceRecord, VideoResourceRepository
 from backend.services.progress_publish_service import ProgressPublishService
@@ -394,4 +395,8 @@ class VideoResourceService:
         payload = asdict(record)
         keyframes = payload.get("keyframes")
         payload["keyframes"] = None if keyframes is None else [KeyFrameItem.model_validate(item) for item in keyframes]
+        if record.oss_key:
+            payload["presigned_url"] = get_object_storage_client().get_presigned_url(object_key=record.oss_key)
+        else:
+            payload["presigned_url"] = None
         return VideoResourceView.model_validate(payload)

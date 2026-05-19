@@ -225,3 +225,24 @@ def test_trigger_processing_after_upload_dispatches_async_process(monkeypatch) -
 
     assert dispatched is True
     assert captured.get("video_id") == video_id
+
+
+def test_video_resource_returns_presigned_url_when_oss_key_exists() -> None:
+    token = _login("alice-video-presigned")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_video_response = client.post("/api/v1/videos", json=VIDEO_PAYLOAD, headers=headers)
+    assert create_video_response.status_code == 201
+    video_id = create_video_response.json()["data"]["video_id"]
+
+    with dependencies.SessionLocal() as db_session:
+        row = db_session.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None
+        row.oss_key = f"videos/{row.owner_id}/{video_id}/original.mp4"
+        db_session.commit()
+
+    get_response = client.get(f"/api/v1/videos/{video_id}", headers=headers)
+    assert get_response.status_code == 200
+    data = get_response.json()["data"]
+    assert data["oss_key"].startswith("videos/")
+    assert data["presigned_url"].startswith("file://")

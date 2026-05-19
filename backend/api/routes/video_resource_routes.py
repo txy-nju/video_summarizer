@@ -24,6 +24,7 @@ _ALLOWED_FIELDS = {
     "owner_id",
     "file_name",
     "oss_key",
+    "presigned_url",
     "duration",
     "transcribe_status",
     "frame_extraction_status",

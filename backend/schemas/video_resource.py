@@ -35,6 +35,7 @@ class VideoResourceView(BaseModel):
     owner_id: str
     file_name: str
     oss_key: str
+    presigned_url: str | None = None
     duration: int
     full_transcript: str | None = None
     transcribe_status: VideoExtractStatus = "UPLOADED"

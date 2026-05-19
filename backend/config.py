@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
     openai_base_url: str = Field(default="", alias="OPENAI_BASE_URL")
 
+    storage_backend: str = Field(default="local", alias="STORAGE_BACKEND")
+    oss_local_root: str = Field(default="temp/object_storage", alias="OSS_LOCAL_ROOT")
+    oss_presign_ttl_seconds: int = Field(default=3600, alias="OSS_PRESIGN_TTL_SECONDS")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

@@ -122,15 +122,16 @@ WebSocket 事件统一信封（WSEventEnvelope）：
 }
 ```
 
-### 3.2 SSE：仅 QA 生成流
-- 端点：POST /api/v1/tasks/{task_id}/time-travel-qa/stream
+### 3.2 SSE：QA 生成流
+- 端点 1：POST /api/v1/tasks/{task_id}/time-travel-qa/stream
+- 端点 2：POST /api/v1/kbs/{kbid}/chats/{chat_id}/qa/stream
 - Header：
   - Content-Type: text/event-stream
   - Cache-Control: no-cache
   - Connection: keep-alive
 - 事件类型：start/delta/done/error
 
-示例：
+示例（time-travel QA）：
 ```text
 event: start
 data: {"task_id":"task_001","qa_id":"qa_001","timestamp":"2026-05-18T10:00:00Z"}
@@ -140,6 +141,18 @@ data: {"task_id":"task_001","qa_id":"qa_001","chunk":"这是","sequence":1,"time
 
 event: done
 data: {"task_id":"task_001","qa_id":"qa_001","answer_content":"这是最终答案","timestamp":"2026-05-18T10:00:02Z"}
+```
+
+示例（global QA）：
+```text
+event: start
+data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","timestamp":"2026-05-18T10:00:00Z"}
+
+event: delta
+data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","chunk":"这是","sequence":1,"timestamp":"2026-05-18T10:00:01Z"}
+
+event: done
+data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","answer_content":"这是最终答案","cited_sources":[],"timestamp":"2026-05-18T10:00:02Z"}
 ```
 
 ### 3.3 FCM 推送载荷
@@ -230,6 +243,7 @@ data: {"task_id":"task_001","qa_id":"qa_001","answer_content":"这是最终答�
 ### 4.8 Global QA
 | Method | Path | Status |
 |---|---|---|
+| POST | /api/v1/kbs/{kbid}/chats/{chat_id}/qa/stream | 200 (SSE) |
 | POST | /api/v1/kbs/{kbid}/chats/{chat_id}/qa | 201 |
 | GET | /api/v1/kbs/{kbid}/chats/{chat_id}/qa | 200 |
 | GET | /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id} | 200 |
@@ -548,6 +562,12 @@ DELETE /api/v1/kbs/{kbid}/chats/{chat_id}
 {"status":"success","data":{"chat_id":"chat_001"},"meta":{"request_id":"req_006","timestamp":"2026-05-18T10:02:00Z"}}
 ```
 
+POST /api/v1/kbs/{kbid}/chats/{chat_id}/qa/stream
+```json
+{"question_content":"跨视频问题","attachments":[]}
+```
+返回：SSE 流（start/delta/done/error，见第 3.2 节 global QA 示例）。
+
 POST /api/v1/kbs/{kbid}/chats/{chat_id}/qa
 ```json
 {"question_content":"跨视频问题","attachments":[]}
@@ -647,7 +667,9 @@ GET /api/v1/devices
 
 ### 8.1 对齐结论
 - 已覆盖 create_app() 注册的全部 HTTP 路由与 /ws/progress。
-- 已覆盖 SSE 端点 /api/v1/tasks/{task_id}/time-travel-qa/stream。
+- 已覆盖 SSE 端点：
+  - /api/v1/tasks/{task_id}/time-travel-qa/stream
+  - /api/v1/kbs/{kbid}/chats/{chat_id}/qa/stream
 - 已覆盖设备注册与 FCM 推送载荷契约。
 
 ### 8.2 冲突/差异

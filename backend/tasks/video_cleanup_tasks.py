@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 
+from backend.infrastructure.storage.oss_client import get_object_storage_client
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -52,15 +53,13 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
         # 推进状态：PENDING_DELETE -> DELETING
         service.mark_deletion_in_progress(video_id=video_id)
 
-        # 1. OSS 清理（占位实现；step 5.5 后接入真实 OSS client）
+        # 1. OSS 清理
+        storage_client = get_object_storage_client()
         if video.oss_key:
-            logger.info(
-                "async_cascade_delete_video: OSS cleanup placeholder for video_id=%s, oss_key=%s",
-                video_id,
-                video.oss_key,
-            )
-            # TODO: oss_client.delete_object(video.oss_key)
-            # TODO: oss_client.delete_prefix(video.keyframes_oss_prefix) if keyframes_oss_prefix
+            storage_client.delete_object(video.oss_key)
+        keyframes_oss_prefix = getattr(video, "keyframes_oss_prefix", None)
+        if keyframes_oss_prefix:
+            storage_client.delete_prefix(keyframes_oss_prefix)
 
         # 2. 向量库清理（占位实现；步骤 7 后接入）
         if video.transcript_vector_ids:

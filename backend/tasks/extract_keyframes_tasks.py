@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 from backend.db.session import SessionLocal
+from backend.infrastructure.storage.oss_client import ObjectStorageClient, get_object_storage_client
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ def _sanitize_frames_for_db(
     raw_frames: list[dict],
     owner_id: str,
     video_id: str,
+    storage_client: ObjectStorageClient,
 ) -> list[dict]:
     """
     将 extractor 原始帧列表转换为数据库存储格式：
@@ -48,11 +50,15 @@ def _sanitize_frames_for_db(
             time_str = frame.get("time", "00:00:00").replace(":", "")
             filename = f"frame_{time_str}_{i:04d}.jpg"
 
+        frame_oss_key = _build_oss_key(owner_id, video_id, filename)
+        if frame_file and Path(frame_file).exists():
+            storage_client.upload_file(local_path=Path(frame_file), object_key=frame_oss_key)
+
         db_frame = {
             "time": frame.get("time", ""),
             "scene_change_score": frame.get("scene_change_score", 0.0),
             "scene_change_level": frame.get("scene_change_level", "none"),
-            "oss_key": _build_oss_key(owner_id, video_id, filename),
+            "oss_key": frame_oss_key,
         }
         result.append(db_frame)
     return result
@@ -80,20 +86,20 @@ def async_extract_keyframes(self, video_id: str) -> dict:
             logger.error("async_extract_keyframes: video_id=%s not found", video_id)
             return {"video_id": video_id, "status": "NOT_FOUND"}
 
-        video_path = Path(video.oss_key) if video.oss_key else None
-        if video_path is None or not video_path.exists():
+        if not (video.oss_key and video.oss_key.strip()):
             raise FileNotFoundError(
-                f"Video file not accessible for video_id={video_id}, oss_key={video.oss_key!r}. "
-                "Ensure the file is available locally or configure OSS access."
+                f"Video object key missing for video_id={video_id}, oss_key={video.oss_key!r}."
             )
 
         from config.settings import DEFAULT_FRAME_INTERVAL
         from core.extraction.infrastructure.extractor import MediaExtractor
 
+        storage_client = get_object_storage_client()
         extractor = MediaExtractor()
-        raw_frames = extractor.extract_frames(video_path, interval=DEFAULT_FRAME_INTERVAL)
+        with storage_client.materialize_to_local_path(video.oss_key) as video_path:
+            raw_frames = extractor.extract_frames(video_path, interval=DEFAULT_FRAME_INTERVAL)
 
-        keyframes_for_db = _sanitize_frames_for_db(raw_frames, video.owner_id, video_id)
+        keyframes_for_db = _sanitize_frames_for_db(raw_frames, video.owner_id, video_id, storage_client)
         oss_prefix = f"frames/{video.owner_id}/{video_id}/"
 
         service.mark_frame_extraction_completed(

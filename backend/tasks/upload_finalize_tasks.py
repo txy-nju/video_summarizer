@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from backend.tasks.celery_app import celery_app
 
@@ -51,19 +52,26 @@ def async_finalize_upload(upload_id: str) -> dict:
     if result.get("status") == "MERGED":
         owner_id = result.get("owner_id", "")
         file_name = result.get("file_name", "")
-        oss_key = result.get("merged_path", "")
+        merged_path = result.get("merged_path", "")
 
-        # Step 1: 创建 VideoResource 记录并写入 oss_key
-        video_id = _create_video_resource_and_set_oss_key(
+        # Step 1: 创建 VideoResource 记录
+        video_id = _create_video_resource(
             owner_id=owner_id,
             file_name=file_name,
-            oss_key=oss_key,
         )
         if video_id is None:
             logger.error("async_finalize_upload: failed to create video_resource for upload_id=%s", upload_id)
             return {"upload_id": upload_id, "status": "FAILED", "error": "Failed to create video_resource"}
 
-        # Step 2: 清理分片文件（保留 merged 文件）
+        # Step 2: 上传合并文件到对象存储，并写入 video_resource.oss_key（对象键）
+        object_key = _build_video_object_key(owner_id=owner_id, video_id=video_id, file_name=file_name, merged_path=merged_path)
+        from backend.infrastructure.storage.oss_client import get_object_storage_client
+
+        storage_client = get_object_storage_client()
+        stored_key = storage_client.upload_file(local_path=Path(merged_path), object_key=object_key)
+        _set_video_resource_oss_key(video_id=video_id, oss_key=stored_key)
+
+        # Step 3: 清理分片文件（保留对象存储中的最终文件）
         from backend.repositories.upload_repository import UploadRepository
         import redis as redis_lib
 
@@ -71,35 +79,38 @@ def async_finalize_upload(upload_id: str) -> dict:
         UploadRepository(redis_client).cleanup_chunks(upload_id)
         UploadRepository(redis_client).update_state(upload_id, "done")
 
-        # Step 3: 发布 VideoUploadedEvent → 领域事件总线（Redis Streams）
+        # Step 4: 发布 VideoUploadedEvent → 领域事件总线（Redis Streams）
         #         上传域不感知消费方；domain_event_listener 独立消费并触发 async_process_video
-        _publish_video_uploaded_event(video_id=video_id, owner_id=owner_id, oss_key=oss_key)
+        _publish_video_uploaded_event(video_id=video_id, owner_id=owner_id, oss_key=stored_key)
 
         logger.info(
             "async_finalize_upload completed: upload_id=%s, video_id=%s, oss_key=%s",
             upload_id,
             video_id,
-            oss_key,
+            stored_key,
         )
         return {
             "upload_id": upload_id,
             "video_id": video_id,
             "status": "DONE",
-            "oss_key": oss_key,
+            "oss_key": stored_key,
         }
 
     return result
 
 
-def _create_video_resource_and_set_oss_key(
+def _build_video_object_key(*, owner_id: str, video_id: str, file_name: str, merged_path: str) -> str:
+    suffix = Path(file_name).suffix or Path(merged_path).suffix or ".mp4"
+    return f"videos/{owner_id}/{video_id}/original{suffix.lower()}"
+
+
+def _create_video_resource(
     *,
     owner_id: str,
     file_name: str,
-    oss_key: str,
 ) -> str | None:
-    """创建 VideoResource 记录并写入 oss_key（系统内部操作）。"""
+    """创建 VideoResource 记录（系统内部操作）。"""
     from backend.db.session import SessionLocal
-    from backend.models.database import VideoResource
     from backend.schemas.video_resource import VideoResourceCreateRequest
     from backend.repositories.video_resource_repository import VideoResourceRepository
     from backend.services.video_resource_service import VideoResourceService
@@ -113,15 +124,23 @@ def _create_video_resource_and_set_oss_key(
             owner_id=owner_id,
             payload=VideoResourceCreateRequest(file_name=file_name),
         )
-        video_id = view.video_id
+        return view.video_id
+    finally:
+        db.close()
 
-        # 写入 oss_key（system-only：直接通过 ORM 更新，避免绕过 service 的 owner 校验）
+
+def _set_video_resource_oss_key(*, video_id: str, oss_key: str) -> None:
+    """写入 video_resource.oss_key（系统内部操作）。"""
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
+
+    db = SessionLocal()
+    try:
         row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
-        if row is not None:
-            row.oss_key = oss_key
-            db.commit()
-
-        return video_id
+        if row is None:
+            return
+        row.oss_key = oss_key
+        db.commit()
     finally:
         db.close()
 
