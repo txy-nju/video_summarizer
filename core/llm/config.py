@@ -55,11 +55,13 @@ def resolve_api_key(capability: str) -> str:
     if cap == "chat":
         return _first_non_empty(
             _read_env("CHAT_API_KEY"),
+            _read_env("DEEPSEEK_API_KEY"),
             _read_env("OPENAI_API_KEY"),
         )
     if cap == "vision":
         return _first_non_empty(
             _read_env("VISION_API_KEY"),
+            _read_env("DEEPSEEK_API_KEY"),
             _read_env("OPENAI_API_KEY"),
             _read_env("CHAT_API_KEY"),
         )
@@ -76,12 +78,14 @@ def resolve_base_url(capability: str) -> str | None:
     if cap == "chat":
         base_url = _first_non_empty(
             _read_env("CHAT_BASE_URL"),
+            _read_env("DEEPSEEK_BASE_URL"),
             _read_env("OPENAI_BASE_URL"),
         )
         return base_url or None
     if cap == "vision":
         base_url = _first_non_empty(
             _read_env("VISION_BASE_URL"),
+            _read_env("DEEPSEEK_BASE_URL"),
             _read_env("OPENAI_BASE_URL"),
             _read_env("CHAT_BASE_URL"),
         )
