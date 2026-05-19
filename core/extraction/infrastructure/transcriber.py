@@ -8,8 +8,8 @@ from collections import deque
 from tenacity import RetryError
 
 from core.llm.base import BaseModel
+from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
-from core.llm.openai_model import OpenAIModel
 
 # Whisper API 单文件硬限制为 25MB，留 1MB 安全余量
 _WHISPER_MAX_BYTES = 24 * 1024 * 1024
@@ -194,13 +194,13 @@ class AudioTranscriber:
             base_url (str, optional): OpenAI API 的中转地址。默认为 None。
             model (str, optional): 转文本模型名称。默认从 TRANSCRIBE_MODEL_NAME/TRANSCRIBER_MODEL 读取。
         """
-        self.api_key = api_key
+        # api_key / base_url 参数保留以兼容旧调用方，但已不再用于直接构造 OpenAIModel。
+        # 转录模型统一走 get_model_for_capability("transcribe")，由工厂按 TRANSCRIBE_PROVIDER 路由。
+        self.api_key = api_key or resolve_api_key("transcribe")
         self.base_url = base_url
         self.model = model or get_model_name_for_capability("transcribe")
         if transcribe_model is not None:
             self.transcribe_model = transcribe_model
-        elif api_key:
-            self.transcribe_model = OpenAIModel(api_key=api_key, base_url=base_url)
         else:
             self.transcribe_model = get_model_for_capability("transcribe")
 

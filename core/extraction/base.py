@@ -12,11 +12,9 @@ class VideoSource(ABC):
     封装了从视频源获取、提取、转录的完整流程。
     """
     def __init__(self, api_key: str, base_url: str = None):
-        if not api_key:
-            raise ValueError("API key is required for transcription.")
-        
+        # api_key 参数保留以兼容旧调用方；AudioTranscriber 内部已统一走工厂路由。
         self.extractor = MediaExtractor()
-        self.transcriber = AudioTranscriber(api_key, base_url=base_url)
+        self.transcriber = AudioTranscriber(api_key=api_key, base_url=base_url)
 
     @abstractmethod
     def acquire_video(self, status_callback: Optional[Callable[[str], None]] = None) -> Path:

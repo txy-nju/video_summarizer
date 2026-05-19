@@ -1,4 +1,3 @@
-import os
 import json
 from core.llm.base import BaseModel
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
@@ -51,12 +50,7 @@ def usefulness_grader_node(state: VideoSummaryState, llm_model: BaseModel | None
     if not draft or revision_count >= MAX_REVISIONS or not review_requirements_text:
         return {"usefulness_score": "yes", "feedback_instructions": ""}
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    
-    if not api_key:
-        raise ValueError("在执行有用性评分节点时，未能找到 OPENAI_API_KEY 环境变量。")
-        
+    # 凭证解析已下沉至 get_model_for_capability 工厂，此处不再手动检查 OPENAI_API_KEY。
     model_client = llm_model or get_model_for_capability("chat")
 
     # 2. 构造 System Prompt，要求强制 JSON 输出

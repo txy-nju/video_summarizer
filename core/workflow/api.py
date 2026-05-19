@@ -1,9 +1,9 @@
-import os
 import time
 import random
 import json
 from typing import Any, List, Dict, Callable, Optional
 
+from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from core.workflow.video_summary.graph import build_video_summary_graph, build_finalization_graph
@@ -404,14 +404,12 @@ def answer_question_at_timestamp(
             f"已选取 {frame_count} 帧代表性关键帧（时间戳: {frame_times_str}）"
         )
 
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    if not api_key:
+    if not resolve_api_key("chat"):
         return _build_time_travel_fallback_response(
             timestamp=timestamp,
             frame_time=frame_times_str,
             transcript_window=transcript_window,
-            reason="未配置 OPENAI_API_KEY，当前返回的是证据抽取结果（已选取 {} 帧视觉证据）。".format(len(representative_frames)),
+            reason="未配置 CHAT_API_KEY 或 OPENAI_API_KEY，当前返回的是证据抽取结果（已选取 {} 帧视觉证据）。".format(len(representative_frames)),
         )
 
     model_client = get_model_for_capability("chat")

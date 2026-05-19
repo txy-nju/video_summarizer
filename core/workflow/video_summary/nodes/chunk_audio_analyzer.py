@@ -1,11 +1,11 @@
 import json
-import os
 import re
 import time
 import threading
 from typing import Any, Dict, List, Tuple
 
 from core.llm.base import BaseModel
+from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from config.settings import (
@@ -146,9 +146,7 @@ def _llm_audio_chunk_structured(
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
 ) -> Dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    if not api_key:
+    if not resolve_api_key("chat"):
         fallback = f"[chunk={chunk_id}] 音频摘要（降级）:\n" + (chunk_text[:500] if chunk_text else "无可用语音证据")
         return _build_audio_structured_fallback(chunk_id, chunk_text, fallback)
 

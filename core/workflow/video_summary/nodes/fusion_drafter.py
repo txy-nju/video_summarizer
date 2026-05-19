@@ -1,4 +1,3 @@
-import os
 from core.llm.base import BaseModel
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
@@ -36,13 +35,7 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
     user_prompt = state.get("user_prompt", "")
     feedback_instructions = state.get("feedback_instructions", "")
 
-    # 1. 获取环境变量凭证
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    
-    if not api_key:
-        raise ValueError("在执行融合组装节点时，未能找到 OPENAI_API_KEY 环境变量。")
-        
+    # 凭证解析已下沉至 get_model_for_capability 工厂，此处不再手动检查 OPENAI_API_KEY。
     model_client = llm_model or get_model_for_capability("chat")
 
     # 2. 构造 System Prompt（聚合输入 -> 最终成文）

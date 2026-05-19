@@ -1,8 +1,8 @@
-import os
 import time
 from typing import Any, Dict, List, Tuple
 
 from core.llm.base import BaseModel
+from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from config.settings import (
@@ -31,9 +31,7 @@ def _llm_chunk_fusion(
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
 ) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    if not api_key:
+    if not resolve_api_key("chat"):
         return (
             f"[chunk={chunk_id}] 分片融合（降级）\\n"
             f"- Audio: {audio_insights[:200]}\\n"

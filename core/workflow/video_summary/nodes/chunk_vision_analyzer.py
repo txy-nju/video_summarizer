@@ -1,10 +1,10 @@
 import json
-import os
 import time
 import threading
 from typing import Any, Dict, List
 
 from core.llm.base import BaseModel
+from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from config.settings import (
@@ -99,9 +99,7 @@ def _llm_vision_chunk_structured(
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
 ) -> Dict[str, Any]:
-    api_key = os.getenv("OPENAI_API_KEY")
-    base_url = os.getenv("OPENAI_BASE_URL")
-    if not api_key:
+    if not resolve_api_key("vision"):
         times = [str(frame.get("time", "未知")) for frame in frames[:8]]
         fallback = f"[chunk={chunk_id}] 视觉摘要（降级）：命中 {len(frames)} 帧，时间点 {times}"
         return _build_vision_structured_fallback(chunk_id, frames, fallback)
