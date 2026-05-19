@@ -50,7 +50,7 @@ class TestAudioTranscriber(unittest.TestCase):
         self.assertIs(result, expected)
         self.assertEqual(getattr(clip, "called", None), ("subclipped", 1.0, 2.5))
 
-    @patch('core.extraction.infrastructure.transcriber.openai.OpenAI')
+    @patch('core.llm.openai_model.OpenAI')
     def test_transcribe(self, mock_openai_client):
         """测试 transcribe 方法"""
         # --- 准备模拟 ---
@@ -83,7 +83,7 @@ class TestAudioTranscriber(unittest.TestCase):
         # 验证返回的是否是预期的 JSON 字符串
         self.assertEqual(result, expected_json_string)
 
-    @patch('core.extraction.infrastructure.transcriber.openai.OpenAI')
+    @patch('core.llm.openai_model.OpenAI')
     @patch('core.extraction.infrastructure.transcriber._split_audio')
     def test_transcribe_large_audio_split_and_merge_keeps_order(self, mock_split_audio, mock_openai_client):
         """大文件分片后应按分片顺序合并，且时间戳偏移正确。"""
@@ -204,7 +204,7 @@ class TestAudioTranscriber(unittest.TestCase):
         self.assertEqual([s.get("id") for s in merged.get("segments", [])], [0, 1])
         self.assertEqual([s.get("start") for s in merged.get("segments", [])], [0.0, 10.5])
 
-    @patch('core.extraction.infrastructure.transcriber.openai.OpenAI')
+    @patch('core.llm.openai_model.OpenAI')
     @patch('core.extraction.infrastructure.transcriber._split_audio')
     def test_transcribe_large_and_single_equivalent_core_fields(self, mock_split_audio, mock_openai_client):
         """同一语义内容下，单文件路径与大文件合并路径应产出下游等价的核心 transcript 结构。"""
@@ -272,7 +272,7 @@ class TestAudioTranscriber(unittest.TestCase):
             [(seg.get("start"), seg.get("end"), seg.get("text")) for seg in single_result.get("segments", [])],
         )
 
-    @patch('core.extraction.infrastructure.transcriber.openai.OpenAI')
+    @patch('core.llm.openai_model.OpenAI')
     @patch('core.extraction.infrastructure.transcriber._split_audio')
     def test_transcribe_single_segment_path_no_merge(self, mock_split_audio, mock_openai_client):
         """单段音频应直接走 _transcribe_single，不触发多段合并。"""

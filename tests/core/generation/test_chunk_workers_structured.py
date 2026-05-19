@@ -9,13 +9,11 @@ from core.workflow.video_summary.state import VideoSummaryState
 
 
 class TestChunkWorkersStructuredOutput(unittest.TestCase):
-    @patch("core.workflow.video_summary.nodes.chunk_audio_analyzer.OpenAI")
-    def test_audio_llm_prompt_contains_evidence_tier_rules(self, mock_openai):
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content='{"observation":{"source":"direct_audio","content":"提到 LangGraph"},"context_calibration":{"source":"structured_global_context","content":"术语消歧"},"final_summary":"该分片讨论 LangGraph"}'))]
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+    @patch("core.workflow.video_summary.nodes.chunk_audio_analyzer.get_model_for_capability")
+    def test_audio_llm_prompt_contains_evidence_tier_rules(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = '{"observation":{"source":"direct_audio","content":"提到 LangGraph"},"context_calibration":{"source":"structured_global_context","content":"术语消歧"},"final_summary":"该分片讨论 LangGraph"}'
+        mock_get_model.return_value = mock_model
 
         with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key", "OPENAI_MODEL_NAME": "gpt-4o"}, clear=False):
             state = cast(
@@ -30,7 +28,7 @@ class TestChunkWorkersStructuredOutput(unittest.TestCase):
             )
             chunk_audio_worker_node(state)
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         messages = call_kwargs.get("messages", [])
         self.assertTrue(messages)
 
@@ -132,13 +130,11 @@ class TestChunkWorkersStructuredOutput(unittest.TestCase):
         self.assertIn("<missing_context>", str(item.get("audio_insights", "")))
         self.assertTrue(item.get("degraded_context", {}).get("audio"))
 
-    @patch("core.workflow.video_summary.nodes.chunk_vision_analyzer.OpenAI")
-    def test_vision_llm_prompt_contains_evidence_tier_rules(self, mock_openai):
-        mock_response = MagicMock()
-        mock_response.choices = [MagicMock(message=MagicMock(content='{"observation":{"source":"direct_vision","content":"画面出现IDE"},"context_calibration":{"source":"structured_global_context","content":"术语对齐"},"final_summary":"展示编码过程"}'))]
-        mock_client = MagicMock()
-        mock_client.chat.completions.create.return_value = mock_response
-        mock_openai.return_value = mock_client
+    @patch("core.workflow.video_summary.nodes.chunk_vision_analyzer.get_model_for_capability")
+    def test_vision_llm_prompt_contains_evidence_tier_rules(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = '{"observation":{"source":"direct_vision","content":"画面出现IDE"},"context_calibration":{"source":"structured_global_context","content":"术语对齐"},"final_summary":"展示编码过程"}'
+        mock_get_model.return_value = mock_model
 
         with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key", "OPENAI_VISION_MODEL_NAME": "gpt-4o"}, clear=False):
             state = cast(
@@ -154,7 +150,7 @@ class TestChunkWorkersStructuredOutput(unittest.TestCase):
             )
             chunk_vision_worker_node(state)
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         messages = call_kwargs.get("messages", [])
         self.assertTrue(messages)
 

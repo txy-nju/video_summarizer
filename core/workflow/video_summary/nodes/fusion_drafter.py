@@ -1,8 +1,9 @@
 import os
-from openai import OpenAI
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
 
-def fusion_drafter_node(state: VideoSummaryState) -> dict:
+def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = None) -> dict:
     """
     全局成文节点。
 
@@ -42,7 +43,7 @@ def fusion_drafter_node(state: VideoSummaryState) -> dict:
     if not api_key:
         raise ValueError("在执行融合组装节点时，未能找到 OPENAI_API_KEY 环境变量。")
         
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    model_client = llm_model or get_model_for_capability("chat")
 
     # 2. 构造 System Prompt（聚合输入 -> 最终成文）
     system_prompt = (
@@ -88,8 +89,8 @@ def fusion_drafter_node(state: VideoSummaryState) -> dict:
 
     # 5. 执行 API 调用
     try:
-        model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
-        response = client.chat.completions.create(
+        model_name = get_model_name_for_capability("chat")
+        draft = model_client.chat_completion(
             model=model_name, 
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -98,7 +99,6 @@ def fusion_drafter_node(state: VideoSummaryState) -> dict:
             # 融合节点需要将碎片化信息组织为流畅文章，因此适度提高 temperature 以获取更好的文笔和行文组织能力
             temperature=0.5, 
         )
-        draft = response.choices[0].message.content
         print("  -> [Fusion Drafter Node] Draft synthesized successfully.")
         
         return {

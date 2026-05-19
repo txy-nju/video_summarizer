@@ -1,13 +1,15 @@
 
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential
-import openai
 import json
-from config.settings import TRANSCRIBER_MODEL
 import math
 from typing import List, Tuple
 from collections import deque
 from tenacity import RetryError
+
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
+from core.llm.openai_model import OpenAIModel
 
 # Whisper API 单文件硬限制为 25MB，留 1MB 安全余量
 _WHISPER_MAX_BYTES = 24 * 1024 * 1024
@@ -177,19 +179,30 @@ def _merge_verbose_json(parts: List[Tuple[dict, float]]) -> str:
 
 
 class AudioTranscriber:
-    def __init__(self, api_key: str, base_url: str = None, model: str = None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        model: str | None = None,
+        transcribe_model: BaseModel | None = None,
+    ):
         """
         初始化 AudioTranscriber。
 
         Args:
             api_key (str): OpenAI API Key。
             base_url (str, optional): OpenAI API 的中转地址。默认为 None。
-            model (str, optional): 转文本模型名称。默认从 TRANSCRIBER_MODEL 读取。
+            model (str, optional): 转文本模型名称。默认从 TRANSCRIBE_MODEL_NAME/TRANSCRIBER_MODEL 读取。
         """
         self.api_key = api_key
         self.base_url = base_url
-        self.model = model or TRANSCRIBER_MODEL
-        self.client = openai.OpenAI(api_key=self.api_key, base_url=self.base_url)
+        self.model = model or get_model_name_for_capability("transcribe")
+        if transcribe_model is not None:
+            self.transcribe_model = transcribe_model
+        elif api_key:
+            self.transcribe_model = OpenAIModel(api_key=api_key, base_url=base_url)
+        else:
+            self.transcribe_model = get_model_for_capability("transcribe")
 
     def transcribe(self, audio_path: Path) -> str:
         """
@@ -252,13 +265,10 @@ class AudioTranscriber:
     def _transcribe_single(self, audio_path: Path) -> str:
         """对单个音频文件调用 Whisper API（含 tenacity 重试）。"""
         print(f"Transcribing audio segment: {audio_path}...")
-        with open(audio_path, "rb") as audio_file:
-            transcript = self.client.audio.transcriptions.create(
-                model=self.model,
-                file=audio_file,
-                response_format="verbose_json",
-            )
+        transcript_json = self.transcribe_model.transcribe_audio(
+            model=self.model,
+            audio_path=audio_path,
+            response_format="verbose_json",
+        )
         print(f"Transcription successful: {audio_path.name}")
-        # 当 response_format 是 verbose_json 时，返回的是一个 TranscriptionVerbose 对象
-        # 我们使用 model_dump_json() 将其转换为纯文本的 JSON 字符串
-        return transcript.model_dump_json(indent=2)
+        return transcript_json

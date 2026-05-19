@@ -35,31 +35,27 @@ class TestFusionDrafterNode(unittest.TestCase):
         }
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123", "OPENAI_BASE_URL": "https://fake.url"})
-    @patch('core.workflow.video_summary.nodes.fusion_drafter.OpenAI')
-    def test_fusion_drafter_mocked_normal(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.fusion_drafter.get_model_for_capability')
+    def test_fusion_drafter_mocked_normal(self, mock_get_model):
         """单元测试：一般情况的融合组装，验证参数是否正确透传"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = "苹果发布了新款iPhone，搭载性能提升20%的A17芯片。"
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = "苹果发布了新款iPhone，搭载性能提升20%的A17芯片。"
+        mock_get_model.return_value = mock_model
         
         result = fusion_drafter_node(self.valid_state)
         
         # 验证大模型调用
-        mock_client.chat.completions.create.assert_called_once()
+        mock_model.chat_completion.assert_called_once()
         self.assertEqual(result["revision_count"], 1, "重写次数应该加 1")
         self.assertEqual(result["draft_summary"], "苹果发布了新款iPhone，搭载性能提升20%的A17芯片。")
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123", "OPENAI_BASE_URL": "https://fake.url"})
-    @patch('core.workflow.video_summary.nodes.fusion_drafter.OpenAI')
-    def test_fusion_drafter_mocked_with_feedback(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.fusion_drafter.get_model_for_capability')
+    def test_fusion_drafter_mocked_with_feedback(self, mock_get_model):
         """单元测试：存在 feedback_instructions 时的回流重写逻辑，验证 System Prompt 的动态修改"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = "修正版：添加了之前遗漏的关于钛金属的描述。"
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = "修正版：添加了之前遗漏的关于钛金属的描述。"
+        mock_get_model.return_value = mock_model
         
         state_with_feedback = self.valid_state.copy()
         state_with_feedback["revision_count"] = 1 # 假设已经是第1次重写失败，这是第2次尝试
@@ -68,7 +64,7 @@ class TestFusionDrafterNode(unittest.TestCase):
         result = fusion_drafter_node(state_with_feedback)
         
         # 验证提示词中是否成功注入了 feedback 和重写次数
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         messages = call_kwargs.get("messages", [])
         system_msg = [msg["content"] for msg in messages if msg["role"] == "system"][0]
         

@@ -1,10 +1,11 @@
 import os
 import json
-from openai import OpenAI
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
 from config.settings import SELF_RAG_MAX_REVISIONS as MAX_REVISIONS
 
-def hallucination_grader_node(state: VideoSummaryState) -> dict:
+def hallucination_grader_node(state: VideoSummaryState, llm_model: BaseModel | None = None) -> dict:
     """
     幻觉审查节点。
 
@@ -45,7 +46,7 @@ def hallucination_grader_node(state: VideoSummaryState) -> dict:
     if not api_key:
         raise ValueError("在执行幻觉评分节点时，未能找到 OPENAI_API_KEY 环境变量。")
         
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    model_client = llm_model or get_model_for_capability("chat")
 
     # 2. 构造极其严苛的 System Prompt，要求强制 JSON 输出
     system_prompt = (
@@ -106,8 +107,8 @@ def hallucination_grader_node(state: VideoSummaryState) -> dict:
 
     # 3. 执行评估 API 调用
     try:
-        model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
-        response = client.chat.completions.create(
+        model_name = get_model_name_for_capability("chat")
+        result_json_str = model_client.chat_completion(
             model=model_name, 
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -116,8 +117,8 @@ def hallucination_grader_node(state: VideoSummaryState) -> dict:
             response_format={"type": "json_object"}, # [核心创新] 开启 JSON Mode，获取确定性判决
             temperature=0.0, # 必须为 0，防止核查员自己产生幻觉
         )
-        
-        result_json_str = response.choices[0].message.content.strip()
+
+        result_json_str = result_json_str.strip()
         result = json.loads(result_json_str)
         
         score = result.get("score", "no").lower()

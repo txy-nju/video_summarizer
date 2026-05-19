@@ -2,7 +2,8 @@ import os
 import time
 from typing import Any, Dict, List, Tuple
 
-from openai import OpenAI
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from config.settings import (
     CHUNK_DEGRADED_MARKER,
@@ -28,6 +29,7 @@ def _llm_chunk_fusion(
     structured_global_context:str,
     user_prompt: str,
     timeout_seconds: float,
+    llm_model: BaseModel | None = None,
 ) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
@@ -38,9 +40,9 @@ def _llm_chunk_fusion(
             f"- Vision: {vision_insights[:200]}"
         )
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
-    response = client.chat.completions.create(
+    model_client = llm_model or get_model_for_capability("chat")
+    model_name = get_model_name_for_capability("chat")
+    return model_client.chat_completion(
         model=model_name,
         messages=[
             {
@@ -61,7 +63,6 @@ def _llm_chunk_fusion(
         temperature=0.3,
         timeout=timeout_seconds,
     )
-    return response.choices[0].message.content or ""
 
 
 def _process_single_chunk_synthesis(
@@ -69,6 +70,7 @@ def _process_single_chunk_synthesis(
     user_prompt: str,
     structured_global_context:str,
     base_item: Dict[str, Any],
+    llm_model: BaseModel | None = None,
 ) -> Tuple[str, Dict[str, Any]]:
     started = time.perf_counter()
     audio_insights = str(base_item.get("audio_insights", ""))
@@ -83,6 +85,7 @@ def _process_single_chunk_synthesis(
             structured_global_context,
             user_prompt,
             CHUNK_WORKER_TIMEOUT_SECONDS,
+            llm_model,
         )
         if not str(chunk_summary).strip():
             raise ValueError("empty summary")
@@ -109,6 +112,7 @@ def _run_synthesis_with_retry(
     user_prompt: str,
     structured_global_context:str,
     base_item: Dict[str, Any],
+    llm_model: BaseModel | None = None,
 ) -> Tuple[str, Dict[str, Any]]:
     last_delta: Dict[str, Any] = {
         "chunk_id": chunk_id,
@@ -119,7 +123,7 @@ def _run_synthesis_with_retry(
 
     retries_used = 0
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
-        _, delta = _process_single_chunk_synthesis(chunk_id, user_prompt, structured_global_context ,base_item)
+        _, delta = _process_single_chunk_synthesis(chunk_id, user_prompt, structured_global_context ,base_item, llm_model)
         last_delta = dict(delta)
         status = str(last_delta.get("modality_status", {}).get("synthesizer", "ok")).strip().lower()
         retries_used = attempt

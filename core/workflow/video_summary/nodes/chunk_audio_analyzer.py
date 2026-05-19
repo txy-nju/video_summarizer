@@ -5,7 +5,8 @@ import time
 import threading
 from typing import Any, Dict, List, Tuple
 
-from openai import OpenAI
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from config.settings import (
     CHUNK_DEGRADED_MARKER,
@@ -143,6 +144,7 @@ def _llm_audio_chunk_structured(
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
     timeout_seconds: float,
+    llm_model: BaseModel | None = None,
 ) -> Dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
@@ -150,8 +152,8 @@ def _llm_audio_chunk_structured(
         fallback = f"[chunk={chunk_id}] 音频摘要（降级）:\n" + (chunk_text[:500] if chunk_text else "无可用语音证据")
         return _build_audio_structured_fallback(chunk_id, chunk_text, fallback)
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
+    model_client = llm_model or get_model_for_capability("chat")
+    model_name = get_model_name_for_capability("chat")
     global_context_json = json.dumps(structured_global_context or {}, ensure_ascii=False)
     previous_summaries_json = json.dumps(previous_chunk_summaries or [], ensure_ascii=False)
     system_prompt = (
@@ -163,7 +165,7 @@ def _llm_audio_chunk_structured(
         "3. 如果 transcript 无法提供有效信息，直接在 final_summary 中声明证据不足。\n"
         "输出必须是 JSON 对象，且只包含 observation、context_calibration、final_summary。"
     )
-    response = client.chat.completions.create(
+    raw_content = model_client.chat_completion(
         model=model_name,
         messages=[
             {
@@ -185,7 +187,6 @@ def _llm_audio_chunk_structured(
         response_format={"type": "json_object"},
         timeout=timeout_seconds,
     )
-    raw_content = response.choices[0].message.content or ""
     try:
         parsed = json.loads(raw_content)
     except Exception:
@@ -203,6 +204,7 @@ def _run_audio_with_retry(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    llm_model: BaseModel | None = None,
 ) -> Tuple[Dict[str, Any], str, int]:
     last_error: Exception | None = None
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
@@ -214,6 +216,7 @@ def _run_audio_with_retry(
                 structured_global_context=structured_global_context,
                 previous_chunk_summaries=previous_chunk_summaries,
                 timeout_seconds=CHUNK_WORKER_TIMEOUT_SECONDS,
+                llm_model=llm_model,
             )
             return structured, "ok", attempt
         except Exception as exc:
@@ -232,6 +235,7 @@ def _process_single_chunk_audio(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    llm_model: BaseModel | None = None,
 ) -> Tuple[str, Dict[str, Any]]:
     started = time.perf_counter()
     chunk_text = _extract_chunk_text(transcript_items, indexes)
@@ -253,6 +257,7 @@ def _process_single_chunk_audio(
             user_prompt,
             structured_global_context,
             previous_chunk_summaries,
+            llm_model,
         )
         insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:audio:{audio_status}:empty_summary"
 
@@ -337,5 +342,6 @@ def chunk_audio_worker_node(state: VideoSummaryState) -> dict:
         user_prompt,
         structured_global_context,
         previous_chunk_summaries,
+        None,
     )
     return {"chunk_results": [merged]}

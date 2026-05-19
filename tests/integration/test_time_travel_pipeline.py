@@ -30,12 +30,10 @@ class TestTimeTravelPipelineIntegration(unittest.TestCase):
 
         with patch("core.workflow.api.create_checkpointer", return_value=_FakeCheckpointer(checkpoint)):
             with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}, clear=False):
-                with patch("core.workflow.api.OpenAI") as mock_openai:
-                    mock_client = MagicMock()
-                    mock_resp = MagicMock()
-                    mock_resp.choices = [MagicMock(message=MagicMock(content="这是追问回答"))]
-                    mock_client.chat.completions.create.return_value = mock_resp
-                    mock_openai.return_value = mock_client
+                with patch("core.workflow.api.get_model_for_capability") as mock_get_model:
+                    mock_model = MagicMock()
+                    mock_model.chat_completion.return_value = "这是追问回答"
+                    mock_get_model.return_value = mock_model
 
                     result = answer_question_at_timestamp(
                         thread_id="thread-1",
@@ -44,7 +42,7 @@ class TestTimeTravelPipelineIntegration(unittest.TestCase):
                         window_seconds=10,
                     )
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         messages = call_kwargs.get("messages", [])
         self.assertTrue(messages, "LLM 调用的 messages 不应为空")
         user_message_content = messages[-1]["content"][0]["text"]
@@ -100,10 +98,10 @@ class TestTimeTravelPipelineIntegration(unittest.TestCase):
 
         with patch("core.workflow.api.create_checkpointer", return_value=_FakeCheckpointer(checkpoint)):
             with patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key"}, clear=False):
-                with patch("core.workflow.api.OpenAI") as mock_openai:
-                    mock_client = MagicMock()
-                    mock_client.chat.completions.create.side_effect = Exception("OpenAI API Timeout")
-                    mock_openai.return_value = mock_client
+                with patch("core.workflow.api.get_model_for_capability") as mock_get_model:
+                    mock_model = MagicMock()
+                    mock_model.chat_completion.side_effect = Exception("OpenAI API Timeout")
+                    mock_get_model.return_value = mock_model
 
                     result = answer_question_at_timestamp(
                         thread_id="thread-timeout",

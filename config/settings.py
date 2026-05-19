@@ -58,6 +58,11 @@ MAX_IMAGE_SIZE = 768        # 图片长边限制
 # 转文本模型配置
 TRANSCRIBER_MODEL = os.getenv("TRANSCRIBER_MODEL", "whisper-1")  # 语音转文本模型
 
+# LLM provider 路由配置（按能力拆分）
+CHAT_PROVIDER = os.getenv("CHAT_PROVIDER", "openai").strip().lower() or "openai"
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "openai").strip().lower() or "openai"
+TRANSCRIBE_PROVIDER = os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower() or "openai"
+
 # Checkpoint 配置（5.2 第一阶段）
 CHECKPOINT_BACKEND = os.getenv("CHECKPOINT_BACKEND", "memory")
 CHECKPOINT_DB_URL = os.getenv("CHECKPOINT_DB_URL", "")

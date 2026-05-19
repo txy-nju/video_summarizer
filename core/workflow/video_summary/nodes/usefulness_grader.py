@@ -1,10 +1,11 @@
 import os
 import json
-from openai import OpenAI
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
 from config.settings import SELF_RAG_MAX_REVISIONS as MAX_REVISIONS
 
-def usefulness_grader_node(state: VideoSummaryState) -> dict:
+def usefulness_grader_node(state: VideoSummaryState, llm_model: BaseModel | None = None) -> dict:
     """
     有用性审查节点。
 
@@ -56,7 +57,7 @@ def usefulness_grader_node(state: VideoSummaryState) -> dict:
     if not api_key:
         raise ValueError("在执行有用性评分节点时，未能找到 OPENAI_API_KEY 环境变量。")
         
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    model_client = llm_model or get_model_for_capability("chat")
 
     # 2. 构造 System Prompt，要求强制 JSON 输出
     system_prompt = (
@@ -90,8 +91,8 @@ def usefulness_grader_node(state: VideoSummaryState) -> dict:
 
     # 3. 执行评估 API 调用
     try:
-        model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
-        response = client.chat.completions.create(
+        model_name = get_model_name_for_capability("chat")
+        result_json_str = model_client.chat_completion(
             model=model_name, 
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -100,8 +101,8 @@ def usefulness_grader_node(state: VideoSummaryState) -> dict:
             response_format={"type": "json_object"}, # 开启 JSON Mode 获取确定性结果
             temperature=0.0, # 评估节点必须保持绝对客观冷静
         )
-        
-        result_json_str = response.choices[0].message.content.strip()
+
+        result_json_str = result_json_str.strip()
         result = json.loads(result_json_str)
         
         # 兼容处理，默认放行

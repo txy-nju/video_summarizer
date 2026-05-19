@@ -4,7 +4,7 @@ import random
 import json
 from typing import Any, List, Dict, Callable, Optional
 
-from openai import OpenAI
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from core.workflow.video_summary.graph import build_video_summary_graph, build_finalization_graph
 from core.workflow.checkpoint_factory import create_checkpointer
@@ -414,8 +414,8 @@ def answer_question_at_timestamp(
             reason="未配置 OPENAI_API_KEY，当前返回的是证据抽取结果（已选取 {} 帧视觉证据）。".format(len(representative_frames)),
         )
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-4o")
+    model_client = get_model_for_capability("chat")
+    model_name = get_model_name_for_capability("chat")
 
     system_prompt = (
         "你是一名严谨的视频证据问答助手。"
@@ -459,7 +459,7 @@ def answer_question_at_timestamp(
     ]
 
     try:
-        response = client.chat.completions.create(
+        answer = model_client.chat_completion(
             model=model_name,
             messages=messages_payload,
             temperature=0.2,
@@ -474,5 +474,4 @@ def answer_question_at_timestamp(
             reason=f"OpenAI API 调用异常: {str(exc)}",
         )
 
-    answer = response.choices[0].message.content
     return answer or "[系统提示] 已完成追问，但模型未返回文本内容。"

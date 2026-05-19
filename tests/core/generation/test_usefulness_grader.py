@@ -56,43 +56,39 @@ class TestUsefulnessGraderNode(unittest.TestCase):
             usefulness_grader_node(self.valid_state)
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123", "OPENAI_BASE_URL": "https://fake.url"})
-    @patch('core.workflow.video_summary.nodes.usefulness_grader.OpenAI')
-    def test_grader_yes_useful(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.usefulness_grader.get_model_for_capability')
+    def test_grader_yes_useful(self, mock_get_model):
         """一般情况 1：内容满足需求，返回 score='yes'"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        
-        mock_response.choices[0].message.content = json.dumps({
+        mock_model = MagicMock()
+        mock_get_model.return_value = mock_model
+
+        mock_model.chat_completion.return_value = json.dumps({
             "score": "yes",
             "reason": ""
         })
-        mock_client.chat.completions.create.return_value = mock_response
         
         result = usefulness_grader_node(self.valid_state)
         
-        mock_client.chat.completions.create.assert_called_once()
+        mock_model.chat_completion.assert_called_once()
         
         # 验证 JSON Mode
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         self.assertEqual(call_kwargs.get("response_format"), {"type": "json_object"})
         
         self.assertEqual(result["usefulness_score"], "yes")
         self.assertEqual(result["feedback_instructions"], "")
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123", "OPENAI_BASE_URL": "https://fake.url"})
-    @patch('core.workflow.video_summary.nodes.usefulness_grader.OpenAI')
-    def test_grader_no_useful(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.usefulness_grader.get_model_for_capability')
+    def test_grader_no_useful(self, mock_get_model):
         """一般情况 2：检测到偏题，返回 score='no' 及反馈指令"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        
-        mock_response.choices[0].message.content = json.dumps({
+        mock_model = MagicMock()
+        mock_get_model.return_value = mock_model
+
+        mock_model.chat_completion.return_value = json.dumps({
             "score": "no",
             "reason": "完全没有提到芯片性能，请大幅补充。"
         })
-        mock_client.chat.completions.create.return_value = mock_response
         
         result = usefulness_grader_node(self.valid_state)
         
@@ -101,14 +97,12 @@ class TestUsefulnessGraderNode(unittest.TestCase):
         self.assertIn("完全没有提到芯片性能", result["feedback_instructions"])
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123", "OPENAI_BASE_URL": "https://fake.url"})
-    @patch('core.workflow.video_summary.nodes.usefulness_grader.OpenAI')
-    def test_human_guidance_included_in_review_requirements(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.usefulness_grader.get_model_for_capability')
+    def test_human_guidance_included_in_review_requirements(self, mock_get_model):
         """第二阶段：有 human_guidance 时，评分输入必须包含该指导信息。"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = json.dumps({"score": "yes", "reason": ""})
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_model = MagicMock()
+        mock_get_model.return_value = mock_model
+        mock_model.chat_completion.return_value = json.dumps({"score": "yes", "reason": ""})
 
         state = self.valid_state.copy()
         state["user_prompt"] = ""
@@ -117,7 +111,7 @@ class TestUsefulnessGraderNode(unittest.TestCase):
         result = usefulness_grader_node(state)
         self.assertEqual(result["usefulness_score"], "yes")
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         messages = call_kwargs.get("messages", [])
         user_msg = [msg["content"] for msg in messages if msg["role"] == "user"][0]
         self.assertIn("人类审批补充指导", user_msg)
@@ -125,16 +119,12 @@ class TestUsefulnessGraderNode(unittest.TestCase):
 
     @patch('builtins.print')
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123"})
-    @patch('core.workflow.video_summary.nodes.usefulness_grader.OpenAI')
-    def test_grader_api_or_json_error(self, mock_openai_class, mock_print):
+    @patch('core.workflow.video_summary.nodes.usefulness_grader.get_model_for_capability')
+    def test_grader_api_or_json_error(self, mock_get_model, mock_print):
         """边界情况 4：API报错或 JSON 解析失败，降级为满足需求 (yes) 防止卡死"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        
-        # 模拟输出非 JSON 格式引发 JSONDecodeError
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = "这是一段普通的文字，不是 JSON"
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_model = MagicMock()
+        mock_get_model.return_value = mock_model
+        mock_model.chat_completion.return_value = "这是一段普通的文字，不是 JSON"
         
         result = usefulness_grader_node(self.valid_state)
         self.assertEqual(result["usefulness_score"], "yes", "非 JSON 响应必须降级放行")
@@ -146,7 +136,7 @@ class TestUsefulnessGraderNode(unittest.TestCase):
         mock_print.reset_mock()
         
         # 模拟网络异常
-        mock_client.chat.completions.create.side_effect = Exception("API Server Timeout")
+        mock_model.chat_completion.side_effect = Exception("API Server Timeout")
         result2 = usefulness_grader_node(self.valid_state)
         self.assertEqual(result2["usefulness_score"], "yes", "网络异常必须降级放行")
 
@@ -155,18 +145,16 @@ class TestUsefulnessGraderNode(unittest.TestCase):
         self.assertTrue(timeout_error_logged, "系统应当详细记录 API 超时导致降级的日志")
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123"})
-    @patch('core.workflow.video_summary.nodes.usefulness_grader.OpenAI')
-    def test_grader_injects_evidence_boundary_into_llm_call(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.usefulness_grader.get_model_for_capability')
+    def test_grader_injects_evidence_boundary_into_llm_call(self, mock_get_model):
         """新增：aggregated_chunk_insights 应当被注入为证据边界，出现在 LLM user_content 中"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = json.dumps({"score": "yes", "reason": ""})
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_model = MagicMock()
+        mock_get_model.return_value = mock_model
+        mock_model.chat_completion.return_value = json.dumps({"score": "yes", "reason": ""})
 
         usefulness_grader_node(self.valid_state)
 
-        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_model.chat_completion.call_args.kwargs
         messages = call_kwargs.get("messages", [])
         user_content = next(
             (m["content"] for m in messages if m.get("role") == "user"), ""
@@ -182,21 +170,19 @@ class TestUsefulnessGraderNode(unittest.TestCase):
         self.assertIn("证据边界", system_content)
 
     @patch.dict(os.environ, {"OPENAI_API_KEY": "fake_key_123"})
-    @patch('core.workflow.video_summary.nodes.usefulness_grader.OpenAI')
-    def test_grader_gracefully_handles_empty_insights(self, mock_openai_class):
+    @patch('core.workflow.video_summary.nodes.usefulness_grader.get_model_for_capability')
+    def test_grader_gracefully_handles_empty_insights(self, mock_get_model):
         """新增：aggregated_chunk_insights 为空时不崩溃，证据边界块不出现在 user_content 中"""
-        mock_client = MagicMock()
-        mock_openai_class.return_value = mock_client
-        mock_response = MagicMock()
-        mock_response.choices[0].message.content = json.dumps({"score": "yes", "reason": ""})
-        mock_client.chat.completions.create.return_value = mock_response
+        mock_model = MagicMock()
+        mock_get_model.return_value = mock_model
+        mock_model.chat_completion.return_value = json.dumps({"score": "yes", "reason": ""})
 
         for empty_val in ("", None, "   "):
             state = {**self.valid_state, "aggregated_chunk_insights": empty_val}
             result = usefulness_grader_node(state)
             self.assertEqual(result["usefulness_score"], "yes")
 
-            call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+            call_kwargs = mock_model.chat_completion.call_args.kwargs
             messages = call_kwargs.get("messages", [])
             user_content = next(
                 (m["content"] for m in messages if m.get("role") == "user"), ""

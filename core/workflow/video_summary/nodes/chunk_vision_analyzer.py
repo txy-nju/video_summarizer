@@ -4,7 +4,8 @@ import time
 import threading
 from typing import Any, Dict, List
 
-from openai import OpenAI
+from core.llm.base import BaseModel
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from config.settings import (
     CHUNK_DEGRADED_MARKER,
@@ -96,6 +97,7 @@ def _llm_vision_chunk_structured(
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
     timeout_seconds: float,
+    llm_model: BaseModel | None = None,
 ) -> Dict[str, Any]:
     api_key = os.getenv("OPENAI_API_KEY")
     base_url = os.getenv("OPENAI_BASE_URL")
@@ -128,8 +130,8 @@ def _llm_vision_chunk_structured(
                 }
             )
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    model_name = os.getenv("OPENAI_VISION_MODEL_NAME", os.getenv("OPENAI_MODEL_NAME", "gpt-4o"))
+    model_client = llm_model or get_model_for_capability("vision")
+    model_name = get_model_name_for_capability("vision")
     system_prompt = (
         "你是严谨的视频分片视觉分析助手。请严格遵守以下证据规则：\n"
         "1. 一级证据 (observation)：只能描述你在关键帧图片中直接看到的客观画面、动作或文字。\n"
@@ -143,7 +145,7 @@ def _llm_vision_chunk_structured(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": content},
     ]
-    response = client.chat.completions.create(
+    raw_content = model_client.chat_completion(
         model=model_name,
         messages=messages_payload,
         temperature=0.2,
@@ -151,7 +153,6 @@ def _llm_vision_chunk_structured(
         response_format={"type": "json_object"},
         timeout=timeout_seconds,
     )
-    raw_content = response.choices[0].message.content or ""
     try:
         parsed = json.loads(raw_content)
     except Exception:
@@ -169,6 +170,7 @@ def _run_vision_with_retry(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    llm_model: BaseModel | None = None,
 ) -> tuple[Dict[str, Any], str, int]:
     last_error: Exception | None = None
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
@@ -180,6 +182,7 @@ def _run_vision_with_retry(
                 structured_global_context=structured_global_context,
                 previous_chunk_summaries=previous_chunk_summaries,
                 timeout_seconds=CHUNK_WORKER_TIMEOUT_SECONDS,
+                llm_model=llm_model,
             )
             return structured, "ok", attempt
         except Exception as exc:
@@ -199,6 +202,7 @@ def _process_single_chunk_vision(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    llm_model: BaseModel | None = None,
 ) -> tuple[str, ChunkResult]:
     started = time.perf_counter()
 
@@ -229,6 +233,7 @@ def _process_single_chunk_vision(
             user_prompt,
             structured_global_context,
             previous_chunk_summaries,
+            llm_model,
         )
         insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:vision:{vision_status}:empty_summary"
 
