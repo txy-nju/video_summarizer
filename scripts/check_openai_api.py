@@ -203,19 +203,22 @@ def test_vision() -> bool:
         _record("Vision 多模态", False, _extract_error_detail(exc))
         return False
 
-    # 生成一张 1x1 纯蓝 PNG 作为测试图片
-    def _make_1x1_blue_png() -> bytes:
+    # 生成一张 64x64 纯蓝 PNG 作为测试图片（满足各厂商最小分辨率限制）
+    def _make_test_png() -> bytes:
         def chunk(chunk_type: bytes, data: bytes) -> bytes:
             c = chunk_type + data
             crc = struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
             return struct.pack(">I", len(data)) + c + crc
 
-        ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
-        raw = b"\x00\x00\x00\xff"
+        w, h = 64, 64
+        ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+        # 每行: 1 字节 filter(0) + w*3 字节 RGB 像素
+        row = b"\x00" + b"\x00\x00\xff" * w  # 蓝色
+        raw = row * h
         compressed = zlib.compress(raw)
         return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
 
-    img_b64 = base64.b64encode(_make_1x1_blue_png()).decode("utf-8")
+    img_b64 = base64.b64encode(_make_test_png()).decode("utf-8")
 
     try:
         response = vision_model.chat_completion(

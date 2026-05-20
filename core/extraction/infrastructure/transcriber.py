@@ -206,7 +206,7 @@ class AudioTranscriber:
 
     def transcribe(self, audio_path: Path) -> str:
         """
-        调用 Whisper API 将音频转录为 JSON 格式的文本。
+        将音频转录为 JSON 格式的文本。
         若音频超过 25MB，自动切段分批转录后合并时间戳。
 
         Args:
