@@ -43,3 +43,12 @@ def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
         return checkpointer
 
     raise ValueError(f"Unsupported CHECKPOINT_BACKEND: {backend}")
+
+
+def get_checkpoint_snapshot(*, backend: str, thread_id: str, postgres_url: str = "") -> dict[str, Any] | None:
+    """按 thread_id 读取 checkpoint 快照，不存在时返回 None。"""
+    checkpointer = create_checkpointer(backend, postgres_url)
+    checkpoint = checkpointer.get({"configurable": {"thread_id": thread_id}})
+    if isinstance(checkpoint, dict):
+        return checkpoint
+    return None
