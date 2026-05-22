@@ -231,7 +231,13 @@ class VideoResourceService:
             message="Transcribing audio",
         )
 
-    def mark_transcription_completed(self, *, video_id: str, full_transcript: str) -> None:
+    def mark_transcription_completed(
+        self,
+        *,
+        video_id: str,
+        full_transcript: str,
+        transcript_segments: list | None = None,
+    ) -> None:
         """System-only hook: set transcribe status to COMPLETED with transcript payload."""
         video = self._repository.get_by_id_system(video_id)
         if video is None:
@@ -240,6 +246,7 @@ class VideoResourceService:
             video_id,
             TranscribeStatus.COMPLETED,
             full_transcript=full_transcript,
+            transcript_segments=transcript_segments,
         )
         self._publish_status_update(
             user_id=video.owner_id,

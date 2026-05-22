@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 
@@ -59,21 +60,40 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
         with storage_client.materialize_to_local_path(video.oss_key) as video_path:
             audio_path = extractor.extract_audio(video_path)
 
-        transcript = ""
+        full_text = ""
+        segments = None
         if audio_path:
             api_key = os.getenv("OPENAI_API_KEY", "")
             base_url = os.getenv("OPENAI_BASE_URL") or None
             transcriber = AudioTranscriber(api_key=api_key, base_url=base_url)
-            transcript = transcriber.transcribe(audio_path)
+            raw = transcriber.transcribe(audio_path)
+            try:
+                parsed = json.loads(raw)
+                full_text = parsed.get("text", raw)
+                segments = parsed.get("segments") or None
+            except (json.JSONDecodeError, AttributeError):
+                full_text = raw
+                segments = None
 
-        service.mark_transcription_completed(video_id=video_id, full_transcript=transcript)
+        service.mark_transcription_completed(
+            video_id=video_id,
+            full_transcript=full_text,
+            transcript_segments=segments,
+        )
+
+        from backend.tasks.vector_tasks import async_embed_transcript_chunks_background
+        async_embed_transcript_chunks_background.apply_async(
+            args=[video_id],
+            kwargs={"trace_id": trace_id},
+            queue="low_priority",
+        )
         logger.info(
             "async_transcribe_video completed: video_id=%s, trace_id=%s, transcript_length=%d",
             video_id,
             trace_id,
-            len(transcript),
+            len(full_text),
         )
-        return {"video_id": video_id, "status": "COMPLETED", "trace_id": trace_id, "transcript_length": len(transcript)}
+        return {"video_id": video_id, "status": "COMPLETED", "trace_id": trace_id, "transcript_length": len(full_text)}
 
     except Exception as exc:
         logger.exception("async_transcribe_video failed for video_id=%s trace_id=%s", video_id, trace_id)

@@ -158,6 +158,7 @@ class VideoResourceRepository:
         status: TranscribeStatus,
         *,
         full_transcript: str | None = None,
+        transcript_segments: list | None = None,
     ) -> None:
         row = self._session.query(VideoResource).filter(
             VideoResource.video_id == video_id,
@@ -167,6 +168,8 @@ class VideoResourceRepository:
         row.transcribe_status = status
         if full_transcript is not None:
             row.full_transcript = full_transcript
+        if transcript_segments is not None:
+            row.transcript_segments = transcript_segments
         self._session.commit()
 
     def update_frame_extraction(
