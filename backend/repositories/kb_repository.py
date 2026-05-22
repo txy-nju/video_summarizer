@@ -209,3 +209,23 @@ class KnowledgeBaseRepository:
             select(kb_video_relation_table.c.video_id).where(kb_video_relation_table.c.kbid == kbid)
         ).all()
         return [str(row[0]) for row in rows]
+
+    # ── 系统级只读查询（后台任务，无 owner_id 上下文）─────────────────
+
+    def get_by_id_system(self, kbid: str) -> KnowledgeBaseRecord | None:
+        """系统级查询，不校验 owner，仅供后台任务使用。"""
+        row = (
+            self._session.query(KnowledgeBase)
+            .filter(KnowledgeBase.kbid == kbid)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return self._to_record(row)
+
+    def get_linked_video_ids_system(self, kbid: str) -> list[str]:
+        """系统级查询，不校验 owner，仅供后台任务使用。"""
+        rows = self._session.execute(
+            select(kb_video_relation_table.c.video_id).where(kb_video_relation_table.c.kbid == kbid)
+        ).all()
+        return [str(row[0]) for row in rows]

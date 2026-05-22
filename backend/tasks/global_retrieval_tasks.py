@@ -1,6 +1,5 @@
 """
-全局检索域异步任务：知识库向量集合重建等后台作业。
-当前为占位实现；向量库集成在步骤 7（知识检索域）完成后填充。
+全局检索域异步任务：知识库向量集合重建与清理。
 """
 
 from __future__ import annotations
@@ -18,12 +17,300 @@ logger = logging.getLogger(__name__)
 )
 def async_rebuild_vector_collection(kbid: str) -> dict:
     """
-    重建知识库向量集合（知识库删除/重建时触发）。
-    占位实现：向量库集成完成前跳过执行，仅记录日志。
+    全量重建知识库向量集合。
+    1. 查询 KB 的 vector_collection_name 与所有关联视频
+    2. 删除 Chroma + BM25 中该 collection 的所有数据
+    3. 重新摄取各视频的转录文本
+    source_path 使用 transcript://kb/{collection}/{video_id}，
+    与单视频 collection（transcript://video/{video_id}）的 source_path 不同，
+    避免 Chroma chunk_id 冲突。
     """
-    # TODO: 步骤 7 实现：Drop + Recreate vector collection for kbid
-    logger.info(
-        "async_rebuild_vector_collection: kbid=%s (placeholder, vector integration pending)",
-        kbid,
+    from backend.db.session import SessionLocal
+    from backend.repositories.kb_repository import KnowledgeBaseRepository
+    from backend.repositories.video_resource_repository import VideoResourceRepository
+
+    db = SessionLocal()
+    try:
+        kb_repo = KnowledgeBaseRepository(db_session=db)
+        kb = kb_repo.get_by_id_system(kbid)
+        if kb is None:
+            logger.warning("async_rebuild_vector_collection: kbid=%s not found in DB", kbid)
+            return {"kbid": kbid, "status": "NOT_FOUND"}
+
+        collection_name = kb.vector_collection_name or f"kb_{kbid}"
+        video_ids = kb_repo.get_linked_video_ids_system(kbid)
+
+        if not video_ids:
+            logger.info(
+                "async_rebuild_vector_collection: kbid=%s collection=%s no linked videos, purging only",
+                kbid, collection_name,
+            )
+            _purge_chroma_collection(collection_name)
+            _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
+            return {"kbid": kbid, "collection": collection_name, "status": "PURGED", "videos_ingested": 0}
+
+        # 清空旧 collection 数据（先删后建，保证幂等）
+        _purge_chroma_collection(collection_name)
+        _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
+
+        video_repo = VideoResourceRepository(db_session=db)
+        ingested = 0
+        skipped = 0
+        for vid in video_ids:
+            video = video_repo.get_by_id_system(vid)
+            if video is None:
+                continue
+            transcript = getattr(video, "full_transcript", None) or ""
+            if not transcript.strip():
+                skipped += 1
+                continue
+            base_metadata = {
+                "source_path": f"transcript://kb/{collection_name}/{vid}",
+                "video_id": vid,
+                "owner_id": str(getattr(video, "owner_id", "")),
+                "doc_type": "transcript",
+            }
+            segments = getattr(video, "transcript_segments", None) or []
+            from backend.tasks.vector_tasks import _run_rag_ingestion_with_segments, _run_rag_ingestion
+            if segments:
+                _run_rag_ingestion_with_segments(
+                    segments=segments,
+                    collection=collection_name,
+                    base_metadata=base_metadata,
+                )
+            else:
+                _run_rag_ingestion(
+                    text=transcript,
+                    collection=collection_name,
+                    metadata=base_metadata,
+                )
+            ingested += 1
+
+        logger.info(
+            "async_rebuild_vector_collection: kbid=%s collection=%s ingested=%d skipped=%d",
+            kbid, collection_name, ingested, skipped,
+        )
+        return {
+            "kbid": kbid,
+            "collection": collection_name,
+            "status": "COMPLETED",
+            "videos_ingested": ingested,
+            "videos_skipped": skipped,
+        }
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="backend.tasks.global_retrieval_tasks.async_add_video_to_vector_collection",
+    acks_late=True,
+)
+def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
+    """
+    增量摄取：将单个视频的转录文本追加到知识库向量集合。
+    - source_path 使用 transcript://kb/{collection}/{video_id}，
+      与单视频 collection 的 source_path（transcript://video/{video_id}）不同，
+      保证 Chroma chunk_id 唯一，避免互相覆盖。
+    - Chroma upsert 天然幂等，重复调用不会产生重复数据。
+    - Embedding 调用量 = O(1 个视频)。
+    """
+    from backend.db.session import SessionLocal
+    from backend.repositories.kb_repository import KnowledgeBaseRepository
+    from backend.repositories.video_resource_repository import VideoResourceRepository
+
+    db = SessionLocal()
+    try:
+        kb_repo = KnowledgeBaseRepository(db_session=db)
+        kb = kb_repo.get_by_id_system(kbid)
+        if kb is None:
+            logger.warning("async_add_video_to_vector_collection: kbid=%s not found", kbid)
+            return {"kbid": kbid, "video_id": video_id, "status": "KB_NOT_FOUND"}
+
+        collection_name = kb.vector_collection_name or f"kb_{kbid}"
+        video_repo = VideoResourceRepository(db_session=db)
+        video = video_repo.get_by_id_system(video_id)
+        if video is None:
+            return {"kbid": kbid, "video_id": video_id, "status": "VIDEO_NOT_FOUND"}
+
+        transcript = getattr(video, "full_transcript", None) or ""
+        if not transcript.strip():
+            logger.info(
+                "async_add_video_to_vector_collection: kbid=%s video_id=%s empty transcript, skip",
+                kbid, video_id,
+            )
+            return {"kbid": kbid, "video_id": video_id, "status": "SKIPPED", "reason": "empty transcript"}
+
+        if _is_video_indexed_in_collection(collection_name, video_id):
+            logger.info(
+                "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s already indexed, skip",
+                kbid, collection_name, video_id,
+            )
+            return {"kbid": kbid, "collection": collection_name, "video_id": video_id, "status": "ALREADY_INDEXED"}
+
+        base_metadata = {
+            "source_path": f"transcript://kb/{collection_name}/{video_id}",
+            "video_id": video_id,
+            "owner_id": str(getattr(video, "owner_id", "")),
+            "doc_type": "transcript",
+        }
+        segments = getattr(video, "transcript_segments", None) or []
+        from backend.tasks.vector_tasks import _run_rag_ingestion_with_segments, _run_rag_ingestion
+        if segments:
+            _run_rag_ingestion_with_segments(
+                segments=segments,
+                collection=collection_name,
+                base_metadata=base_metadata,
+            )
+        else:
+            _run_rag_ingestion(
+                text=transcript,
+                collection=collection_name,
+                metadata=base_metadata,
+            )
+
+        logger.info(
+            "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s ingested",
+            kbid, collection_name, video_id,
+        )
+        return {"kbid": kbid, "collection": collection_name, "video_id": video_id, "status": "COMPLETED"}
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    name="backend.tasks.global_retrieval_tasks.async_remove_video_from_vector_collection",
+    acks_late=True,
+)
+def async_remove_video_from_vector_collection(kbid: str, video_id: str) -> dict:
+    """
+    增量删除：从知识库向量集合中精准删除指定视频的所有 chunk。
+    - Chroma：双字段过滤 {collection, video_id}
+    - BM25：按 source_path 前缀精准移除，重算 IDF 后保存
+    无需重新摄取任何视频，Embedding 调用量 = 0。
+    """
+    from backend.db.session import SessionLocal
+    from backend.repositories.kb_repository import KnowledgeBaseRepository
+
+    db = SessionLocal()
+    try:
+        kb_repo = KnowledgeBaseRepository(db_session=db)
+        kb = kb_repo.get_by_id_system(kbid)
+        collection_name = (kb.vector_collection_name or f"kb_{kbid}") if kb else f"kb_{kbid}"
+    finally:
+        db.close()
+
+    chroma_deleted = _delete_video_chunks_from_collection(collection_name, video_id)
+    bm25_removed = _remove_bm25_entries_by_prefix(
+        f"transcript://kb/{collection_name}/{video_id}"
     )
-    return {"kbid": kbid, "status": "SKIPPED", "message": "向量集合重建待步骤 7 实现"}
+    logger.info(
+        "async_remove_video_from_vector_collection: kbid=%s collection=%s video_id=%s "
+        "chroma_deleted=%d bm25_removed=%d",
+        kbid, collection_name, video_id, chroma_deleted, bm25_removed,
+    )
+    return {
+        "kbid": kbid, "collection": collection_name, "video_id": video_id,
+        "status": "REMOVED", "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed,
+    }
+
+
+@celery_app.task(
+    name="backend.tasks.global_retrieval_tasks.async_purge_vector_collection",
+    acks_late=True,
+)
+def async_purge_vector_collection(collection_name: str) -> dict:
+    """
+    清理向量集合中属于 collection_name 的所有 chunk（KB 删除时调用）。
+    collection_name 由调用方（kb_service）在 DB 删除前传入。
+    同步清理 Chroma + BM25。
+    """
+    chroma_deleted = _purge_chroma_collection(collection_name)
+    bm25_removed = _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
+    logger.info(
+        "async_purge_vector_collection: collection=%s chroma_deleted=%d bm25_removed=%d",
+        collection_name, chroma_deleted, bm25_removed,
+    )
+    return {"collection": collection_name, "status": "PURGED",
+            "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed}
+
+
+# ── 工具函数 ────────────────────────────────────────────────────────────────
+
+def _purge_chroma_collection(collection_name: str) -> int:
+    """用 delete_by_metadata 删除 Chroma 中所有 collection == collection_name 的向量记录。"""
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        settings = build_rag_settings()
+        store = ChromaStore.from_settings(settings.vector_store)
+        return store.delete_by_metadata({"collection": collection_name})
+    except Exception:
+        logger.exception("_purge_chroma_collection: failed for collection=%s", collection_name)
+        return 0
+
+
+def _delete_video_chunks_from_collection(collection_name: str, video_id: str) -> int:
+    """精准删除指定 collection 中属于 video_id 的所有 chunk（双字段过滤）。"""
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        settings = build_rag_settings()
+        store = ChromaStore.from_settings(settings.vector_store)
+        return store.delete_by_metadata({"collection": collection_name, "video_id": video_id})
+    except Exception:
+        logger.exception(
+            "_delete_video_chunks_from_collection: failed collection=%s video_id=%s",
+            collection_name, video_id,
+        )
+        return 0
+
+
+def _is_video_indexed_in_collection(collection_name: str, video_id: str) -> bool:
+    """检查 Chroma 中是否已存在该 KB collection 内属于 video_id 的向量数据。
+    双字段过滤 {collection, video_id}，limit=1，开销极低。
+    """
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        settings = build_rag_settings()
+        store = ChromaStore.from_settings(settings.vector_store)
+        results = store.get_by_metadata(
+            {"collection": collection_name, "video_id": video_id}, limit=1
+        )
+        return len(results) > 0
+    except Exception:
+        logger.exception(
+            "_is_video_indexed_in_collection: check failed collection=%s video_id=%s, will re-ingest",
+            collection_name, video_id,
+        )
+        return False
+
+
+def _remove_bm25_entries_by_prefix(source_path_prefix: str) -> int:
+    """
+    从全局 BM25 索引中删除 source_path 包含指定前缀的所有文档条目，
+    随后重算 IDF 并保存。不依赖 embedding，调用代价极低。
+
+    原理：BM25Indexer._documents 是以 chunk_id 为 key 的字典，
+    每条目记录 {source_path, terms, doc_length}。直接过滤再重建即可。
+    """
+    try:
+        from modular_rag.ingestion.storage.bm25_indexer import BM25Indexer
+        indexer = BM25Indexer()
+        if not indexer.index_path.exists():
+            return 0
+        indexer.load()
+        before = len(indexer._documents)
+        indexer._documents = {
+            k: v for k, v in indexer._documents.items()
+            if source_path_prefix not in v.get("source_path", "")
+        }
+        removed = before - len(indexer._documents)
+        if removed:
+            # rebuild=False + 空 records → 只重算 IDF 并落盘，不新增任何条目
+            indexer.build([], rebuild=False)
+        return removed
+    except Exception:
+        logger.exception("_remove_bm25_entries_by_prefix: failed prefix=%s", source_path_prefix)
+        return 0
+

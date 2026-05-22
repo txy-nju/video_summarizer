@@ -43,6 +43,14 @@ def async_embed_transcript_chunks_background(video_id: str, trace_id: str = "") 
             return {"video_id": video_id, "status": "SKIPPED", "reason": "empty transcript"}
 
         collection = f"video_{video_id}"
+
+        if _is_collection_indexed(collection):
+            logger.info(
+                "async_embed_transcript_chunks_background: video_id=%s already indexed, skip",
+                video_id,
+            )
+            return {"video_id": video_id, "status": "ALREADY_INDEXED", "collection": collection}
+
         base_metadata = {
             "source_path": f"transcript://video/{video_id}",
             "video_id": video_id,
@@ -116,4 +124,20 @@ def _run_rag_ingestion(text: str, collection: str, metadata: dict) -> None:
     settings = build_rag_settings()
     pipeline = IngestionPipeline(settings=settings, loader=loader)
     pipeline.run_docs(docs=docs, collection=collection)
+
+
+def _is_collection_indexed(collection: str) -> bool:
+    """检查 Chroma 中是否已存在属于该逻辑 collection 的向量数据。
+    用 limit=1 仅探测首条记录，避免加载全量数据，开销极低。
+    """
+    try:
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        settings = build_rag_settings()
+        store = ChromaStore.from_settings(settings.vector_store)
+        results = store.get_by_metadata({"collection": collection}, limit=1)
+        return len(results) > 0
+    except Exception:
+        logger.exception("_is_collection_indexed: check failed for collection=%s, will re-ingest", collection)
+        return False
 

@@ -72,8 +72,17 @@ class KnowledgeBaseService:
         return self._to_view(record)
 
     def delete_knowledge_base(self, *, owner_id: str, kbid: str) -> bool:
+        # 在 DB 删除前取出 collection_name，删除后 background task 将无法查到
+        record = self._repository.get_by_owner_and_id(owner_id, kbid)
+        collection_name = (record.vector_collection_name or f"kb_{kbid}") if record else None
         # Cascade delete of kb_video_relations is handled by database ON DELETE CASCADE
         deleted = self._repository.delete_by_owner_and_id(owner_id, kbid)
+        if deleted and collection_name:
+            from backend.tasks.global_retrieval_tasks import async_purge_vector_collection
+            async_purge_vector_collection.apply_async(
+                args=[collection_name],
+                queue="low_priority",
+            )
         return deleted
 
     def add_video_to_knowledge_base(self, *, owner_id: str, kbid: str, video_id: str) -> bool:
@@ -84,6 +93,8 @@ class KnowledgeBaseService:
 
         # Use new Repository method that operates on ORM relationship
         self._repository.add_video_to_kb(owner_id=owner_id, kbid=kbid, video_id=video_id)
+        from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
+        async_add_video_to_vector_collection.apply_async(args=[kbid, video_id], queue="low_priority")
         return True
 
     def list_knowledge_base_videos(self, *, owner_id: str, kbid: str, page: int, page_size: int) -> tuple[list[KnowledgeBaseVideoItem], dict] | None:
@@ -115,8 +126,9 @@ class KnowledgeBaseService:
         if kb is None or video is None:
             return False
 
-        # Delete semantics are idempotent; missing relation is treated as no-op success.
         self._repository.remove_video_from_kb(owner_id=owner_id, kbid=kbid, video_id=video_id)
+        from backend.tasks.global_retrieval_tasks import async_remove_video_from_vector_collection
+        async_remove_video_from_vector_collection.apply_async(args=[kbid, video_id], queue="low_priority")
         return True
 
     def _to_view(self, record: KnowledgeBaseRecord) -> KnowledgeBaseView:

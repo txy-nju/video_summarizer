@@ -239,7 +239,7 @@ class RagAgentService:
         db = SessionLocal()
         try:
             repo = KnowledgeBaseRepository(db_session=db)
-            kb = repo.get_by_id(kbid)
+            kb = repo.get_by_id_system(kbid)
             return kb.vector_collection_name if kb and kb.vector_collection_name else f"kb_{kbid}"
         finally:
             db.close()
