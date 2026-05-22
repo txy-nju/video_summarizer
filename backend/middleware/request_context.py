@@ -10,7 +10,8 @@ def register_request_context_middleware(app: FastAPI) -> None:
     @app.middleware("http")
     async def request_context_middleware(request: Request, call_next):
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
-        trace_id = request.headers.get("x-trace-id") or request_id
+        existing_trace_id = str(getattr(request.state, "trace_id", ""))
+        trace_id = request.headers.get("x-trace-id") or existing_trace_id or request_id
         request.state.request_id = request_id
         request.state.trace_id = trace_id
         request.state.user_id = request.headers.get("x-user-id", "anonymous")

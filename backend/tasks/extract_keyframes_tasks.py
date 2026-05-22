@@ -71,7 +71,7 @@ def _sanitize_frames_for_db(
     default_retry_delay=30,
     acks_late=True,
 )
-def async_extract_keyframes(self, video_id: str) -> dict:
+def async_extract_keyframes(self, video_id: str, trace_id: str = "") -> dict:
     """
     提取指定视频的关键帧元数据并持久化至数据库。
     base64 图片数据不入库；oss_key 按计划命名规则生成。
@@ -83,8 +83,8 @@ def async_extract_keyframes(self, video_id: str) -> dict:
 
         video = service.get_video_resource_for_system(video_id=video_id)
         if video is None:
-            logger.error("async_extract_keyframes: video_id=%s not found", video_id)
-            return {"video_id": video_id, "status": "NOT_FOUND"}
+            logger.error("async_extract_keyframes: video_id=%s trace_id=%s not found", video_id, trace_id)
+            return {"video_id": video_id, "status": "NOT_FOUND", "trace_id": trace_id}
 
         if not (video.oss_key and video.oss_key.strip()):
             raise FileNotFoundError(
@@ -108,18 +108,20 @@ def async_extract_keyframes(self, video_id: str) -> dict:
             keyframes_oss_prefix=oss_prefix,
         )
         logger.info(
-            "async_extract_keyframes completed: video_id=%s, keyframes_count=%d",
+            "async_extract_keyframes completed: video_id=%s, trace_id=%s, keyframes_count=%d",
             video_id,
+            trace_id,
             len(keyframes_for_db),
         )
         return {
             "video_id": video_id,
             "status": "COMPLETED",
+            "trace_id": trace_id,
             "keyframes_count": len(keyframes_for_db),
         }
 
     except Exception as exc:
-        logger.exception("async_extract_keyframes failed for video_id=%s", video_id)
+        logger.exception("async_extract_keyframes failed for video_id=%s trace_id=%s", video_id, trace_id)
         try:
             fail_service, fail_db = _create_video_resource_service()
             fail_service.mark_frame_extraction_failed(video_id=video_id)

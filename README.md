@@ -221,11 +221,42 @@ OPENAI_MODEL_NAME=gpt-4o
 OPENAI_VISION_MODEL_NAME=gpt-4o
 TRANSCRIBER_MODEL=whisper-1
 TAVILY_API_KEY=tvly-xxxx
+OTEL_ENABLED=true
+OTEL_EXPORTER=otlp
+OTEL_SERVICE_NAME=video-summarizer-backend
+OTEL_SAMPLE_RATIO=1.0
+OTEL_OTLP_ENDPOINT=http://localhost:4317
 
 # Checkpoint 配置
 CHECKPOINT_BACKEND=memory
 # CHECKPOINT_DB_URL=postgresql://user:password@host:5432/dbname
 ```
+
+## 可观测性快速联调
+
+1. 启动 Jaeger：
+
+```powershell
+./scripts/start_jaeger_local.ps1
+```
+
+2. 启动后端与 Celery Worker（确保加载 .env 中 OTEL 配置）。
+
+3. 触发一条带 tracing 的请求后，执行 smoke 检查：
+
+```powershell
+./scripts/check_jaeger_smoke.ps1
+```
+
+4. 打开 Jaeger UI：
+
+```text
+http://localhost:16686
+```
+
+5. 详细排查与运行门禁请参考：
+
+- docs/OBSERVABILITY_RUNBOOK_CN.md
 
 ### 环境变量说明
 
@@ -240,7 +271,6 @@ CHECKPOINT_BACKEND=memory
 
 **分片调度与波次**
 - `MAP_CHUNK_SECONDS`：每个分片时长，默认 120s
-- `MAP_MAX_PARALLELISM`：图级并行度，默认 4
 - `WAVE_DISPATCH_SIZE`：每波次派发 chunk 数，默认同 `MAP_MAX_PARALLELISM`
 - `CHUNK_WORKER_TIMEOUT_SECONDS`：worker 超时，默认 45s
 - `CHUNK_WORKER_MAX_RETRIES`：worker 重试次数，默认 1

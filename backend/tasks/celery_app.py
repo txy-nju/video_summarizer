@@ -7,8 +7,18 @@ Broker 与 Result Backend 均由 backend/config.py 的 Settings 注入，
 
 from celery import Celery
 from backend.config import get_settings
+from backend.observability.tracing import configure_tracing
+from backend.tasks.task_trace_hooks import register_task_trace_hooks
 
 _settings = get_settings()
+configure_tracing(
+    enabled=_settings.otel_enabled,
+    service_name=_settings.otel_service_name,
+    exporter=_settings.otel_exporter,
+    sample_ratio=_settings.otel_sample_ratio,
+    jaeger_endpoint=_settings.otel_jaeger_endpoint,
+    otlp_endpoint=_settings.otel_otlp_endpoint,
+)
 
 celery_app = Celery(
     "video_summarizer",
@@ -40,6 +50,8 @@ celery_app.conf.update(
     # 结果保留时长：24 小时
     result_expires=86400,
 )
+
+register_task_trace_hooks()
 
 
 # ---------------------------------------------------------------------------

@@ -17,6 +17,8 @@ from config.settings import (
 from core.workflow.video_summary.state import VideoSummaryState
 from core.workflow.video_summary.tools.search_tools import execute_tavily_search
 from core.workflow.video_summary.utils.frame_utils import resolve_frame_image_base64
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
 
 _VISION_SEARCH_CACHE: Dict[str, str] = {}
 _VISION_SEARCH_CACHE_LOCK = threading.Lock()
@@ -98,6 +100,7 @@ def _llm_vision_chunk_structured(
     previous_chunk_summaries: List[Dict[str, Any]],
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> Dict[str, Any]:
     if not resolve_api_key("vision"):
         times = [str(frame.get("time", "未知")) for frame in frames[:8]]
@@ -143,14 +146,21 @@ def _llm_vision_chunk_structured(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": content},
     ]
-    raw_content = model_client.chat_completion(
+    with trace_llm_call(
+        provider="openai_compatible",
         model=model_name,
-        messages=messages_payload,
-        temperature=0.2,
-        max_tokens=1024,
-        response_format={"type": "json_object"},
-        timeout=timeout_seconds,
-    )
+        scope="chunk_vision_worker",
+        scope_id=chunk_id,
+        workflow_state="ANALYSIS",
+    ):
+        raw_content = model_client.chat_completion(
+            model=model_name,
+            messages=messages_payload,
+            temperature=0.2,
+            max_tokens=1024,
+            response_format={"type": "json_object"},
+            timeout=timeout_seconds,
+        )
     try:
         parsed = json.loads(raw_content)
     except Exception:
@@ -169,6 +179,7 @@ def _run_vision_with_retry(
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> tuple[Dict[str, Any], str, int]:
     last_error: Exception | None = None
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
@@ -181,6 +192,7 @@ def _run_vision_with_retry(
                 previous_chunk_summaries=previous_chunk_summaries,
                 timeout_seconds=CHUNK_WORKER_TIMEOUT_SECONDS,
                 llm_model=llm_model,
+                trace_id=trace_id,
             )
             return structured, "ok", attempt
         except Exception as exc:
@@ -201,6 +213,7 @@ def _process_single_chunk_vision(
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> tuple[str, ChunkResult]:
     started = time.perf_counter()
 
@@ -232,6 +245,7 @@ def _process_single_chunk_vision(
             structured_global_context,
             previous_chunk_summaries,
             llm_model,
+            trace_id,
         )
         insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:vision:{vision_status}:empty_summary"
 
@@ -312,15 +326,31 @@ def chunk_vision_worker_node(state: VideoSummaryState) -> dict:
     previous_chunk_summaries = state.get("previous_chunk_summaries", [])
     if not isinstance(previous_chunk_summaries, list):
         previous_chunk_summaries = []
+    trace_id = str(state.get("trace_id", ""))
 
-    _, merged = _process_single_chunk_vision(
-        chunk_id,
-        frame_indexes,
-        keyframes,
-        keyframes_base_path,
-        user_prompt,
-        structured_global_context,
-        previous_chunk_summaries,
-    )
+    with start_span(
+        build_span_name("workflow", "chunk_vision", "analyze"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_chunk",
+            "scope_id": chunk_id,
+            "workflow_state": "ANALYSIS",
+        },
+    ):
+        _, merged = _process_single_chunk_vision(
+            chunk_id,
+            frame_indexes,
+            keyframes,
+            keyframes_base_path,
+            user_prompt,
+            structured_global_context,
+            previous_chunk_summaries,
+            trace_id=trace_id,
+        )
+
+    if str(merged.get("modality_status", {}).get("vision", "ok")).lower() != "ok":
+        error_code = f"VISION_{str(merged.get('modality_status', {}).get('vision', 'FAILED')).upper()}"
+        merged["error_code"] = error_code
+        merged["status"] = "ERROR"
 
     return {"chunk_results": [merged]}

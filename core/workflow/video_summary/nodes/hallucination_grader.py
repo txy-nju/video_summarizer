@@ -3,6 +3,8 @@ from core.llm.base import BaseModel
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
 from config.settings import SELF_RAG_MAX_REVISIONS as MAX_REVISIONS
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
 
 def hallucination_grader_node(state: VideoSummaryState, llm_model: BaseModel | None = None) -> dict:
     """
@@ -34,6 +36,7 @@ def hallucination_grader_node(state: VideoSummaryState, llm_model: BaseModel | N
     aggregated_chunk_insights = state.get("aggregated_chunk_insights", "")
     revision_count = state.get("revision_count", 0)
     structured_global_context = state.get("structured_global_context") or {}
+    trace_id = str(state.get("trace_id", ""))
 
     # 1. 熔断防死循环
     if not draft or revision_count >= MAX_REVISIONS:
@@ -100,35 +103,56 @@ def hallucination_grader_node(state: VideoSummaryState, llm_model: BaseModel | N
     print(f"  -> [Hallucination Grader] Checking for hallucinations (Revision {revision_count})...")
 
     # 3. 执行评估 API 调用
-    try:
-        model_name = get_model_name_for_capability("chat")
-        result_json_str = model_client.chat_completion(
-            model=model_name, 
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            response_format={"type": "json_object"}, # [核心创新] 开启 JSON Mode，获取确定性判决
-            temperature=0.0, # 必须为 0，防止核查员自己产生幻觉
-        )
+    with start_span(
+        build_span_name("workflow", "finalization", "hallucination_check"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_finalization",
+            "scope_id": "hallucination_grader",
+            "workflow_state": "FINAL_GENERATING",
+        },
+    ):
+        try:
+            model_name = get_model_name_for_capability("chat")
+            with trace_llm_call(
+                provider="openai_compatible",
+                model=model_name,
+                scope="hallucination_grader",
+                scope_id="final_summary",
+                workflow_state="FINAL_GENERATING",
+            ):
+                result_json_str = model_client.chat_completion(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    response_format={"type": "json_object"}, # [核心创新] 开启 JSON Mode，获取确定性判决
+                    temperature=0.0, # 必须为 0，防止核查员自己产生幻觉
+                )
 
-        result_json_str = result_json_str.strip()
-        result = json.loads(result_json_str)
-        
-        score = result.get("score", "no").lower()
-        reason = result.get("reason", "")
-        faulty_timestamp = result.get("faulty_timestamp", "")
-        
-        if score == "yes":
-            print(f"  -> [Hallucination Grader] Result: YES (Hallucination detected at {faulty_timestamp}). Routing back to Drafter.")
-            feedback = f"【幻觉拦截 - 发生位置 {faulty_timestamp}】：\n{reason}"
-            return {"hallucination_score": "yes", "feedback_instructions": feedback}
-        else:
-            print("  -> [Hallucination Grader] Result: NO (Factually grounded). Proceeding to Usefulness Check.")
-            return {"hallucination_score": "no", "feedback_instructions": ""}
-            
-    except Exception as e:
-        # [增强可观察性] 当异常降级发生时，必须记录日志以供调试追溯
-        print(f"  -> [Hallucination Grader] Error or Invalid JSON: {str(e)}. Fallback to NO hallucination.")
-        # 异常兜底，防止 JSON 解析失败或网络异常卡死状态机
-        return {"hallucination_score": "no", "feedback_instructions": ""}
+            result_json_str = result_json_str.strip()
+            result = json.loads(result_json_str)
+
+            score = result.get("score", "no").lower()
+            reason = result.get("reason", "")
+            faulty_timestamp = result.get("faulty_timestamp", "")
+
+            if score == "yes":
+                print(f"  -> [Hallucination Grader] Result: YES (Hallucination detected at {faulty_timestamp}). Routing back to Drafter.")
+                feedback = f"【幻觉拦截 - 发生位置 {faulty_timestamp}】：\n{reason}"
+                return {"hallucination_score": "yes", "feedback_instructions": feedback}
+            else:
+                print("  -> [Hallucination Grader] Result: NO (Factually grounded). Proceeding to Usefulness Check.")
+                return {"hallucination_score": "no", "feedback_instructions": ""}
+
+        except Exception as e:
+            # [增强可观察性] 当异常降级发生时，必须记录日志以供调试追溯
+            print(f"  -> [Hallucination Grader] Error or Invalid JSON: {str(e)}. Fallback to NO hallucination.")
+            # 异常兜底，防止 JSON 解析失败或网络异常卡死状态机
+            return {
+                "hallucination_score": "no",
+                "feedback_instructions": "",
+                "error_code": "HALLUCINATION_GRADER_FAILED",
+                "status": "ERROR",
+            }

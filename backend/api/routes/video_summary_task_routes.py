@@ -160,7 +160,7 @@ async def start_analysis_workflow(
     """
     _ = payload, workflow_service
 
-    trace_id = str(getattr(request.state, "request_id", ""))
+    trace_id = str(getattr(request.state, "trace_id", ""))
     try:
         response_data = task_service.dispatch_start_analysis_workflow(
             owner_id=current_user.user_id,
@@ -195,7 +195,7 @@ async def approve_and_finalize_workflow(
     """
     _ = workflow_service
 
-    trace_id = str(getattr(request.state, "request_id", ""))
+    trace_id = str(getattr(request.state, "trace_id", ""))
     try:
         response_data = task_service.dispatch_approve_and_finalize_workflow(
             owner_id=current_user.user_id,

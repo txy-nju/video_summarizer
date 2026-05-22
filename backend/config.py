@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     oss_local_root: str = Field(default="temp/object_storage", alias="OSS_LOCAL_ROOT")
     oss_presign_ttl_seconds: int = Field(default=3600, alias="OSS_PRESIGN_TTL_SECONDS")
 
+    # --- Observability/OTEL ---
+    otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")
+    otel_exporter: str = Field(default="jaeger", alias="OTEL_EXPORTER")  # jaeger/otlp
+    otel_jaeger_endpoint: str = Field(default="http://localhost:14250", alias="OTEL_JAEGER_ENDPOINT")
+    otel_otlp_endpoint: str = Field(default="http://localhost:4317", alias="OTEL_OTLP_ENDPOINT")
+    otel_service_name: str = Field(default="video-summarizer-backend", alias="OTEL_SERVICE_NAME")
+    otel_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0, alias="OTEL_SAMPLE_RATIO")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

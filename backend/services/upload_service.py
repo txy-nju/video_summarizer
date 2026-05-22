@@ -60,6 +60,7 @@ class UploadService:
         owner_id: str,
         chunk_index: int,
         data: bytes,
+        trace_id: str = "",
     ) -> UploadSessionState:
         """上传单个分片。
 
@@ -104,7 +105,7 @@ class UploadService:
         # 所有分片完成后标记为 uploading_complete，触发最终合并
         if state.is_complete:
             self._repository.update_state(upload_id, "uploading_complete")
-            self._dispatch_finalize(upload_id, owner_id, state.file_name)
+            self._dispatch_finalize(upload_id, owner_id, state.file_name, trace_id=trace_id)
 
         return state
 
@@ -175,12 +176,12 @@ class UploadService:
     # 内部
     # ------------------------------------------------------------------
 
-    def _dispatch_finalize(self, upload_id: str, owner_id: str, file_name: str) -> None:
+    def _dispatch_finalize(self, upload_id: str, owner_id: str, file_name: str, trace_id: str = "") -> None:
         """派发 Celery 任务执行分片合并与 oss_key 写入。"""
         try:
             from backend.tasks.upload_finalize_tasks import async_finalize_upload
 
-            async_finalize_upload.delay(upload_id)
+            async_finalize_upload.delay(upload_id, trace_id)
             logger.info("Dispatched upload finalization: upload_id=%s", upload_id)
         except Exception as exc:
             logger.warning("Failed to dispatch upload finalization: upload_id=%s, error=%s", upload_id, exc)

@@ -316,6 +316,39 @@ def test_start_analysis_workflow_dispatches_celery_task(monkeypatch) -> None:
     assert dispatched["queue"] == "default"
 
 
+def test_start_analysis_workflow_uses_trace_id_from_traceparent(monkeypatch) -> None:
+    token = _login("alice-task-trace-propagation")
+    headers = {"Authorization": f"Bearer {token}", "traceparent": "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"}
+    kbid, video_id = _prepare_assets(token)
+
+    create_response = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id, "user_initial_preference": "trace"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert create_response.status_code == 201
+    task_id = create_response.json()["data"]["task_id"]
+
+    captured: dict[str, tuple] = {}
+
+    def _fake_apply_async(*, args, queue):
+        captured["args"] = args
+        captured["queue"] = queue
+        return SimpleNamespace(id="celery-analysis-trace")
+
+    monkeypatch.setattr(
+        "backend.tasks.workflow_runtime_tasks.async_execute_analysis_workflow.apply_async",
+        _fake_apply_async,
+    )
+
+    with _override_workflow_service(SimpleNamespace()):
+        response = client.post(f"/api/v1/tasks/{task_id}/start-analysis", json={}, headers=headers)
+
+    assert response.status_code == 202
+    args = captured["args"]
+    assert args[5] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
 def test_approve_and_finalize_requires_waiting_state() -> None:
     token = _login("alice-task-approve-state")
     headers = {"Authorization": f"Bearer {token}"}

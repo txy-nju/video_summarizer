@@ -89,6 +89,7 @@ def _merge_chunk_results(base: List[Dict], update: List[Dict]) -> List[Dict]:
 
 
 class VideoSummaryState(TypedDict):
+    trace_id: str                   # 写入: Workflow API；消费: 节点 span 与 LLM tracing
     # 输入层数据
     transcript: str                 # 语音转录结果，通常为 Whisper verbose_json 字符串
     keyframes: List[Dict]           # 关键帧列表，元素至少包含 time，可能包含 image 或 frame_file

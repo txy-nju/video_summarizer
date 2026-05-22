@@ -17,6 +17,8 @@ from config.settings import (
 )
 from core.workflow.video_summary.state import VideoSummaryState
 from core.workflow.video_summary.tools.search_tools import execute_tavily_search
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
 
 _AUDIO_SEARCH_CACHE: Dict[str, str] = {}
 _AUDIO_SEARCH_CACHE_LOCK = threading.Lock()
@@ -145,6 +147,7 @@ def _llm_audio_chunk_structured(
     previous_chunk_summaries: List[Dict[str, Any]],
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> Dict[str, Any]:
     if not resolve_api_key("chat"):
         fallback = f"[chunk={chunk_id}] 音频摘要（降级）:\n" + (chunk_text[:500] if chunk_text else "无可用语音证据")
@@ -163,28 +166,35 @@ def _llm_audio_chunk_structured(
         "3. 如果 transcript 无法提供有效信息，直接在 final_summary 中声明证据不足。\n"
         "输出必须是 JSON 对象，且只包含 observation、context_calibration、final_summary。"
     )
-    raw_content = model_client.chat_completion(
+    with trace_llm_call(
+        provider="openai_compatible",
         model=model_name,
-        messages=[
-            {
-                "role": "system",
-                "content": system_prompt,
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"[chunk_id]\n{chunk_id}\n\n"
-                    f"[user_prompt]\n{user_prompt}\n\n"
-                    f"[structured_global_context]\n{global_context_json}\n\n"
-                    f"[previous_chunk_summaries]\n{previous_summaries_json}\n\n"
-                    f"[chunk_transcript]\n{chunk_text}"
-                ),
-            },
-        ],
-        temperature=0.2,
-        response_format={"type": "json_object"},
-        timeout=timeout_seconds,
-    )
+        scope="chunk_audio_worker",
+        scope_id=chunk_id,
+        workflow_state="ANALYSIS",
+    ):
+        raw_content = model_client.chat_completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"[chunk_id]\n{chunk_id}\n\n"
+                        f"[user_prompt]\n{user_prompt}\n\n"
+                        f"[structured_global_context]\n{global_context_json}\n\n"
+                        f"[previous_chunk_summaries]\n{previous_summaries_json}\n\n"
+                        f"[chunk_transcript]\n{chunk_text}"
+                    ),
+                },
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+            timeout=timeout_seconds,
+        )
     try:
         parsed = json.loads(raw_content)
     except Exception:
@@ -203,6 +213,7 @@ def _run_audio_with_retry(
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> Tuple[Dict[str, Any], str, int]:
     last_error: Exception | None = None
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
@@ -215,6 +226,7 @@ def _run_audio_with_retry(
                 previous_chunk_summaries=previous_chunk_summaries,
                 timeout_seconds=CHUNK_WORKER_TIMEOUT_SECONDS,
                 llm_model=llm_model,
+                trace_id=trace_id,
             )
             return structured, "ok", attempt
         except Exception as exc:
@@ -234,6 +246,7 @@ def _process_single_chunk_audio(
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     started = time.perf_counter()
     chunk_text = _extract_chunk_text(transcript_items, indexes)
@@ -256,6 +269,7 @@ def _process_single_chunk_audio(
             structured_global_context,
             previous_chunk_summaries,
             llm_model,
+            trace_id,
         )
         insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:audio:{audio_status}:empty_summary"
 
@@ -331,15 +345,31 @@ def chunk_audio_worker_node(state: VideoSummaryState) -> dict:
     previous_chunk_summaries = state.get("previous_chunk_summaries", [])
     if not isinstance(previous_chunk_summaries, list):
         previous_chunk_summaries = []
+    trace_id = str(state.get("trace_id", ""))
     transcript_items = _build_transcript_items(_load_transcript_data(transcript))
 
-    _, merged = _process_single_chunk_audio(
-        chunk_id,
-        indexes,
-        transcript_items,
-        user_prompt,
-        structured_global_context,
-        previous_chunk_summaries,
-        None,
-    )
+    with start_span(
+        build_span_name("workflow", "chunk_audio", "analyze"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_chunk",
+            "scope_id": chunk_id,
+            "workflow_state": "ANALYSIS",
+        },
+    ):
+        _, merged = _process_single_chunk_audio(
+            chunk_id,
+            indexes,
+            transcript_items,
+            user_prompt,
+            structured_global_context,
+            previous_chunk_summaries,
+            trace_id=trace_id,
+        )
+
+    if str(merged.get("modality_status", {}).get("audio", "ok")).lower() != "ok":
+        error_code = f"AUDIO_{str(merged.get('modality_status', {}).get('audio', 'FAILED')).upper()}"
+        merged["error_code"] = error_code
+        merged["status"] = "ERROR"
+
     return {"chunk_results": [merged]}

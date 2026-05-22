@@ -18,6 +18,7 @@ from celery import chord, group
 
 from backend.db.session import SessionLocal
 from backend.tasks.celery_app import celery_app
+from backend.observability.tracing import make_http_trace_headers
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def _mark_video_resource_ready(video_id: str) -> bool:
     name="backend.tasks.video_summary_tasks.async_mark_video_resource_ready",
     acks_late=True,
 )
-def async_mark_video_resource_ready(results: list, video_id: str) -> dict:
+def async_mark_video_resource_ready(results: list, video_id: str, trace_id: str = "") -> dict:
     """
     Chord 回调：转录与关键帧抽取并行完成后，填充 extract_completed_at。
     当且仅当两个子任务均状态为 COMPLETED 时才更新，否则仅记录日志。
@@ -48,10 +49,10 @@ def async_mark_video_resource_ready(results: list, video_id: str) -> dict:
         if not marked:
             logger.warning("async_mark_video_resource_ready: video_id=%s not found", video_id)
             return {"video_id": video_id, "status": "NOT_FOUND"}
-        logger.info("async_mark_video_resource_ready: video_id=%s marked ready", video_id)
-        return {"video_id": video_id, "status": "READY"}
+        logger.info("async_mark_video_resource_ready: video_id=%s marked ready trace_id=%s", video_id, trace_id)
+        return {"video_id": video_id, "status": "READY", "trace_id": trace_id}
     except Exception:
-        logger.exception("async_mark_video_resource_ready failed for video_id=%s", video_id)
+        logger.exception("async_mark_video_resource_ready failed for video_id=%s trace_id=%s", video_id, trace_id)
         raise
 
 
@@ -59,7 +60,7 @@ def async_mark_video_resource_ready(results: list, video_id: str) -> dict:
     name="backend.tasks.video_summary_tasks.async_process_video",
     acks_late=True,
 )
-def async_process_video(video_id: str) -> dict:
+def async_process_video(video_id: str, trace_id: str = "") -> dict:
     """
     内容加工域入口任务：
     1. 以 celery.group 并行执行转录 + 关键帧抽取。
@@ -74,22 +75,24 @@ def async_process_video(video_id: str) -> dict:
     from backend.tasks.transcribe_tasks import async_transcribe_video
     from backend.tasks.vector_tasks import async_embed_transcript_chunks_background
 
+    task_headers = make_http_trace_headers(trace_id) if trace_id else {}
     extraction_group = group(
-        async_transcribe_video.s(video_id),
-        async_extract_keyframes.s(video_id),
+        async_transcribe_video.s(video_id, trace_id).set(headers=task_headers),
+        async_extract_keyframes.s(video_id, trace_id).set(headers=task_headers),
     )
     pipeline = chord(
         extraction_group,
-        async_mark_video_resource_ready.s(video_id),
+        async_mark_video_resource_ready.s(video_id, trace_id).set(headers=task_headers),
     )
     pipeline.delay()
 
     # 后台可选向量化：低优先级队列，不影响主流程
     async_embed_transcript_chunks_background.apply_async(
-        args=[video_id],
+        args=[video_id, trace_id],
         queue="low_priority",
         countdown=5,
+        headers=task_headers,
     )
 
-    logger.info("async_process_video dispatched for video_id=%s", video_id)
-    return {"video_id": video_id, "status": "DISPATCHED"}
+    logger.info("async_process_video dispatched for video_id=%s trace_id=%s", video_id, trace_id)
+    return {"video_id": video_id, "status": "DISPATCHED", "trace_id": trace_id}

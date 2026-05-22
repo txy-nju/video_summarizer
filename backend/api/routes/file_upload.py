@@ -107,11 +107,13 @@ async def upload_chunk(
     chunk_index = upload_offset // chunk_size
 
     try:
+        trace_id = str(getattr(request.state, "trace_id", ""))
         state = service.upload_chunk(
             upload_id=upload_id,
             owner_id=current_user.user_id,
             chunk_index=chunk_index,
             data=chunk_data,
+            trace_id=trace_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))

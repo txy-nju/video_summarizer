@@ -31,7 +31,7 @@ def _create_video_resource_service():
     default_retry_delay=30,
     acks_late=True,
 )
-def async_transcribe_video(self, video_id: str) -> dict:
+def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
     """
     转录指定视频的音轨，结果写入 video_resources.full_transcript。
     仅由 async_process_video（通过 celery.group）触发，禁止直接调用。
@@ -42,8 +42,8 @@ def async_transcribe_video(self, video_id: str) -> dict:
 
         video = service.get_video_resource_for_system(video_id=video_id)
         if video is None:
-            logger.error("async_transcribe_video: video_id=%s not found", video_id)
-            return {"video_id": video_id, "status": "NOT_FOUND"}
+            logger.error("async_transcribe_video: video_id=%s trace_id=%s not found", video_id, trace_id)
+            return {"video_id": video_id, "status": "NOT_FOUND", "trace_id": trace_id}
 
         if not (video.oss_key and video.oss_key.strip()):
             raise FileNotFoundError(
@@ -68,14 +68,15 @@ def async_transcribe_video(self, video_id: str) -> dict:
 
         service.mark_transcription_completed(video_id=video_id, full_transcript=transcript)
         logger.info(
-            "async_transcribe_video completed: video_id=%s, transcript_length=%d",
+            "async_transcribe_video completed: video_id=%s, trace_id=%s, transcript_length=%d",
             video_id,
+            trace_id,
             len(transcript),
         )
-        return {"video_id": video_id, "status": "COMPLETED", "transcript_length": len(transcript)}
+        return {"video_id": video_id, "status": "COMPLETED", "trace_id": trace_id, "transcript_length": len(transcript)}
 
     except Exception as exc:
-        logger.exception("async_transcribe_video failed for video_id=%s", video_id)
+        logger.exception("async_transcribe_video failed for video_id=%s trace_id=%s", video_id, trace_id)
         # 写入 FAILED 状态（幂等，忽略二次错误）
         try:
             fail_service, fail_db = _create_video_resource_service()

@@ -207,7 +207,7 @@ async def time_travel_qa_stream(
             detail="Task must have completed analysis phase to support time travel Q&A",
         )
 
-    trace_id = str(getattr(request.state, "request_id", ""))
+    trace_id = str(getattr(request.state, "trace_id", ""))
     try:
         if payload.window_seconds is None:
             answer, output_chunks = service.answer_without_window_via_rag(

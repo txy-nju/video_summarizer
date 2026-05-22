@@ -243,6 +243,38 @@ def test_time_travel_qa_stream_returns_sse_events() -> None:
     assert attachments[0]["name"] == "frame-note.png"
 
 
+def test_time_travel_qa_stream_propagates_trace_id_from_traceparent() -> None:
+    token = _login("alice-qa-trace-stream")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "traceparent": "00-cccccccccccccccccccccccccccccccc-dddddddddddddddd-01",
+    }
+    task_id = _prepare_task(token)
+    _set_task_workflow_state(task_id, WorkflowState.WAITING_USER_APPROVAL)
+
+    captured: dict[str, str] = {}
+
+    class _StubWorkflowService:
+        async def start_time_travel_qa_async(self, **kwargs):
+            captured["trace_id"] = str(kwargs.get("trace_id", ""))
+            return "trace propagation ok"
+
+    with _override_workflow_service(_StubWorkflowService()):
+        response = client.post(
+            f"/api/v1/tasks/{task_id}/time-travel-qa/stream",
+            json={
+                "timestamp": "00:10:00",
+                "question_content": "trace?",
+                "attachments": [],
+                "window_seconds": 20,
+            },
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert captured["trace_id"] == "cccccccccccccccccccccccccccccccc"
+
+
 def test_time_travel_qa_stream_without_window_uses_rag_stream() -> None:
     token = _login("alice-qa-rag-stream")
     headers = {"Authorization": f"Bearer {token}"}

@@ -204,6 +204,7 @@ class WorkflowOrchestrationService:
                     or "请结合画面与语音，给出一个全面、客观的高质量视频总结。",
                     status_callback=callback,
                     thread_id=task_id,  # Use task_id as checkpoint thread_id
+                    trace_id=trace_id,
                 ),
             )
 
@@ -349,6 +350,7 @@ class WorkflowOrchestrationService:
                     edited_aggregated_chunk_insights=edited_aggregated_chunk_insights,
                     human_guidance=human_guidance,
                     status_callback=callback,
+                    trace_id=trace_id,
                 ),
             )
 
@@ -473,6 +475,7 @@ class WorkflowOrchestrationService:
                     question=question,
                     window_seconds=window_seconds,
                     status_callback=callback,
+                    trace_id=trace_id,
                 ),
             )
 

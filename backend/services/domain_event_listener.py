@@ -100,6 +100,7 @@ def _handle_event(event: DomainEvent) -> None:
 def _handle_video_uploaded(event: DomainEvent) -> None:
     """处理 video_uploaded 事件：触发内容加工域 async_process_video。"""
     video_id = event.payload.get("video_id", "")
+    trace_id = event.trace_id or ""
     if not video_id:
         logger.warning("video_uploaded event missing video_id: event_id=%s", event.event_id)
         return
@@ -112,10 +113,11 @@ def _handle_video_uploaded(event: DomainEvent) -> None:
     try:
         repo = VideoResourceRepository(db_session=db)
         service = VideoResourceService(repository=repo)
-        triggered = service.trigger_processing_after_upload(video_id=video_id)
+        triggered = service.trigger_processing_after_upload(video_id=video_id, trace_id=trace_id)
         logger.info(
-            "VideoUploadedEvent processed: video_id=%s, triggered=%s",
+            "VideoUploadedEvent processed: video_id=%s, trace_id=%s, triggered=%s",
             video_id,
+            trace_id,
             triggered,
         )
     finally:

@@ -21,10 +21,10 @@ def _dispatch_async_cascade_delete(video_id: str) -> None:
     async_cascade_delete_video.delay(video_id)
 
 
-def _dispatch_async_process_video(video_id: str) -> None:
+def _dispatch_async_process_video(video_id: str, trace_id: str = "") -> None:
     from backend.tasks.video_summary_tasks import async_process_video
 
-    async_process_video.delay(video_id)
+    async_process_video.delay(video_id, trace_id)
 
 
 class VideoResourceService:
@@ -184,7 +184,7 @@ class VideoResourceService:
 
         return True
 
-    def trigger_processing_after_upload(self, *, video_id: str) -> bool:
+    def trigger_processing_after_upload(self, *, video_id: str, trace_id: str = "") -> bool:
         """System-only hook: trigger async extraction pipeline after upload is finalized."""
         video = self._repository.get_by_id_system(video_id)
         if video is None:
@@ -195,7 +195,7 @@ class VideoResourceService:
             return False
 
         try:
-            _dispatch_async_process_video(video_id)
+            _dispatch_async_process_video(video_id, trace_id)
             return True
         except Exception as exc:
             logger.warning(

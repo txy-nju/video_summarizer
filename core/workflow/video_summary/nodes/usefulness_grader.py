@@ -3,6 +3,8 @@ from core.llm.base import BaseModel
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
 from config.settings import SELF_RAG_MAX_REVISIONS as MAX_REVISIONS
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
 
 def usefulness_grader_node(state: VideoSummaryState, llm_model: BaseModel | None = None) -> dict:
     """
@@ -36,6 +38,7 @@ def usefulness_grader_node(state: VideoSummaryState, llm_model: BaseModel | None
     human_guidance = state.get("human_guidance", "")
     revision_count = state.get("revision_count", 0)
     aggregated_chunk_insights = state.get("aggregated_chunk_insights", "")
+    trace_id = str(state.get("trace_id", ""))
 
     # user_prompt 与 human_guidance 共同构成有用性评分的审核要求。
     review_requirements = []
@@ -84,34 +87,55 @@ def usefulness_grader_node(state: VideoSummaryState, llm_model: BaseModel | None
     print(f"  -> [Usefulness Grader] Checking if draft meets user prompt (Revision {revision_count})...")
 
     # 3. 执行评估 API 调用
-    try:
-        model_name = get_model_name_for_capability("chat")
-        result_json_str = model_client.chat_completion(
-            model=model_name, 
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            response_format={"type": "json_object"}, # 开启 JSON Mode 获取确定性结果
-            temperature=0.0, # 评估节点必须保持绝对客观冷静
-        )
+    with start_span(
+        build_span_name("workflow", "finalization", "usefulness_check"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_finalization",
+            "scope_id": "usefulness_grader",
+            "workflow_state": "FINAL_GENERATING",
+        },
+    ):
+        try:
+            model_name = get_model_name_for_capability("chat")
+            with trace_llm_call(
+                provider="openai_compatible",
+                model=model_name,
+                scope="usefulness_grader",
+                scope_id="final_summary",
+                workflow_state="FINAL_GENERATING",
+            ):
+                result_json_str = model_client.chat_completion(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    response_format={"type": "json_object"}, # 开启 JSON Mode 获取确定性结果
+                    temperature=0.0, # 评估节点必须保持绝对客观冷静
+                )
 
-        result_json_str = result_json_str.strip()
-        result = json.loads(result_json_str)
-        
-        # 兼容处理，默认放行
-        score = result.get("score", "yes").lower()
-        reason = result.get("reason", "")
-        
-        if score == "no":
-            print("  -> [Usefulness Grader] Result: NO (Draft missed user intent). Routing back to Drafter.")
-            feedback = f"【偏题拦截 - 需求未满足】：\n{reason}"
-            return {"usefulness_score": "no", "feedback_instructions": feedback}
-        else:
-            print("  -> [Usefulness Grader] Result: YES (Draft is useful). Final Approval.")
-            return {"usefulness_score": "yes", "feedback_instructions": ""}
-            
-    except Exception as e:
-        # [增强可观察性] 异常降级兜底：记录日志并放行
-        print(f"  -> [Usefulness Grader] Error or Invalid JSON: {str(e)}. Fallback to YES usefulness.")
-        return {"usefulness_score": "yes", "feedback_instructions": ""}
+            result_json_str = result_json_str.strip()
+            result = json.loads(result_json_str)
+
+            # 兼容处理，默认放行
+            score = result.get("score", "yes").lower()
+            reason = result.get("reason", "")
+
+            if score == "no":
+                print("  -> [Usefulness Grader] Result: NO (Draft missed user intent). Routing back to Drafter.")
+                feedback = f"【偏题拦截 - 需求未满足】：\n{reason}"
+                return {"usefulness_score": "no", "feedback_instructions": feedback}
+            else:
+                print("  -> [Usefulness Grader] Result: YES (Draft is useful). Final Approval.")
+                return {"usefulness_score": "yes", "feedback_instructions": ""}
+
+        except Exception as e:
+            # [增强可观察性] 异常降级兜底：记录日志并放行
+            print(f"  -> [Usefulness Grader] Error or Invalid JSON: {str(e)}. Fallback to YES usefulness.")
+            return {
+                "usefulness_score": "yes",
+                "feedback_instructions": "",
+                "error_code": "USEFULNESS_GRADER_FAILED",
+                "status": "ERROR",
+            }

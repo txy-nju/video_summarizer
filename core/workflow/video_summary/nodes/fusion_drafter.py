@@ -1,6 +1,8 @@
 from core.llm.base import BaseModel
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
 
 def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = None) -> dict:
     """
@@ -34,6 +36,7 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
     human_guidance = state.get("human_guidance", "")
     user_prompt = state.get("user_prompt", "")
     feedback_instructions = state.get("feedback_instructions", "")
+    trace_id = str(state.get("trace_id", ""))
 
     # 凭证解析已下沉至 get_model_for_capability 工厂，此处不再手动检查 OPENAI_API_KEY。
     model_client = llm_model or get_model_for_capability("chat")
@@ -81,27 +84,45 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
     print(f"  -> [Fusion Drafter Node] Drafting final report from aggregated chunk insights (Revision {current_count + 1})...")
 
     # 5. 执行 API 调用
-    try:
-        model_name = get_model_name_for_capability("chat")
-        draft = model_client.chat_completion(
-            model=model_name, 
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
-            # 融合节点需要将碎片化信息组织为流畅文章，因此适度提高 temperature 以获取更好的文笔和行文组织能力
-            temperature=0.5, 
-        )
-        print("  -> [Fusion Drafter Node] Draft synthesized successfully.")
-        
-        return {
-            "draft_summary": draft,
-            "revision_count": current_count + 1
-        }
-    except Exception as e:
-        print(f"  -> [Fusion Drafter Node] Error during synthesis: {str(e)}")
-        # 将异常上抛，由后续路由或最终结果展现
-        return {
-            "draft_summary": f"[系统自动提示]：综合图文大纲失败，LLM 调用发生异常：{str(e)}",
-            "revision_count": current_count + 1
-        }
+    with start_span(
+        build_span_name("workflow", "finalization", "draft"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_finalization",
+            "scope_id": "fusion_drafter",
+            "workflow_state": "FINAL_GENERATING",
+        },
+    ):
+        try:
+            model_name = get_model_name_for_capability("chat")
+            with trace_llm_call(
+                provider="openai_compatible",
+                model=model_name,
+                scope="fusion_drafter",
+                scope_id="final_summary",
+                workflow_state="FINAL_GENERATING",
+            ):
+                draft = model_client.chat_completion(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_content}
+                    ],
+                    # 融合节点需要将碎片化信息组织为流畅文章，因此适度提高 temperature 以获取更好的文笔和行文组织能力
+                    temperature=0.5,
+                )
+            print("  -> [Fusion Drafter Node] Draft synthesized successfully.")
+
+            return {
+                "draft_summary": draft,
+                "revision_count": current_count + 1
+            }
+        except Exception as e:
+            print(f"  -> [Fusion Drafter Node] Error during synthesis: {str(e)}")
+            # 将异常上抛，由后续路由或最终结果展现
+            return {
+                "draft_summary": f"[系统自动提示]：综合图文大纲失败，LLM 调用发生异常：{str(e)}",
+                "revision_count": current_count + 1,
+                "error_code": "FUSION_DRAFTER_FAILED",
+                "status": "ERROR",
+            }

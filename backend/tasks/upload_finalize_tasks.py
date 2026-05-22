@@ -39,7 +39,7 @@ def _create_upload_service():
     default_retry_delay=30,
     acks_late=True,
 )
-def async_finalize_upload(upload_id: str) -> dict:
+def async_finalize_upload(upload_id: str, trace_id: str = "") -> dict:
     """
     异步完成上传最终化：
     - 合并分片
@@ -81,19 +81,21 @@ def async_finalize_upload(upload_id: str) -> dict:
 
         # Step 4: 发布 VideoUploadedEvent → 领域事件总线（Redis Streams）
         #         上传域不感知消费方；domain_event_listener 独立消费并触发 async_process_video
-        _publish_video_uploaded_event(video_id=video_id, owner_id=owner_id, oss_key=stored_key)
+        _publish_video_uploaded_event(video_id=video_id, owner_id=owner_id, oss_key=stored_key, trace_id=trace_id)
 
         logger.info(
-            "async_finalize_upload completed: upload_id=%s, video_id=%s, oss_key=%s",
+            "async_finalize_upload completed: upload_id=%s, video_id=%s, oss_key=%s, trace_id=%s",
             upload_id,
             video_id,
             stored_key,
+            trace_id,
         )
         return {
             "upload_id": upload_id,
             "video_id": video_id,
             "status": "DONE",
             "oss_key": stored_key,
+            "trace_id": trace_id,
         }
 
     return result
@@ -145,7 +147,7 @@ def _set_video_resource_oss_key(*, video_id: str, oss_key: str) -> None:
         db.close()
 
 
-def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str) -> None:
+def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str, trace_id: str = "") -> None:
     """通过领域事件总线（Redis Streams）发布 VideoUploadedEvent。
 
     发布方不感知消费方：只发 XADD，不知道谁会 XREADGROUP。
@@ -166,6 +168,7 @@ def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str)
             event_type="video_uploaded",
             scope="video_resource",
             scope_id=video_id,
+            trace_id=trace_id,
             payload={
                 "video_id": video_id,
                 "owner_id": owner_id,

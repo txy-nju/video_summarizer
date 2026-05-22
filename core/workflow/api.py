@@ -3,6 +3,9 @@ import random
 import json
 from typing import Any, List, Dict, Callable, Optional
 
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
+
 from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
@@ -46,6 +49,7 @@ def analyze_video(
     user_prompt: str = "请结合画面与语音，给出一个全面、客观的高质量视频总结。",
     status_callback: Optional[Callable[[str], None]] = None,
     thread_id: str = "",
+    trace_id: str = "",
 ) -> Dict[str, Any]:
     """
     第一阶段：执行分片规划、分析、聚合并进入人类审批关口。
@@ -85,6 +89,7 @@ def analyze_video(
         )
 
     initial_state: Dict[str, Any] = {
+        "trace_id": trace_id,
         "transcript": transcript,
         "keyframes": keyframes,
         "keyframes_base_path": str(TEMP_FRAMES_DIR),
@@ -151,81 +156,89 @@ def analyze_video(
     total_chunks = 0
     last_progress_signature: tuple[int, int, int, int] = (-1, -1, -1, -1)
 
-    for output in workflow_app.stream(
-        initial_state,
-        {"configurable": {"thread_id": resolved_thread_id}},
-        stream_mode="updates",
+    with start_span(
+        build_span_name("workflow", "analysis", "run"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_analysis",
+            "scope_id": resolved_thread_id,
+        },
     ):
-        for node_name, state_update in output.items():
-            event_now = time.perf_counter()
-            since_previous_ms = int((event_now - previous_event_at) * 1000)
-            node_event_counts[node_name] = node_event_counts.get(node_name, 0) + 1
+        for output in workflow_app.stream(
+            initial_state,
+            {"configurable": {"thread_id": resolved_thread_id}},
+            stream_mode="updates",
+        ):
+            for node_name, state_update in output.items():
+                event_now = time.perf_counter()
+                since_previous_ms = int((event_now - previous_event_at) * 1000)
+                node_event_counts[node_name] = node_event_counts.get(node_name, 0) + 1
 
-            current_state.update(state_update)
+                current_state.update(state_update)
 
-            chunk_plan = current_state.get("chunk_plan", [])
-            if isinstance(chunk_plan, list):
-                total_chunks = len(chunk_plan)
+                chunk_plan = current_state.get("chunk_plan", [])
+                if isinstance(chunk_plan, list):
+                    total_chunks = len(chunk_plan)
 
-            if node_name in {
-                "chunk_audio_worker_node",
-                "chunk_vision_worker_node",
-                "chunk_synthesizer_worker_node",
-            }:
-                updated_chunks = state_update.get("chunk_results", []) if isinstance(state_update, dict) else []
-                if isinstance(updated_chunks, list):
-                    for chunk_item in updated_chunks:
-                        if not isinstance(chunk_item, dict):
-                            continue
-                        chunk_id = str(chunk_item.get("chunk_id", "")).strip()
-                        if not chunk_id:
-                            continue
-                        if str(chunk_item.get("audio_insights", "")).strip():
-                            audio_done_ids.add(chunk_id)
-                        if str(chunk_item.get("vision_insights", "")).strip():
-                            vision_done_ids.add(chunk_id)
-                        if str(chunk_item.get("chunk_summary", "")).strip():
-                            synthesis_done_ids.add(chunk_id)
+                if node_name in {
+                    "chunk_audio_worker_node",
+                    "chunk_vision_worker_node",
+                    "chunk_synthesizer_worker_node",
+                }:
+                    updated_chunks = state_update.get("chunk_results", []) if isinstance(state_update, dict) else []
+                    if isinstance(updated_chunks, list):
+                        for chunk_item in updated_chunks:
+                            if not isinstance(chunk_item, dict):
+                                continue
+                            chunk_id = str(chunk_item.get("chunk_id", "")).strip()
+                            if not chunk_id:
+                                continue
+                            if str(chunk_item.get("audio_insights", "")).strip():
+                                audio_done_ids.add(chunk_id)
+                            if str(chunk_item.get("vision_insights", "")).strip():
+                                vision_done_ids.add(chunk_id)
+                            if str(chunk_item.get("chunk_summary", "")).strip():
+                                synthesis_done_ids.add(chunk_id)
 
-                progress_signature = (
-                    total_chunks,
-                    len(audio_done_ids),
-                    len(vision_done_ids),
-                    len(synthesis_done_ids),
-                )
-                if progress_signature != last_progress_signature:
-                    _emit_chunk_progress(
+                    progress_signature = (
                         total_chunks,
-                        audio_done_ids,
-                        vision_done_ids,
-                        synthesis_done_ids,
-                        stage="running",
+                        len(audio_done_ids),
+                        len(vision_done_ids),
+                        len(synthesis_done_ids),
                     )
-                    last_progress_signature = progress_signature
+                    if progress_signature != last_progress_signature:
+                        _emit_chunk_progress(
+                            total_chunks,
+                            audio_done_ids,
+                            vision_done_ids,
+                            synthesis_done_ids,
+                            stage="running",
+                        )
+                        last_progress_signature = progress_signature
 
-            if metrics_enabled:
-                chunk_results = current_state.get("chunk_results", [])
-                chunk_count = len(chunk_results) if isinstance(chunk_results, list) else 0
-                log_metric_event(
-                    metrics_logger,
-                    "workflow_node_update",
-                    thread_id=resolved_thread_id,
-                    concurrency_mode="send_api",
-                    node_name=node_name,
-                    node_event_count=node_event_counts[node_name],
-                    since_previous_event_ms=since_previous_ms,
-                    chunk_count=chunk_count,
-                )
-            previous_event_at = event_now
-
-            if status_callback and node_name in node_msg_map:
-                msg = node_msg_map[node_name]
-                if node_name == "chunk_synthesizer_node":
+                if metrics_enabled:
                     chunk_results = current_state.get("chunk_results", [])
-                    if isinstance(chunk_results, list) and chunk_results:
-                        num_chunks = len(chunk_results)
-                        msg = f"{msg}\n✅ [微智能体群汇聚] 已完成 {num_chunks} 个分片的并行深度分析，成果已交付全局融合层..."
-                status_callback(msg)
+                    chunk_count = len(chunk_results) if isinstance(chunk_results, list) else 0
+                    log_metric_event(
+                        metrics_logger,
+                        "workflow_node_update",
+                        thread_id=resolved_thread_id,
+                        concurrency_mode="send_api",
+                        node_name=node_name,
+                        node_event_count=node_event_counts[node_name],
+                        since_previous_event_ms=since_previous_ms,
+                        chunk_count=chunk_count,
+                    )
+                previous_event_at = event_now
+
+                if status_callback and node_name in node_msg_map:
+                    msg = node_msg_map[node_name]
+                    if node_name == "chunk_synthesizer_node":
+                        chunk_results = current_state.get("chunk_results", [])
+                        if isinstance(chunk_results, list) and chunk_results:
+                            num_chunks = len(chunk_results)
+                            msg = f"{msg}\n✅ [微智能体群汇聚] 已完成 {num_chunks} 个分片的并行深度分析，成果已交付全局融合层..."
+                    status_callback(msg)
 
     _emit_chunk_progress(
         total_chunks,
@@ -279,6 +292,7 @@ def finalize_summary(
     edited_aggregated_chunk_insights: str = "",
     human_guidance: str = "",
     status_callback: Optional[Callable[[str], None]] = None,
+    trace_id: str = "",
 ) -> str:
     """
     第二阶段：基于人类审批结果完成全篇总结。
@@ -305,6 +319,7 @@ def finalize_summary(
     initial_state: Dict[str, Any] = dict(channel_values)
     initial_state.update(
         {
+            "trace_id": trace_id or str(channel_values.get("trace_id", "")),
             "human_gate_status": "approved",
             "human_gate_reason": "approved",
             "human_edited_aggregated_insights": final_edited,
@@ -329,15 +344,23 @@ def finalize_summary(
         "usefulness_grader_node": "🎯 [Usefulness Guard] 正在进行需求命中审查...",
     }
 
-    for output in workflow_app.stream(
-        initial_state,
-        {"configurable": {"thread_id": resolved_thread_id}},
-        stream_mode="updates",
+    with start_span(
+        build_span_name("workflow", "finalization", "run"),
+        attributes={
+            "trace_id": initial_state.get("trace_id", ""),
+            "scope": "workflow_finalization",
+            "scope_id": resolved_thread_id,
+        },
     ):
-        for node_name, state_update in output.items():
-            current_state.update(state_update)
-            if status_callback and node_name in node_msg_map:
-                status_callback(node_msg_map[node_name])
+        for output in workflow_app.stream(
+            initial_state,
+            {"configurable": {"thread_id": resolved_thread_id}},
+            stream_mode="updates",
+        ):
+            for node_name, state_update in output.items():
+                current_state.update(state_update)
+                if status_callback and node_name in node_msg_map:
+                    status_callback(node_msg_map[node_name])
 
     return str(current_state.get("draft_summary", ""))
 
@@ -348,6 +371,7 @@ def answer_question_at_timestamp(
     question: str,
     window_seconds: int = 20,
     status_callback: Optional[Callable[[str], None]] = None,
+    trace_id: str = "",
 ) -> str:
     """
     基于 checkpoint 的时间旅行追问入口。
@@ -457,11 +481,19 @@ def answer_question_at_timestamp(
     ]
 
     try:
-        answer = model_client.chat_completion(
+        with trace_llm_call(
+            provider="openai_compatible",
             model=model_name,
-            messages=messages_payload,
-            temperature=0.2,
-        )
+            scope="time_travel_qa",
+            scope_id=resolved_thread_id,
+            task_id=resolved_thread_id,
+            workflow_state="TIME_TRAVEL_QA",
+        ):
+            answer = model_client.chat_completion(
+                model=model_name,
+                messages=messages_payload,
+                temperature=0.2,
+            )
     except Exception as exc:
         if status_callback:
             status_callback(f"⚠️ [Time Travel] OpenAI 调用异常，已降级返回证据片段（包含 {len(representative_frames)} 帧）: {str(exc)}")

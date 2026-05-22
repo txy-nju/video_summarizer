@@ -11,6 +11,8 @@ from config.settings import (
     CHUNK_WORKER_TIMEOUT_SECONDS,
 )
 from core.workflow.video_summary.state import VideoSummaryState
+from backend.observability.llm_tracing import trace_llm_call
+from backend.observability.tracing import build_span_name, start_span
 
 
 def _classify_error(exc: Exception) -> str:
@@ -30,6 +32,7 @@ def _llm_chunk_fusion(
     user_prompt: str,
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> str:
     if not resolve_api_key("chat"):
         return (
@@ -40,27 +43,34 @@ def _llm_chunk_fusion(
 
     model_client = llm_model or get_model_for_capability("chat")
     model_name = get_model_name_for_capability("chat")
-    return model_client.chat_completion(
+    with trace_llm_call(
+        provider="openai_compatible",
         model=model_name,
-        messages=[
-            {
-                "role": "system",
-                "content": "你是分片融合助手，请将音频洞察与视觉洞察融合为该时间片的简洁总结。",
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"[chunk_id]\\n{chunk_id}\\n\\n"
-                    f"[user_prompt]\\n{user_prompt}\\n\\n"
-                    f"[audio_insights]\\n{audio_insights}\\n\\n"
-                    f"[vision_insights]\\n{vision_insights}\\n\\n"
-                    f"[structured_global_context]\\n{structured_global_context}"
-                ),
-            },
-        ],
-        temperature=0.3,
-        timeout=timeout_seconds,
-    )
+        scope="chunk_synthesizer_worker",
+        scope_id=chunk_id,
+        workflow_state="ANALYSIS",
+    ):
+        return model_client.chat_completion(
+            model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "你是分片融合助手，请将音频洞察与视觉洞察融合为该时间片的简洁总结。",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"[chunk_id]\\n{chunk_id}\\n\\n"
+                        f"[user_prompt]\\n{user_prompt}\\n\\n"
+                        f"[audio_insights]\\n{audio_insights}\\n\\n"
+                        f"[vision_insights]\\n{vision_insights}\\n\\n"
+                        f"[structured_global_context]\\n{structured_global_context}"
+                    ),
+                },
+            ],
+            temperature=0.3,
+            timeout=timeout_seconds,
+        )
 
 
 def _process_single_chunk_synthesis(
@@ -69,6 +79,7 @@ def _process_single_chunk_synthesis(
     structured_global_context:str,
     base_item: Dict[str, Any],
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     started = time.perf_counter()
     audio_insights = str(base_item.get("audio_insights", ""))
@@ -84,6 +95,7 @@ def _process_single_chunk_synthesis(
             user_prompt,
             CHUNK_WORKER_TIMEOUT_SECONDS,
             llm_model,
+            trace_id,
         )
         if not str(chunk_summary).strip():
             raise ValueError("empty summary")
@@ -111,6 +123,7 @@ def _run_synthesis_with_retry(
     structured_global_context:str,
     base_item: Dict[str, Any],
     llm_model: BaseModel | None = None,
+    trace_id: str = "",
 ) -> Tuple[str, Dict[str, Any]]:
     last_delta: Dict[str, Any] = {
         "chunk_id": chunk_id,
@@ -121,7 +134,7 @@ def _run_synthesis_with_retry(
 
     retries_used = 0
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
-        _, delta = _process_single_chunk_synthesis(chunk_id, user_prompt, structured_global_context ,base_item, llm_model)
+        _, delta = _process_single_chunk_synthesis(chunk_id, user_prompt, structured_global_context ,base_item, llm_model, trace_id)
         last_delta = dict(delta)
         status = str(last_delta.get("modality_status", {}).get("synthesizer", "ok")).strip().lower()
         retries_used = attempt
@@ -207,13 +220,29 @@ def chunk_synthesizer_worker_node(state: VideoSummaryState) -> dict:
     user_prompt = str(state.get("user_prompt", ""))
     base_item = state.get("current_synthesis_base_item", {"chunk_id": chunk_id})
     structured_global_context = str(state.get("structured_global_context",""))
+    trace_id = str(state.get("trace_id", ""))
     if not isinstance(base_item, dict):
         base_item = {"chunk_id": chunk_id}
 
-    _, merged = _run_synthesis_with_retry(
-        chunk_id,
-        user_prompt,
-        structured_global_context,
-        base_item,
-    )
+    with start_span(
+        build_span_name("workflow", "chunk_synthesis", "fuse"),
+        attributes={
+            "trace_id": trace_id,
+            "scope": "workflow_chunk",
+            "scope_id": chunk_id,
+            "workflow_state": "ANALYSIS",
+        },
+    ):
+        _, merged = _run_synthesis_with_retry(
+            chunk_id,
+            user_prompt,
+            structured_global_context,
+            base_item,
+            trace_id=trace_id,
+        )
+
+    if str(merged.get("modality_status", {}).get("synthesizer", "ok")).lower() != "ok":
+        error_code = f"SYNTHESIZER_{str(merged.get('modality_status', {}).get('synthesizer', 'FAILED')).upper()}"
+        merged["error_code"] = error_code
+        merged["status"] = "ERROR"
     return {"chunk_results": [merged]}
