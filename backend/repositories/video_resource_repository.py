@@ -18,6 +18,7 @@ class VideoResourceRecord:
     oss_key: str
     duration: int
     full_transcript: str | None
+    transcript_segments: list | None
     transcribe_status: str
     transcript_vector_ids: list[str] | None
     keyframes: list[dict] | None
@@ -231,6 +232,7 @@ class VideoResourceRepository:
             oss_key=entity.oss_key or "",
             duration=entity.duration or 0,
             full_transcript=entity.full_transcript,
+            transcript_segments=getattr(entity, "transcript_segments", None),
             transcribe_status=str(entity.transcribe_status.value if hasattr(entity.transcribe_status, "value") else entity.transcribe_status),
             transcript_vector_ids=entity.transcript_vector_ids,
             keyframes=entity.keyframes,

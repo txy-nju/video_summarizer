@@ -120,6 +120,7 @@ class VideoResource(Base):
     duration: Mapped[int | None] = mapped_column()
 
     full_transcript: Mapped[str | None] = mapped_column(Text)
+    transcript_segments: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     transcribe_status: Mapped[TranscribeStatus] = mapped_column(
         SqlEnum(TranscribeStatus, name="transcribe_status"),
         default=TranscribeStatus.UPLOADED,

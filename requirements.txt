@@ -26,3 +26,8 @@ opentelemetry-instrumentation-fastapi==0.58b0
 opentelemetry-instrumentation-celery==0.58b0
 opentelemetry-instrumentation-logging==0.58b0
 opentelemetry-instrumentation-requests==0.58b0
+
+# RAG 核心依赖（来自 MODULAR-RAG-MCP-SERVER）
+chromadb>=0.5,<0.7
+langchain-text-splitters>=0.3,<0.4
+PyYAML>=6.0,<7.0
