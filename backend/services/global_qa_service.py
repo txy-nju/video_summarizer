@@ -73,7 +73,9 @@ class GlobalQAService:
         chat_id: str,
         payload: GlobalQARecordCreateRequest,
     ) -> tuple[GlobalQARecordView, Iterator[str]] | tuple[None, None]:
-        """创建问答记录并返回流式回答块迭代器。"""
+        """创建问答记录并返回真实 LLM token 流。
+        DB 写入在 token_gen 耗尽后由生成器内部执行，调用方只需消费迭代器。
+        """
         chat = self._chat_repository.get_by_owner_kb_and_chat_id(owner_id, kbid, chat_id)
         if chat is None:
             return None, None
@@ -86,21 +88,28 @@ class GlobalQAService:
             attachments=attachments_data,
         )
 
-        rag_answer, chunks = self._rag_agent_service.stream_global_question(
+        cited_sources, token_gen = self._rag_agent_service.stream_global_question(
             owner_id=owner_id,
             kbid=kbid,
             question_content=payload.question_content,
             attachments=attachments_data,
         )
-        updated = self._repository.update_answer_by_owner_chat_and_qa_id(
-            owner_id=owner_id,
-            chat_id=chat_id,
-            qa_id=record.qa_id,
-            answer_content=rag_answer.answer_content,
-            cited_sources=rag_answer.cited_sources,
-        )
-        view = self._to_qa_view(updated if updated is not None else record)
-        return view, chunks
+        accumulated: list[str] = []
+
+        def _streaming_gen() -> Iterator[str]:
+            for token in token_gen:
+                accumulated.append(token)
+                yield token
+            # 流式完成后将完整答案和引用写入数据库
+            self._repository.update_answer_by_owner_chat_and_qa_id(
+                owner_id=owner_id,
+                chat_id=chat_id,
+                qa_id=record.qa_id,
+                answer_content="".join(accumulated),
+                cited_sources=cited_sources,
+            )
+
+        return self._to_qa_view(record), _streaming_gen()
 
     def list_qa_records(
         self,

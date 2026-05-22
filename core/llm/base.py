@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 
 class BaseModel(ABC):
@@ -20,6 +20,16 @@ class BaseModel(ABC):
         timeout: float | None = None,
     ) -> str:
         """Run a chat completion request and return text output."""
+
+    @abstractmethod
+    def stream_chat_completion(
+        self,
+        *,
+        model: str,
+        messages: List[Dict[str, Any]],
+        max_tokens: int | None = None,
+    ) -> Iterator[str]:
+        """Run a streaming chat completion and yield text tokens one by one."""
 
     @abstractmethod
     def transcribe_audio(

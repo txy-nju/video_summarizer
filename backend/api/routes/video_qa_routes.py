@@ -208,24 +208,89 @@ async def time_travel_qa_stream(
         )
 
     trace_id = str(getattr(request.state, "trace_id", ""))
+
+    # ── 无时间窗：创建记录后真实流式 RAG → SSE ─────────────────────────
+    if payload.window_seconds is None:
+        qa_record = service.create_time_travel_qa_record(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            timestamp=payload.timestamp,
+            question_content=payload.question_content,
+            answer_content="",
+            attachments=payload.attachments,
+            window_seconds=None,
+        )
+        if qa_record is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+
+        token_gen = service.stream_rag_for_video(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            question_content=payload.question_content,
+            attachments=payload.attachments,
+        )
+        produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        accumulated: list[str] = []
+
+        def _sse_stream_gen() -> Iterator[str]:
+            try:
+                yield _sse_event(
+                    "start",
+                    {"task_id": task_id, "qa_id": qa_record.qa_id, "timestamp": produced_at},
+                )
+                seq = 0
+                for token in token_gen:
+                    seq += 1
+                    accumulated.append(token)
+                    yield _sse_event(
+                        "delta",
+                        {
+                            "task_id": task_id,
+                            "qa_id": qa_record.qa_id,
+                            "chunk": token,
+                            "sequence": seq,
+                            "timestamp": produced_at,
+                        },
+                    )
+                full_answer = "".join(accumulated)
+                service.finalize_time_travel_qa_answer(
+                    owner_id=current_user.user_id,
+                    task_id=task_id,
+                    qa_id=qa_record.qa_id,
+                    answer_content=full_answer,
+                )
+                yield _sse_event(
+                    "done",
+                    {
+                        "task_id": task_id,
+                        "qa_id": qa_record.qa_id,
+                        "answer_content": full_answer,
+                        "timestamp": produced_at,
+                    },
+                )
+            except Exception as exc:
+                yield _sse_event(
+                    "error",
+                    {"task_id": task_id, "qa_id": qa_record.qa_id, "message": str(exc), "timestamp": produced_at},
+                )
+
+        return StreamingResponse(
+            _sse_stream_gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+
+    # ── 有时间窗：走 workflow_service 时光旅行 → SSE ─────────────────────
     try:
-        if payload.window_seconds is None:
-            answer, output_chunks = service.answer_without_window_via_rag(
-                owner_id=current_user.user_id,
-                task_id=task_id,
-                question_content=payload.question_content,
-                attachments=payload.attachments,
-            )
-        else:
-            answer = await workflow_service.start_time_travel_qa_async(
-                owner_id=current_user.user_id,
-                task_id=task_id,
-                timestamp=payload.timestamp,
-                question=payload.question_content,
-                window_seconds=payload.window_seconds,
-                trace_id=trace_id,
-            )
-            output_chunks = _chunk_text(answer)
+        answer = await workflow_service.start_time_travel_qa_async(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            timestamp=payload.timestamp,
+            question=payload.question_content,
+            window_seconds=payload.window_seconds,
+            trace_id=trace_id,
+        )
+        output_chunks = _chunk_text(answer)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except Exception as exc:

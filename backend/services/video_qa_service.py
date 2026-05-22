@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+from typing import Iterator
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.video_qa_repository import VideoQARepository
@@ -11,6 +13,8 @@ from backend.schemas.video_qa import (
     VideoQARecordUpdateRequest,
     VideoQARecordView,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class VideoQAService:
@@ -39,7 +43,6 @@ class VideoQAService:
         if task is None:
             return None
 
-        # 创建问答记录
         attachments_data = [asdict(a) for a in payload.attachments]
         record = self._repository.create(
             owner_id=owner_id,
@@ -49,6 +52,24 @@ class VideoQAService:
             question_content=payload.question_content,
             attachments=attachments_data,
         )
+        try:
+            answer = "".join(
+                self._rag_agent_service.stream_video_question(
+                    owner_id=owner_id,
+                    task_id=task_id,
+                    question_content=payload.question_content,
+                    attachments=attachments_data,
+                )
+            )
+        except Exception:
+            logger.exception("create_qa_record: RAG failed for task_id=%s", task_id)
+            answer = ""
+        if answer:
+            updated = self._repository.update_answer_by_owner_task_and_qa_id(
+                owner_id, task_id, record.qa_id, answer
+            )
+            if updated:
+                return self._to_view(updated)
         return self._to_view(record)
 
     def list_qa_records(
@@ -101,9 +122,7 @@ class VideoQAService:
         qa_id: str,
         payload: VideoQARecordUpdateRequest,
     ) -> VideoQARecordView | None:
-        """更新问答记录（重新生成回答）"""
-        # 注意：当前仅支持重生成意图，具体回答由外部流程（LLM Agent）生成
-        # 本服务仅负责更新标记；实际回答生成由 Celery 任务或其他异步服务处理
+        """重新生成回答：用原始问题重新走 RAG 流水线并更新记录。"""
         if not payload.regenerate:
             return None
 
@@ -111,8 +130,25 @@ class VideoQAService:
         if record is None:
             return None
 
-        # 这里仅作占位符；实际的回答更新应由外部任务触发
-        # 例如：触发 Celery task `async_regenerate_qa_answer(task_id, qa_id)`
+        try:
+            new_answer = "".join(
+                self._rag_agent_service.stream_video_question(
+                    owner_id=owner_id,
+                    task_id=task_id,
+                    question_content=record.question_content,
+                    attachments=[],
+                )
+            )
+        except Exception:
+            logger.exception("update_qa_record: RAG failed for task_id=%s qa_id=%s", task_id, qa_id)
+            new_answer = ""
+
+        if new_answer:
+            updated = self._repository.update_answer_by_owner_task_and_qa_id(
+                owner_id, task_id, qa_id, new_answer
+            )
+            if updated:
+                return self._to_view(updated)
         return self._to_view(record)
 
     def delete_qa_record(
@@ -129,23 +165,21 @@ class VideoQAService:
             return False
         return self._repository.delete_by_owner_task_and_qa_id(owner_id, task_id, qa_id)
 
-    def answer_without_window_via_rag(
+    def stream_rag_for_video(
         self,
         *,
         owner_id: str,
         task_id: str,
         question_content: str,
         attachments: list[AttachmentInfo],
-    ) -> tuple[str, list[str]]:
-        rag_chunks = list(
-            self._rag_agent_service.stream_video_question(
-                owner_id=owner_id,
-                task_id=task_id,
-                question_content=question_content,
-                attachments=[asdict(a) for a in attachments],
-            )
+    ) -> Iterator[str]:
+        """返回真实 LLM token 流，token 到达即可 yield 到 SSE。"""
+        return self._rag_agent_service.stream_video_question(
+            owner_id=owner_id,
+            task_id=task_id,
+            question_content=question_content,
+            attachments=[asdict(a) for a in attachments],
         )
-        return "".join(rag_chunks), rag_chunks
 
     def create_time_travel_qa_record(
         self,
@@ -154,11 +188,11 @@ class VideoQAService:
         task_id: str,
         timestamp: str,
         question_content: str,
-        answer_content: str,
+        answer_content: str = "",
         attachments: list[AttachmentInfo],
         window_seconds: int | None,
     ) -> VideoQARecordView | None:
-        """Persist time-travel or no-window RAG Q&A record."""
+        """持久化时间旅行或无时间窗 RAG 问答记录。answer_content 为空时跳过写入。"""
         task = self._task_repository.get_by_owner_and_id(owner_id, task_id)
         if task is None:
             return None
@@ -175,15 +209,27 @@ class VideoQAService:
             question_content=question_content,
             attachments=[asdict(a) for a in attachments],
         )
-        updated = self._repository.update_answer_by_owner_task_and_qa_id(
-            owner_id,
-            task_id,
-            record.qa_id,
-            answer_content,
+        if answer_content:
+            updated = self._repository.update_answer_by_owner_task_and_qa_id(
+                owner_id, task_id, record.qa_id, answer_content
+            )
+            if updated is None:
+                return None
+            return self._to_view(updated)
+        return self._to_view(record)
+
+    def finalize_time_travel_qa_answer(
+        self,
+        *,
+        owner_id: str,
+        task_id: str,
+        qa_id: str,
+        answer_content: str,
+    ) -> None:
+        """流式结束后将完整答案写回数据库。"""
+        self._repository.update_answer_by_owner_task_and_qa_id(
+            owner_id, task_id, qa_id, answer_content
         )
-        if updated is None:
-            return None
-        return self._to_view(updated)
 
     @staticmethod
     def _to_view(record) -> VideoQARecordView:

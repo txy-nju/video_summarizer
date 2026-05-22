@@ -1,10 +1,9 @@
 """RAG Agent Service：基于 MODULAR-RAG-MCP-SERVER 核心能力的真实检索回答服务。"""
 from __future__ import annotations
 
-import base64
 import logging
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Any, Iterator
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +12,17 @@ logger = logging.getLogger(__name__)
 class RagAgentAnswer:
     answer_content: str
     cited_sources: list[dict]
+
+
+@dataclass(slots=True)
+class _RagContext:
+    """检索阶段的完整结果，供后续 LLM 调用使用（与 LLM 无关，可复用）。"""
+    results: list
+    frames: list[dict]
+    fallback_reason: str | None
+    cited_sources: list[dict]
+    settings: Any
+
 
 
 class RagAgentService:
@@ -28,15 +38,10 @@ class RagAgentService:
         question_content: str,
         attachments: list[dict],
     ) -> Iterator[str]:
+        """真实 LLM token 流：先检索再流式生成，token 到达即 yield。"""
         collection = f"video_{task_id}"
-        answer = self._rag_answer(
-            question=question_content,
-            collection=collection,
-            top_k=5,
-            rerank=True,
-        )
-        for i in range(0, len(answer.answer_content), 64):
-            yield answer.answer_content[i : i + 64]
+        context = self._build_retrieval_context(question_content, collection, top_k=5, rerank=True)
+        yield from self._stream_from_context(question_content, context)
 
     # ── 全局 KB QA ─────────────────────────────────────────────────
 
@@ -66,31 +71,36 @@ class RagAgentService:
         question_content: str,
         attachments: list[dict],
         kb_config: dict | None = None,
-    ) -> tuple[RagAgentAnswer, Iterator[str]]:
-        answer = self.answer_global_question(
-            owner_id=owner_id,
-            kbid=kbid,
-            question_content=question_content,
-            attachments=attachments,
-            kb_config=kb_config,
+    ) -> tuple[list[dict], Iterator[str]]:
+        """返回 (cited_sources, token_gen)。
+        cited_sources 在检索完成后立即可用；token_gen 是真实 LLM token 流。
+        调用方负责在 token_gen 耗尽后将完整答案持久化到数据库。
+        """
+        collection = self._resolve_kb_collection(kbid)
+        cfg = (kb_config or {}).get("retrieval", {})
+        context = self._build_retrieval_context(
+            question_content, collection,
+            top_k=int(cfg.get("top_k", 6)),
+            rerank=bool(cfg.get("rerank", True)),
         )
+        return context.cited_sources, self._stream_from_context(question_content, context)
 
-        def _gen() -> Iterator[str]:
-            for i in range(0, len(answer.answer_content), 64):
-                yield answer.answer_content[i : i + 64]
+    # ── 核心非流式路径（answer_global_question 使用）─────────────────
 
-        return answer, _gen()
+    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool) -> RagAgentAnswer:
+        context = self._build_retrieval_context(question, collection, top_k, rerank)
+        answer_text = "".join(self._stream_from_context(question, context))
+        return RagAgentAnswer(answer_content=answer_text, cited_sources=context.cited_sources)
 
-    # ── 核心 RAG 调用（多模态版）──────────────────────────────────────
+    # ── 检索阶段（HybridSearch + Reranker + KeyframeLookup）──────────
 
-    def _rag_answer(
+    def _build_retrieval_context(
         self,
-        *,
         question: str,
         collection: str,
         top_k: int,
         rerank: bool,
-    ) -> RagAgentAnswer:
+    ) -> _RagContext:
         from modular_rag.core.query_engine.hybrid_search import HybridSearch
         from modular_rag.core.query_engine.reranker import Reranker
         from backend.infrastructure.rag_settings_factory import build_rag_settings
@@ -112,7 +122,6 @@ class RagAgentService:
             if rerank_result.fallback:
                 fallback_reason = rerank_result.fallback_reason
 
-        # ── 帧匹配：通过已有 keyframes 元数据按时间戳匹配，零视频解析开销 ──
         _kf_cache: dict[str, list[dict]] = {}
         frames: list[dict] = []
         for r in results:
@@ -137,22 +146,6 @@ class RagAgentService:
                         "time_range": str(meta.get("time_range", "")),
                     })
 
-        # ── 答案生成：有帧走多模态，无帧走纯文本 ──────────────────────────
-        if frames:
-            try:
-                answer_text = self._call_multimodal_llm(
-                    question=question,
-                    results=results,
-                    frames=frames,
-                    settings=settings,
-                )
-            except Exception as exc:
-                logger.warning("multimodal LLM failed, falling back to text-only: %s", exc)
-                answer_text = self._build_text_answer(results, question, fallback_reason)
-        else:
-            answer_text = self._build_text_answer(results, question, fallback_reason)
-
-        # ── 构造 cited_sources ────────────────────────────────────────────
         cited: list[dict] = []
         for r in results:
             meta = r.metadata or {}
@@ -164,69 +157,32 @@ class RagAgentService:
                 "score": min(max(float(r.score), 0.0), 1.0),
             })
 
-        return RagAgentAnswer(answer_content=answer_text, cited_sources=cited)
-
-    def _build_text_answer(
-        self,
-        results: list,
-        question: str,
-        fallback_reason: str | None,
-    ) -> str:
-        from modular_rag.core.response.response_builder import ResponseBuilder
-        builder = ResponseBuilder()
-        payload = builder.build(
-            retrieval_results=results,
-            query=question,
+        return _RagContext(
+            results=results,
+            frames=frames,
             fallback_reason=fallback_reason,
+            cited_sources=cited,
+            settings=settings,
         )
-        text_blocks = [
-            c["text"] for c in payload.get("content", []) if c.get("type") == "text"
-        ]
-        return "\n".join(text_blocks)
 
-    def _call_multimodal_llm(
-        self,
-        *,
-        question: str,
-        results: list,
-        frames: list[dict],
-        settings,
-    ) -> str:
-        """将文本 chunks + 帧图像一同送入多模态 LLM（GPT-4o Vision）。"""
-        from openai import OpenAI
+    # ── LLM 流式生成 ────────────────────────────────────────────────
 
-        client = OpenAI(
-            api_key=settings.llm.api_key,
-            base_url=settings.llm.api_url,
-        )
-        text_context = "\n\n".join(r.text for r in results if r.text)
-        content: list[dict] = [
-            {
-                "type": "text",
-                "text": f"请基于以下视频转录内容和对应视频帧回答问题。\n\n转录内容：\n{text_context}",
-            }
-        ]
-        for f in frames:
+    def _stream_from_context(self, question: str, context: _RagContext) -> Iterator[str]:
+        """根据是否有帧分派到多模态或纯文本流式 LLM。"""
+        from core.llm.rag_llm import RagStreamLLM
+
+        llm = RagStreamLLM.from_rag_settings(context.settings)
+        if context.frames:
             try:
-                with open(f["frame_path"], "rb") as img_file:
-                    b64 = base64.b64encode(img_file.read()).decode()
-                label = f.get("time_range", "")
-                if label:
-                    content.append({"type": "text", "text": f"视频帧（{label}）："})
-                content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
-                })
-            except OSError:
-                continue
-        content.append({"type": "text", "text": f"\n问题：{question}"})
-
-        response = client.chat.completions.create(
-            model=settings.llm.model,
-            messages=[{"role": "user", "content": content}],
-            max_tokens=1024,
-        )
-        return response.choices[0].message.content or ""
+                yield from llm.stream_multimodal(
+                    question=question,
+                    results=context.results,
+                    frames=context.frames,
+                )
+                return
+            except Exception as exc:
+                logger.warning("multimodal LLM streaming failed, falling back to text: %s", exc)
+        yield from llm.stream_text(question=question, results=context.results)
 
     # ── 工具方法 ────────────────────────────────────────────────────
 

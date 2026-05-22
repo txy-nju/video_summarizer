@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterator, List
 
 from openai import OpenAI
 
@@ -51,6 +51,22 @@ class LocalModel(BaseModel):
 
         response = self._client.chat.completions.create(**kwargs)
         return response.choices[0].message.content or ""
+
+    def stream_chat_completion(
+        self,
+        *,
+        model: str,
+        messages: List[Dict[str, Any]],
+        max_tokens: int | None = None,
+    ) -> Iterator[str]:
+        kwargs: Dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+        if max_tokens is not None:
+            kwargs["max_tokens"] = max_tokens
+        with self._client.chat.completions.create(**kwargs) as stream:
+            for chunk in stream:
+                delta = chunk.choices[0].delta.content or ""
+                if delta:
+                    yield delta
 
     def transcribe_audio(
         self,
