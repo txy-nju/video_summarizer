@@ -150,8 +150,9 @@ class RagStreamLLM:
                 label = f.get("time_range", "")
                 if label:
                     content.append({"type": "text", "text": f"视频帧（{label}）："})
+                mime = f.get("mime_type", "image/jpeg")
                 content.append(
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
                 )
                 valid_frames += 1
             except OSError as exc:

@@ -41,6 +41,7 @@ class RagAgentService:
         """真实 LLM token 流：先检索再流式生成，token 到达即 yield。"""
         collection = f"video_{task_id}"
         context = self._build_retrieval_context(question_content, collection, top_k=5, rerank=True)
+        context.frames.extend(self._download_attachment_frames(attachments))
         yield from self._stream_from_context(question_content, context)
 
     # ── 全局 KB QA ─────────────────────────────────────────────────
@@ -61,6 +62,7 @@ class RagAgentService:
             collection=collection,
             top_k=int(cfg.get("top_k", 6)),
             rerank=bool(cfg.get("rerank", True)),
+            extra_frames=self._download_attachment_frames(attachments),
         )
 
     def stream_global_question(
@@ -83,12 +85,15 @@ class RagAgentService:
             top_k=int(cfg.get("top_k", 6)),
             rerank=bool(cfg.get("rerank", True)),
         )
+        context.frames.extend(self._download_attachment_frames(attachments))
         return context.cited_sources, self._stream_from_context(question_content, context)
 
     # ── 核心非流式路径（answer_global_question 使用）─────────────────
 
-    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool) -> RagAgentAnswer:
+    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool, extra_frames: list[dict] | None = None) -> RagAgentAnswer:
         context = self._build_retrieval_context(question, collection, top_k, rerank)
+        if extra_frames:
+            context.frames.extend(extra_frames)
         answer_text = "".join(self._stream_from_context(question, context))
         return RagAgentAnswer(answer_content=answer_text, cited_sources=context.cited_sources)
 
@@ -164,6 +169,52 @@ class RagAgentService:
             cited_sources=cited,
             settings=settings,
         )
+
+    # ── 附件下载 ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _download_attachment_frames(attachments: list[dict]) -> list[dict]:
+        """将用户上传的图片附件从 OSS 下载到本地缓存，返回 frames 格式列表。
+
+        仅处理 mime_type 以 'image/' 开头的附件，其余类型跳过。
+        缓存路径：temp/frames/attachments/<oss_key 转义名>；已存在时直接复用。
+        """
+        if not attachments:
+            return []
+
+        import shutil
+        from pathlib import Path
+        from backend.infrastructure.storage.oss_client import get_object_storage_client
+
+        cache_dir = Path("temp/frames/attachments")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        storage = get_object_storage_client()
+        frames: list[dict] = []
+
+        for att in attachments:
+            mime_type: str = att.get("mime_type", "")
+            oss_key: str = att.get("oss_key", "").strip()
+            name: str = att.get("name", oss_key)
+
+            if not mime_type.startswith("image/") or not oss_key:
+                continue
+
+            # 用 oss_key 转义为单层文件名，避免路径分隔符冲突
+            sanitized = oss_key.replace("/", "_").replace("\\", "_")
+            cache_path = cache_dir / sanitized
+            try:
+                if not cache_path.exists():
+                    with storage.materialize_to_local_path(oss_key) as tmp_path:
+                        shutil.copy2(tmp_path, cache_path)
+                frames.append({
+                    "frame_path": str(cache_path),
+                    "time_range": name,
+                    "mime_type": mime_type,
+                })
+            except Exception:
+                logger.warning("_download_attachment_frames: 跳过附件 oss_key=%s", oss_key)
+
+        return frames
 
     # ── LLM 流式生成 ────────────────────────────────────────────────
 
