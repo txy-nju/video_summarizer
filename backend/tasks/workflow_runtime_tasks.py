@@ -31,12 +31,26 @@ logger = logging.getLogger(__name__)
 
 def _run_async(coro: Any) -> Any:
     """Helper to run async functions in Celery worker context."""
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    import asyncio
+    import concurrent.futures
+
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # If there is a running event loop in this thread, run the coroutine in a new thread
+        # so that we can block on its result without raising RuntimeError.
+        def run_in_new_loop():
+            return asyncio.run(coro)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(run_in_new_loop)
+            return future.result()
+    else:
+        # Otherwise, run it in a new event loop on the current thread
+        return asyncio.run(coro)
 
 
 def _build_orchestration_service() -> Any:
@@ -65,7 +79,9 @@ def _build_orchestration_service() -> Any:
     try:
         task_repo = VideoSummaryTaskRepository(db_session=db)
         video_repo = VideoResourceRepository(db_session=db)
-        event_bus = ProgressEventBus(redis_url=settings.redis_url, instance_id="worker")
+        import redis as redis_lib
+        redis_client = redis_lib.Redis.from_url(settings.celery_broker_url)
+        event_bus = ProgressEventBus(redis_client=redis_client, instance_id="worker")
         progress_pub = ProgressPublishService(event_bus=event_bus, instance_id="worker")
         task_status_svc = TaskStatusService()
         notification_svc = WorkflowNotificationService(

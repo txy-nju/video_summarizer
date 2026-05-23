@@ -17,6 +17,8 @@ _REGISTERED = False
 def _resolve_trace_id(task: Any, kwargs: dict[str, Any] | None) -> str:
     request_obj = getattr(task, "request", None)
     headers = getattr(request_obj, "headers", {}) if request_obj is not None else {}
+    if headers is None:
+        headers = {}
     normalized_headers = extract_trace_headers(headers)
     traceparent = normalized_headers.get("traceparent", "")
     from_header = extract_trace_id_from_traceparent(traceparent)

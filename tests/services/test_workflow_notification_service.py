@@ -15,7 +15,7 @@ class _StubDeviceRepository:
     def __init__(self, devices):
         self._devices = devices
 
-    def get_by_user(self, user_id: str, is_deleted: bool = False):
+    def list_by_user(self, user_id: str):
         return self._devices
 
 

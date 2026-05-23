@@ -44,6 +44,7 @@ class WSStage(str, Enum):
     EXTRACTING_KEYFRAMES = "extracting_keyframes"
     RAG_RETRIEVAL = "rag_retrieval"
     LLM_REASONING = "llm_reasoning"
+    ANALYSIS = "analysis"
     SYNTHESIS = "synthesis"
     CLEANUP = "cleanup"
 

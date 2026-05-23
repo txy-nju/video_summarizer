@@ -63,9 +63,14 @@ class ConnectionManager:
 
     async def disconnect(self, user_id: str) -> None:
         """取消注册 WebSocket 连接。"""
+        active = 0
         async with self._lock:
             self._connections.pop(user_id, None)
-        logger.info("WebSocket disconnected: user_id=%s, active=%d", user_id, len(self._connections))
+            active = len(self._connections)
+        logger.info("WebSocket disconnected: user_id=%s, active=%d", user_id, active)
+        # 当无活跃连接时停止后台订阅线程，避免测试进程在 teardown 阶段悬挂。
+        if active == 0:
+            self.stop_listening()
 
     # ------------------------------------------------------------------
     # 消息发送
@@ -109,18 +114,13 @@ class ConnectionManager:
             _channel_name("tenant", tenant_id),
             _channel_name("control", ""),
         ]
+        main_loop = asyncio.get_running_loop()
 
         def _run():
             logger.info("ProgressEventBus subscriber started: instance=%s, channels=%s", instance_id, channels)
 
             def _on_event(event: WSEventEnvelope) -> None:
                 # 将收到的进度事件转发到对应 WebSocket 客户端
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                except Exception:
-                    pass
-
                 async def _forward():
                     success = await self.send_personal(event.user_id, event)
                     if not success:
@@ -132,16 +132,12 @@ class ConnectionManager:
                         )
 
                 try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.ensure_future(_forward())
-                    else:
-                        loop.run_until_complete(_forward())
+                    asyncio.run_coroutine_threadsafe(_forward(), main_loop)
                 except Exception:
                     pass
 
             try:
-                self._event_bus.subscribe(channels, _on_event)
+                self._event_bus.subscribe(channels, _on_event, stop_check=lambda: self._should_stop)
             except Exception:
                 logger.exception("ProgressEventBus subscriber crashed")
             finally:

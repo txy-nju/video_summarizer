@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import APIRouter, FastAPI
 
 from backend.api.routes.auth_routes import router as auth_router
@@ -19,6 +21,7 @@ from backend.middleware.mobile_optimize import register_mobile_optimization
 from backend.middleware.otel_middleware import register_otel_middleware
 from backend.middleware.request_context import register_request_context_middleware
 from backend.observability.tracing import configure_tracing
+from backend.dependencies import get_connection_manager
 
 def _build_system_router() -> APIRouter:
     router = APIRouter()
@@ -45,6 +48,15 @@ def _register_routers(app: FastAPI) -> None:
     app.include_router(websocket_router)
 
 
+@asynccontextmanager
+async def _app_lifespan(_: FastAPI):
+    try:
+        yield
+    finally:
+        # 在应用关闭时停止后台 Redis Pub/Sub 监听线程，避免测试进程退出时悬挂。
+        get_connection_manager().stop_listening()
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     setup_logging(settings.log_level)
@@ -57,7 +69,7 @@ def create_app() -> FastAPI:
         otlp_endpoint=settings.otel_otlp_endpoint,
     )
 
-    app = FastAPI(title=settings.app_name)
+    app = FastAPI(title=settings.app_name, lifespan=_app_lifespan)
     register_mobile_optimization(app)
     register_access_log_middleware(app)
     register_request_context_middleware(app)

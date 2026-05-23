@@ -24,3 +24,6 @@ evaluation/eval_videos/
 evaluation/reports/*
 
 启动说明
+# 临时测试日志
+*.log
+test_out.log

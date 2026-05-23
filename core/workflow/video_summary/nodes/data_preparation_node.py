@@ -240,8 +240,14 @@ def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
         # asyncio.run() 在已有事件循环时会抛出 RuntimeError；降级回退
         logger.warning("data_preparation_node: asyncio.run() conflict, using fallback: %s", exc)
         try:
-            loop = asyncio.get_event_loop()
-            enriched, _stats = loop.run_until_complete(_prepare_keyframes_async(keyframes))
+            import concurrent.futures
+            
+            def run_fallback():
+                return asyncio.run(_prepare_keyframes_async(keyframes))
+                
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(run_fallback)
+                enriched, _stats = future.result()
             return {
                 "keyframes": enriched,
                 "data_preparation_status": {

@@ -94,14 +94,20 @@ async def create_global_qa_stream(
                         "timestamp": produced_at,
                     },
                 )
+            updated_record = qa_service.get_qa_record(
+                owner_id=current_user.user_id,
+                kbid=kbid,
+                chat_id=chat_id,
+                qa_id=record.qa_id,
+            ) or record
             yield _sse_event(
                 "done",
                 {
                     "kbid": kbid,
                     "chat_id": chat_id,
-                    "qa_id": record.qa_id,
-                    "answer_content": record.answer_content,
-                    "cited_sources": [s.model_dump() for s in record.cited_sources],
+                    "qa_id": updated_record.qa_id,
+                    "answer_content": updated_record.answer_content,
+                    "cited_sources": [s.model_dump() if hasattr(s, "model_dump") else s for s in updated_record.cited_sources],
                     "timestamp": produced_at,
                 },
             )

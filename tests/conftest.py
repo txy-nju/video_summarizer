@@ -11,8 +11,14 @@ Strategy:
 
 from __future__ import annotations
 
-import gc
 import os
+os.environ["OTEL_ENABLED"] = "false"
+os.environ["CELERY_TASK_ALWAYS_EAGER"] = "True"
+os.environ["CELERY_TASK_EAGER_PROPAGATES"] = "True"
+
+
+import gc
+
 from collections.abc import Iterator
 from uuid import uuid4
 
@@ -22,24 +28,6 @@ from sqlalchemy.engine import URL, make_url
 
 
 _DEFAULT_DATABASE_URL = "postgresql+psycopg2://postgres:123456@localhost:5432/video_summarizer_test"
-_DEPENDENCY_CACHE_FUNCS = (
-    "get_user_repository",
-    "get_auth_service",
-    "get_kb_repository",
-    "get_kb_service",
-    "get_video_resource_repository",
-    "get_video_resource_service",
-    "get_video_summary_task_repository",
-    "get_video_summary_task_service",
-    "get_video_qa_repository",
-    "get_video_qa_service",
-    "get_global_chat_repository",
-    "get_global_qa_repository",
-    "get_global_chat_service",
-    "get_global_qa_service",
-    "get_fcm_service",
-)
-
 _TRUNCATE_SQL = """
 TRUNCATE TABLE
     device_tokens,
@@ -111,9 +99,9 @@ from backend.models.database import Base  # noqa: E402
 
 
 def _clear_dependency_caches() -> None:
-    for name in _DEPENDENCY_CACHE_FUNCS:
+    for name in dir(dependencies):
         func = getattr(dependencies, name, None)
-        if func is not None and hasattr(func, "cache_clear"):
+        if callable(func) and hasattr(func, "cache_clear"):
             func.cache_clear()
     gc.collect()
 
@@ -144,7 +132,15 @@ def configure_celery_for_testing() -> Iterator[None]:
             task_eager_propagates=True,
         )
     except ImportError:
-        # Celery 未安装，跳过配置
+        pass
+
+    try:
+        from backend.tasks.celery_app import celery_app
+        celery_app.conf.update(
+            task_always_eager=True,
+            task_eager_propagates=True,
+        )
+    except ImportError:
         pass
     yield
 

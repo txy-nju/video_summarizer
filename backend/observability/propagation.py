@@ -7,9 +7,11 @@ TRACE_HEADER_NAMES = ("traceparent", "tracestate", "baggage")
 _TRACEPARENT_RE = re.compile(r"^[\da-f]{2}-([\da-f]{32})-([\da-f]{16})-[\da-f]{2}$", re.IGNORECASE)
 
 
-def extract_trace_headers(headers: Mapping[str, str]) -> dict[str, str]:
+def extract_trace_headers(headers: Mapping[str, str] | None) -> dict[str, str]:
     """Extract W3C trace propagation headers from an arbitrary header mapping."""
     extracted: dict[str, str] = {}
+    if headers is None:
+        return extracted
     for header_name in TRACE_HEADER_NAMES:
         value = headers.get(header_name) or headers.get(header_name.title())
         if value:

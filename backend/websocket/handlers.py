@@ -70,6 +70,8 @@ async def websocket_progress(
     last_seq = websocket.query_params.get("last_sequence")
     try:
         await manager.connect(websocket, user_id)
+        # 启动后台线程监听 Redis Pub/Sub，确保跨实例/跨进程的进度事件能够正常推送到 WebSocket
+        manager.start_listening(tenant_id="default", instance_id="ws-instance")
     except Exception:
         logger.exception("WebSocket connect failed: user_id=%s", user_id)
         return

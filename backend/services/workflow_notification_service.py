@@ -189,7 +189,7 @@ class WorkflowNotificationService:
         """
         try:
             # Query user's registered devices
-            devices = self._device_repository.get_by_user(user_id=user_id, is_deleted=False)
+            devices = self._device_repository.list_by_user(user_id=user_id)
             if not devices:
                 logger.debug(f"[WorkflowNotif] No registered devices for user_id={user_id}")
                 return {

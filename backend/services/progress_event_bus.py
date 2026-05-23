@@ -88,21 +88,35 @@ class ProgressEventBus:
     # 订阅
     # ------------------------------------------------------------------
 
-    def subscribe(self, channels: list[str], callback: Callable[[WSEventEnvelope], Any]) -> None:
+    def subscribe(
+        self,
+        channels: list[str],
+        callback: Callable[[WSEventEnvelope], Any],
+        stop_check: Callable[[], bool] | None = None,
+        poll_timeout: float = 1.0,
+    ) -> None:
         """订阅指定频道列表，收到消息时调用 callback。
 
-        此方法运行在独立线程中，通过 redis-py 的 pubsub.listen() 阻塞监听。
+        此方法运行在独立线程中，使用 get_message() 轮询替代 listen() 无限阻塞，
+        支持通过 stop_check 回调优雅退出，避免进程 shutdown 时 TCP socket 卡死。
 
         Args:
             channels: Redis Pub/Sub 频道名列表
             callback: 收到消息时的处理函数，接收 WSEventEnvelope 实例
+            stop_check: 可选的停止检查函数，返回 True 时退出循环
+            poll_timeout: 每次 get_message 的超时秒数，默认 1.0s
         """
         pubsub = self._redis.pubsub(ignore_subscribe_messages=True)
         try:
             pubsub.subscribe(*channels)
             logger.info("ProgressEventBus subscribed to channels: %s", channels)
 
-            for raw in pubsub.listen():
+            while True:
+                if stop_check is not None and stop_check():
+                    break
+                raw = pubsub.get_message(timeout=poll_timeout)
+                if raw is None:
+                    continue
                 if raw["type"] != "message":
                     continue
                 try:
@@ -114,5 +128,6 @@ class ProgressEventBus:
         finally:
             try:
                 pubsub.unsubscribe(*channels)
+                pubsub.close()
             except Exception:
                 pass
