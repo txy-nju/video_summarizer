@@ -2,7 +2,7 @@
 
 ## 1. 文档元信息
 - 项目：video_summarizer
-- 版本：v2026-05-23
+- 版本：v2026-05-23-r2
 - 范围：FastAPI 已注册全部 controller 路由 + WebSocket + SSE + FCM 交互载荷
 - 生成依据：
   - 路由注册：backend/app_factory.py
@@ -271,6 +271,11 @@ data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","answer_content":"
 |---|---|---|
 | WS | /ws/progress | query token |
 
+### 4.12 Attachments
+| Method | Path | Auth | Status |
+|---|---|---|---|
+| POST | /api/v1/attachments/upload | 是 | 201 |
+
 ## 5. 规范化模型（关键字段）
 
 ### 5.1 Knowledge Base
@@ -318,7 +323,24 @@ data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","answer_content":"
   - total_size: >0 且 <=10GB
 - 固定分片：10 MiB
 
-### 5.6 Device/FCM
+### 5.6 AttachmentInfo（多模态附件元数据）
+通用模型，被 VideoQARecordCreateRequest / TimeTravelQAStreamRequest / GlobalQARecordCreateRequest 的 `attachments` 字段，以及附件上传响应的 `data` 字段共用。
+
+| 字段 | 类型 | 必填 | 约束 | 语义 |
+|---|---|---|---|---|
+| name | string | 是 | min=1,max=255 | 原始文件名，展示用 |
+| oss_key | string | 是 | min=1,max=1024 | 对象存储 Key，由上传接口返回 |
+| mime_type | string | 是 | min=1,max=100 | MIME 类型（当前限制 image/jpeg/png/gif/webp）|
+| size_bytes | int | 是 | >=0 | 文件字节数 |
+| presigned_url | string\|null | 否 | — | **仅出现在响应中**，服务端按 oss_key 即时生成；请求体中无需传入，传入也会被忽略 |
+
+- AttachmentUploadRequest（上传接口）：
+  - file: UploadFile（multipart/form-data）
+  - 允许 MIME：image/jpeg, image/jpg, image/png, image/gif, image/webp
+  - 最大文件大小：10 MiB
+- OSS Key 生成规则：`attachments/{owner_id}/{uuid}{suffix}`
+
+### 5.7 Device/FCM
 - DeviceRegisterRequest:
   - device_token: 1~512
   - platform: android/ios/web
@@ -525,8 +547,9 @@ GET /api/v1/tasks/{task_id}/qa
 
 GET /api/v1/tasks/{task_id}/qa/{qa_id}
 ```json
-{"status":"success","data":{"qa_id":"qa_001","task_id":"task_001","start_time":"00:10:00","end_time":"00:11:00","question_content":"这里在讲什么？","answer_content":"...","attachments":[],"question_time":"2026-05-18T10:00:00Z"},"meta":{"request_id":"req_005","timestamp":"2026-05-18T10:00:00Z"}}
+{"status":"success","data":{"qa_id":"qa_001","task_id":"task_001","start_time":"00:10:00","end_time":"00:11:00","question_content":"这里在讲什么？","answer_content":"...","attachments":[{"name":"screenshot.png","oss_key":"attachments/usr_001/abc123.png","mime_type":"image/png","size_bytes":204800,"presigned_url":"file:///...temp/object_storage/attachments/usr_001/abc123.png?ttl=3600"}],"question_time":"2026-05-18T10:00:00Z"},"meta":{"request_id":"req_005","timestamp":"2026-05-18T10:00:00Z"}}
 ```
+注意：`presigned_url` 由服务端在读取记录时按 oss_key 即时生成；若 OSS 文件不存在则该字段为 null。
 
 PATCH /api/v1/tasks/{task_id}/qa/{qa_id}
 ```json
@@ -595,8 +618,9 @@ GET /api/v1/kbs/{kbid}/chats/{chat_id}/qa
 
 GET /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id}
 ```json
-{"status":"success","data":{"qa_id":"gqa_001","chat_id":"chat_001","question_content":"跨视频问题","answer_content":"...","attachments":[],"cited_sources":[],"question_time":"2026-05-18T10:00:00Z"},"meta":{"request_id":"req_007","timestamp":"2026-05-18T10:00:00Z"}}
+{"status":"success","data":{"qa_id":"gqa_001","chat_id":"chat_001","question_content":"跨视频问题","answer_content":"...","attachments":[{"name":"diagram.jpg","oss_key":"attachments/usr_001/def456.jpg","mime_type":"image/jpeg","size_bytes":102400,"presigned_url":"file:///...temp/object_storage/attachments/usr_001/def456.jpg?ttl=3600"}],"cited_sources":[],"question_time":"2026-05-18T10:00:00Z"},"meta":{"request_id":"req_007","timestamp":"2026-05-18T10:00:00Z"}}
 ```
+注意：`presigned_url` 由服务端在读取记录时按 oss_key 即时生成；若 OSS 文件不存在则该字段为 null。
 
 PATCH /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id}
 ```json
@@ -643,7 +667,23 @@ GET /api/v1/uploads/{upload_id}
 {"upload_id":"upl_001","uploaded_size":31457280,"total_size":524288000,"uploaded_chunks":[0,1,2]}
 ```
 
-### 6.9 Devices
+### 6.10 Attachments
+POST /api/v1/attachments/upload
+
+Content-Type: multipart/form-data
+```
+form-field name: file
+form-field value: <图片二进制内容>
+```
+响应 201：
+```json
+{"status":"success","data":{"name":"screenshot.png","oss_key":"attachments/usr_001/a1b2c3d4e5f6.png","mime_type":"image/png","size_bytes":204800,"presigned_url":"file:///...temp/object_storage/attachments/usr_001/a1b2c3d4e5f6.png?ttl=3600"}}
+```
+- `oss_key` 须在后续 QA 提问请求的 `attachments[].oss_key` 字段中传入，这是附件与问答绑定的唯一标识符。
+- `presigned_url` 为即时生成的临时访问 URL，前端可用于预览上传的图片。
+- 错误情况：不支持的 MIME 类型返回 415；文件超过 10 MiB 返回 413；空文件返回 400。
+
+### 6.11 Devices
 POST /api/v1/devices
 ```json
 {"device_token":"fcm_token_xxx","platform":"android","app_version":"1.0.0","device_id":"android_001"}
@@ -673,6 +713,8 @@ GET /api/v1/devices
 | workflow 状态非法 | 422 | {"detail":"Task must be ..."} |
 | time-travel QA 前置状态不满足 | 422 | {"detail":"Task must have completed analysis phase to support time travel Q&A"} |
 | TUS 版本不匹配 | 412 | {"detail":"Unsupported Tus-Resumable version: ..."} |
+| 附件文件类型不支持 | 415 | {"detail":"不支持的文件类型：...。目前仅接受图片文件（JPEG / PNG / GIF / WEBP）。"} |
+| 附件文件超大（>10 MiB） | 413 | {"detail":"文件超过大小限制（..."} |
 | WebSocket 无 token | close 4001 | reason=missing_token |
 | WebSocket token 非法 | close 4001 | reason=invalid_token/invalid_token_type |
 
@@ -684,6 +726,7 @@ GET /api/v1/devices
   - /api/v1/tasks/{task_id}/time-travel-qa/stream
   - /api/v1/kbs/{kbid}/chats/{chat_id}/qa/stream
 - 已覆盖设备注册与 FCM 推送载荷契约。
+- 已覆盖附件上传路由 POST /api/v1/attachments/upload（v2026-05-23 新增）。
 
 ### 8.2 冲突/差异
 1. ApproveAndFinalizeResponse 的 schema description 字段中描述 "COMPLETED"，但实际路由返回 202 + FINAL_GENERATING（异步受理，状态由 Celery 任务推进到 COMPLETED）。
@@ -693,16 +736,19 @@ GET /api/v1/devices
 5. backend/schemas/global_chat.py 与 backend/schemas/global_qa.py 均定义了 GlobalQARecordCreateRequest，字段内容完全一致；global_qa_routes.py 实际从 backend.schemas.global_qa 导入，以 global_qa.py 为准。
 6. TimeTravelQAStreamRequest 的 canonical 字段名为 question_content，同时通过 AliasChoices 接受 question 作为输入别名；前端联调建议统一发送 question_content。
 7. GET /api/v1/devices 返回裸 dict `{"status":"success","data":[...]}` 而非 DeviceRegisterResponse schema 包装，前端直接解析 data 数组；data 元素结构与 DeviceRegisterResponse 字段一致。
+8. POST /api/v1/attachments/upload 的响应 data 字段类型为 `AttachmentUploadData`（与 `AttachmentInfo` 字段完全一致），未复用同名 schema，前端按 §5.6 字段解析即可。
 
 ### 8.3 推断项（inferred）
 - FCM/WS 的 scope_id 为前端目标实体主键，用于 deep_link 导航。
 - summary_vector_ids 为系统内部字段，前端不应直接写入。
 - presigned_url 由服务端在读取视频资源时生成，过期后前端需重新 GET /api/v1/videos/{video_id} 刷新。
+- QA 记录中 attachment.presigned_url 在每次 GET 时即时生成，与视频 presigned_url 刷新机制相同；前端展示附件图片前若发现 URL 为 null，说明 OSS 文件已被删除。
 
 ## 9. 覆盖检查
-- [x] 路由注册全覆盖
+- [x] 路由注册全覆盖（含 v2026-05-23-r2 新增 /api/v1/attachments/upload）
 - [x] 每个端点至少一组请求/响应示例
 - [x] WebSocket 协议字段与枚举完整
 - [x] SSE 事件协议完整
 - [x] FCM 设备注册与载荷契约完整
 - [x] 错误映射与冲突说明已列出
+- [x] AttachmentInfo presigned_url 字段已记录（仅响应，请求中忽略）

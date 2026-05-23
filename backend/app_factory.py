@@ -1,6 +1,7 @@
 from fastapi import APIRouter, FastAPI
 
 from backend.api.routes.auth_routes import router as auth_router
+from backend.api.routes.attachment_upload import router as attachment_upload_router
 from backend.api.routes.kb_routes import router as kb_router
 from backend.api.routes.video_summary_task_routes import router as video_summary_task_router
 from backend.api.routes.video_qa_routes import router as video_qa_router
@@ -32,6 +33,7 @@ def _build_system_router() -> APIRouter:
 def _register_routers(app: FastAPI) -> None:
     app.include_router(_build_system_router())
     app.include_router(auth_router)
+    app.include_router(attachment_upload_router)
     app.include_router(kb_router)
     app.include_router(video_resource_router)
     app.include_router(video_summary_task_router)

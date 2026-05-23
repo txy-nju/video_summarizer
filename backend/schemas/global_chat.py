@@ -22,6 +22,7 @@ class AttachmentInfo(BaseModel):
     oss_key: str = Field(min_length=1, max_length=1024)
     mime_type: str = Field(min_length=1, max_length=100)
     size_bytes: int = Field(ge=0)
+    presigned_url: str | None = None
 
 
 class GlobalChatSessionCreateRequest(BaseModel):

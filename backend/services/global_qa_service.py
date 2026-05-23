@@ -194,13 +194,21 @@ class GlobalQAService:
 
     @staticmethod
     def _to_qa_view(record) -> GlobalQARecordView:
+        from backend.infrastructure.storage.oss_client import get_object_storage_client
+        storage = get_object_storage_client()
         attachments = []
         cited_sources = []
 
         try:
             if record.attachments:
                 attachments_data = json.loads(record.attachments)
-                attachments = [AttachmentInfo(**a) for a in attachments_data]
+                for a in attachments_data:
+                    att = AttachmentInfo.model_validate(a)
+                    try:
+                        att = att.model_copy(update={"presigned_url": storage.get_presigned_url(object_key=att.oss_key)})
+                    except Exception:
+                        pass
+                    attachments.append(att)
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
