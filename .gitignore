@@ -3,6 +3,7 @@
 .venv
 venv/
 __pycache__/
+.env.docker
 
 # Sensitive files
 cookies.txt
