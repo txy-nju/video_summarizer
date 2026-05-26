@@ -43,7 +43,7 @@ def build_rag_settings() -> Settings:
         api_url=base_url,
     )
     splitter = SplitterSettings(
-        provider="recursive_character",
+        provider="recursive",
         chunk_size=512,
         chunk_overlap=64,
     )

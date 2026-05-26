@@ -8,6 +8,7 @@ from core.workflow.video_summary.nodes.map_dispatcher import (
     synthesis_barrier_node,
     route_after_wave_synthesis,
     route_audio_send_tasks,
+    route_synthesis_bypass_if_ready,
     route_synthesis_send_tasks,
     route_vision_send_tasks,
     ROUTE_CONTINUE_WAVE,
@@ -65,6 +66,8 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
 
     workflow.add_conditional_edges("map_dispatch_node", route_audio_send_tasks)
     workflow.add_conditional_edges("map_dispatch_node", route_vision_send_tasks)
+    # 防死锁旁路：audio+vision 均已就绪但 synthesis 未完成时，直接触发 synthesis_barrier_node
+    workflow.add_conditional_edges("map_dispatch_node", route_synthesis_bypass_if_ready)
 
     # 先汇聚到 barrier，再触发 synthesis fan-out。
     workflow.add_edge("chunk_audio_worker_node", "synthesis_barrier_node")

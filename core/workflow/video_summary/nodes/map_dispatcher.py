@@ -434,6 +434,62 @@ def route_synthesis_send_tasks(state: VideoSummaryState) -> List[Send]:
     return sends
 
 
+def route_synthesis_bypass_if_ready(state: VideoSummaryState) -> List[Send]:
+    """
+    防死锁旁路：当当前波次所有分片的 audio+vision 均已就绪但 synthesis 尚未完成时，
+    直接向 synthesis_barrier_node 发送一个空 Send，绕过 audio/vision 工作者路径。
+
+    背景：
+    - synthesis_barrier_node 仅能通过 audio/vision 工作者的完成边触达。
+    - 若 CONTINUE_WAVE 重入时所有分片已具备 audio+vision（例如工作者在首波已完成，
+      但 synthesis 因异常未被派发），route_audio/vision_send_tasks 均返回 []，
+      图执行在 map_dispatch_node 处静默终止，永远无法到达 chunk_aggregator_node。
+    - 本函数作为第三条条件边，仅在上述死锁场景下激活一个旁路 Send。
+
+    返回 [] 的安全条件（正常路径不激活）：
+    - chunk_plan 为空。
+    - 当前波次存在任意分片尚未完成 audio 或 vision 分析（正常 worker 派发路径会处理）。
+    - 当前波次所有分片已全部完成 synthesis（无需额外 synthesis 派发）。
+    """
+    chunk_plan = state.get("chunk_plan", [])
+    if not isinstance(chunk_plan, list) or not chunk_plan:
+        return []
+
+    active_wave_chunk_ids = state.get("active_wave_chunk_ids", [])
+    if not isinstance(active_wave_chunk_ids, list):
+        active_wave_chunk_ids = []
+    active_wave_set = {str(item).strip() for item in active_wave_chunk_ids if str(item).strip()}
+
+    chunk_results = state.get("chunk_results", [])
+    if not isinstance(chunk_results, list):
+        chunk_results = []
+    result_map = _build_result_map(chunk_results)
+
+    has_pending_synthesis = False
+    for chunk in chunk_plan:
+        if not isinstance(chunk, dict):
+            continue
+        chunk_id = str(chunk.get("chunk_id", "")).strip()
+        if not chunk_id:
+            continue
+        if active_wave_set and chunk_id not in active_wave_set:
+            continue
+
+        item = result_map.get(chunk_id, {})
+        # 若该分片仍需 audio 或 vision 分析，交由正常 worker 路径处理，本旁路不激活
+        if not _modality_ready(item, "audio") or not _modality_ready(item, "vision"):
+            return []
+        # 标记该波次中是否存在待合成分片
+        if not _is_chunk_synthesized(item):
+            has_pending_synthesis = True
+
+    if not has_pending_synthesis:
+        return []
+
+    # 所有当前波次分片已有 audio+vision 但 synthesis 未完成，触发旁路
+    return [Send("synthesis_barrier_node", {})]
+
+
 def route_after_wave_synthesis(state: VideoSummaryState) -> str:
     """
     波次执行后的路由：若仍有未完成 chunk，继续下一波；否则进入聚合。

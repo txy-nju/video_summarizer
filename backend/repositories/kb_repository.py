@@ -106,6 +106,20 @@ class KnowledgeBaseRepository:
         )
         if row is None:
             return False
+            
+        from backend.models.database import GlobalChatSession, GlobalQARecord, VideoSummaryTask, VideoQARecord
+        
+        # 1. Cascade delete global chats and their QA records
+        chat_ids = [c.chat_id for c in self._session.query(GlobalChatSession.chat_id).filter(GlobalChatSession.kbid == kbid).all()]
+        if chat_ids:
+            self._session.query(GlobalQARecord).filter(GlobalQARecord.chat_id.in_(chat_ids)).delete(synchronize_session=False)
+            self._session.query(GlobalChatSession).filter(GlobalChatSession.kbid == kbid).delete(synchronize_session=False)
+            
+        # 2. Cascade delete tasks and their QA records
+        task_ids = [t.task_id for t in self._session.query(VideoSummaryTask.task_id).filter(VideoSummaryTask.kbid == kbid).all()]
+        if task_ids:
+            self._session.query(VideoQARecord).filter(VideoQARecord.task_id.in_(task_ids)).delete(synchronize_session=False)
+            self._session.query(VideoSummaryTask).filter(VideoSummaryTask.kbid == kbid).delete(synchronize_session=False)
 
         self._session.delete(row)
         self._session.commit()

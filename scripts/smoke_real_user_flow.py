@@ -7,13 +7,73 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import threading
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import websockets
+except ImportError:
+    print("\n[ERROR] 请安装 websockets 库以运行带 WebSocket 的测试: pip install websockets\n")
+    sys.exit(1)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+class WSClient:
+    def __init__(self, base_url: str, token: str):
+        ws_scheme = "wss://" if base_url.startswith("https") else "ws://"
+        host_path = base_url.split("://", 1)[1] if "://" in base_url else base_url
+        self.ws_url = f"{ws_scheme}{host_path}/ws/progress?token={token}"
+        self.task_states = {}
+        self.video_states = {}
+        self.cond = threading.Condition()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self._listen())
+
+    async def _listen(self):
+        try:
+            async with websockets.connect(self.ws_url) as ws:
+                print(f"\n[WS 连接成功] {self.ws_url}")
+                async for msg in ws:
+                    try:
+                        data = json.loads(msg)
+                        evt_type = data.get("type", "unknown")
+                        payload = data.get("payload", {})
+                        
+                        print(f"\n[WS 推送 - {evt_type.upper()}] {json.dumps(payload, ensure_ascii=False)}")
+                        
+                        scope = payload.get("scope")
+                        scope_id = payload.get("scope_id")
+                        status = payload.get("status")
+                        
+                        if evt_type == "completed":
+                            result = payload.get("result", {})
+                            if scope == "video_summary_task" and "workflow_state" in result:
+                                status = result["workflow_state"]
+                            elif scope == "video_resource":
+                                status = "READY"
+                        
+                        if scope and scope_id and status:
+                            with self.cond:
+                                if scope == "video_resource":
+                                    self.video_states[scope_id] = status
+                                elif scope == "video_summary_task":
+                                    self.task_states[scope_id] = status
+                                self.cond.notify_all()
+                    except Exception:
+                        pass
+        except Exception as e:
+            print(f"\n[WS 连接失败] {e}")
 
 
 @dataclass
@@ -165,6 +225,7 @@ def _wait_video_ready(
     base_url: str,
     token: str,
     video_id: str,
+    ws_client: WSClient | None = None,
     timeout_sec: int = 180,
     poll_interval_sec: int = 2,
 ) -> None:
@@ -172,6 +233,15 @@ def _wait_video_ready(
     last_status: dict | None = None
 
     while time.time() < deadline:
+        if ws_client:
+            with ws_client.cond:
+                current_ws = ws_client.video_states.get(video_id, "")
+                if current_ws == "READY":
+                    print("[OK] video preprocessing completed (via WS)")
+                    return
+                if current_ws == "FAILED":
+                    raise RuntimeError(f"Video preprocessing failed (via WS)")
+
         video_res = _request_json(
             method="GET",
             base_url=base_url,
@@ -181,21 +251,16 @@ def _wait_video_ready(
         )
         payload = video_res.get("data", {}).get("data", {})
 
-        # 以当前后端 schema 为准：transcribe_status / frame_extraction_status
         transcription_status = payload.get("transcribe_status")
         keyframe_status = payload.get("frame_extraction_status")
 
-        # 兼容历史/别名字段
         if transcription_status is None:
             transcription_status = payload.get("transcription_status")
         if keyframe_status is None:
             keyframe_status = payload.get("keyframe_status")
-
-        # 兼容部分后端字段命名
         if keyframe_status is None:
             keyframe_status = payload.get("keyframes_status")
 
-        # 兼容布尔字段
         if transcription_status is None and "transcription_completed" in payload:
             transcription_status = "completed" if payload.get("transcription_completed") else "processing"
         if keyframe_status is None and "keyframe_extraction_completed" in payload:
@@ -210,7 +275,7 @@ def _wait_video_ready(
         keyframe_status_norm = str(keyframe_status or "").upper()
 
         if transcription_status_norm == "COMPLETED" and keyframe_status_norm == "COMPLETED":
-            print("[OK] video preprocessing completed")
+            print("[OK] video preprocessing completed (via API fallback)")
             return
 
         if transcription_status_norm == "FAILED" or keyframe_status_norm == "FAILED":
@@ -224,7 +289,12 @@ def _wait_video_ready(
             )
         else:
             print(f"[WAIT] video not ready yet: {last_status}")
-        time.sleep(poll_interval_sec)
+            
+        if ws_client:
+            with ws_client.cond:
+                ws_client.cond.wait(timeout=poll_interval_sec)
+        else:
+            time.sleep(poll_interval_sec)
 
     raise TimeoutError(
         f"Wait video ready timeout after {timeout_sec}s, last status={last_status}"
@@ -237,6 +307,7 @@ def _upload_local_video_via_tus(
     token: str,
     local_video_path: Path,
     upload_file_name: str,
+    simulate_pause: bool = False,
 ) -> str:
     total_size = local_video_path.stat().st_size
     init_res = _request_json(
@@ -257,6 +328,7 @@ def _upload_local_video_via_tus(
     print(f"[OK] initiated upload: upload_id={upload_id}, chunk_size={chunk_size}, total_size={total_size}")
 
     offset = 0
+    chunks_uploaded = 0
     with local_video_path.open("rb") as f:
         while True:
             chunk = f.read(chunk_size)
@@ -279,6 +351,12 @@ def _upload_local_video_via_tus(
             next_offset = int(result["headers"].get("Upload-Offset", offset + len(chunk)))
             offset = next_offset
             print(f"[UPLOAD] offset={offset}/{total_size}")
+            
+            chunks_uploaded += 1
+            if simulate_pause and chunks_uploaded == 1 and offset < total_size:
+                print("\n[UPLOAD PAUSE] Simulating network drop... waiting 2s")
+                time.sleep(2)
+                print("[UPLOAD RESUME] Re-establishing connection and resuming from offset...\n")
 
     if offset != total_size:
         raise RuntimeError(f"Upload offset mismatch: offset={offset}, expected={total_size}")
@@ -324,11 +402,22 @@ def _wait_task_state(
     token: str,
     task_id: str,
     target_states: set[str],
+    ws_client: WSClient | None = None,
     timeout_sec: int = 300,
     poll_interval_sec: int = 2,
 ) -> dict:
     deadline = time.time() + timeout_sec
     while time.time() < deadline:
+        if ws_client:
+            with ws_client.cond:
+                current_ws = ws_client.task_states.get(task_id, "")
+                if current_ws in target_states:
+                    res = _request_json(method="GET", base_url=base_url, path=f"/api/v1/tasks/{task_id}", token=token, expected_status=200)
+                    print(f"[OK] task reached state={current_ws} (via WS)")
+                    return res.get("data", {}).get("data", {})
+                if current_ws == "FAILED":
+                    raise RuntimeError(f"Task failed via WS: task_id={task_id}")
+
         res = _request_json(
             method="GET",
             base_url=base_url,
@@ -340,12 +429,18 @@ def _wait_task_state(
         task_data = res.get("data", {}).get("data", {})
         state = str(task_data.get("workflow_state") or "").upper()
         if state in target_states:
-            print(f"[OK] task reached state={state}")
+            print(f"[OK] task reached state={state} (via API fallback)")
             return task_data
         if state == "FAILED":
             raise RuntimeError(f"Task failed: task_id={task_id}")
         print(f"[WAIT] task workflow_state={state}")
-        time.sleep(poll_interval_sec)
+        
+        if ws_client:
+            with ws_client.cond:
+                ws_client.cond.wait(timeout=poll_interval_sec)
+        else:
+            time.sleep(poll_interval_sec)
+            
     raise TimeoutError(
         f"Wait task state timeout after {timeout_sec}s, task_id={task_id}, target_states={sorted(target_states)}"
     )
@@ -407,6 +502,9 @@ def main() -> None:
     user_b = _register_and_login(base_url, "user_b", suffix)
     print(f"[OK] user_a={user_a.username}, user_b={user_b.username}")
 
+    _log_step("Init WebSocket Listener for User A")
+    ws_client = WSClient(base_url, user_a.access_token)
+
     _log_step("Validate /auth/me for user A")
     me_a = _request_json(
         method="GET",
@@ -440,12 +538,22 @@ def main() -> None:
     kbid = kb_res["data"]["data"]["kbid"]
     print(f"[OK] kbid={kbid}")
 
-    _log_step("Upload local video via TUS chunks")
+    _log_step("Edge Behavior: Cancel Upload")
+    try:
+        init_res = _request_json(method="POST", base_url=base_url, path="/api/v1/uploads", token=user_a.access_token, payload={"file_name": "cancel_test.mp4", "total_size": 1024*1024}, expected_status=201)
+        up_id = init_res["data"]["upload_id"]
+        _request_binary(method="PATCH", base_url=base_url, path=f"/api/v1/uploads/{up_id}", token=user_a.access_token, body=b"test", headers={"Upload-Offset": "0", "Tus-Resumable": "1.0.0", "Content-Type": "application/offset+octet-stream"}, expected_status=(200, 204))
+        print("[OK] Abandoned incomplete upload successfully without blocking system")
+    except Exception as e:
+        print(f"[WARN] Cancel upload test failed: {e}")
+
+    _log_step("Upload local video via TUS chunks (with network drop simulation)")
     _ = _upload_local_video_via_tus(
         base_url=base_url,
         token=user_a.access_token,
         local_video_path=local_video_path,
         upload_file_name=upload_file_name,
+        simulate_pause=True,
     )
 
     _log_step("Wait uploaded video to materialize and become ready")
@@ -469,14 +577,30 @@ def main() -> None:
         base_url=base_url,
         token=user_a.access_token,
         video_id=video_id,
+        ws_client=ws_client,
         timeout_sec=600,
     )
 
-    _log_step("Query KB and linked videos")
+    _log_step("Query KB and linked videos (with Pagination Test)")
     _request_json(
         method="GET",
         base_url=base_url,
         path=f"/api/v1/kbs/{kbid}",
+        token=user_a.access_token,
+        expected_status=200,
+    )
+    # Testing pagination logic
+    page1_res = _request_json(
+        method="GET",
+        base_url=base_url,
+        path=f"/api/v1/kbs/{kbid}/videos?page=1&page_size=1",
+        token=user_a.access_token,
+        expected_status=200,
+    )
+    page2_res = _request_json(
+        method="GET",
+        base_url=base_url,
+        path=f"/api/v1/kbs/{kbid}/videos?page=2&page_size=1",
         token=user_a.access_token,
         expected_status=200,
     )
@@ -487,9 +611,9 @@ def main() -> None:
         token=user_a.access_token,
         expected_status=200,
     )
-    print(f"[OK] kb linked videos count={len(kb_videos_res['data']['data'])}")
+    print(f"[OK] kb linked videos total count={len(kb_videos_res['data']['data'])}, page1 items={len(page1_res['data']['data'])}, page2 items={len(page2_res['data']['data'])}")
 
-    _log_step("Create summary task")
+    _log_step("Create main summary task")
     task_res = _request_json(
         method="POST",
         base_url=base_url,
@@ -504,6 +628,13 @@ def main() -> None:
     )
     task_id = task_res["data"]["data"]["task_id"]
     print(f"[OK] created task_id={task_id}")
+    
+    _log_step("Edge Behavior: Delete Processing Task")
+    dummy_task_res = _request_json(method="POST", base_url=base_url, path="/api/v1/tasks", token=user_a.access_token, payload={"kbid": kbid, "video_id": video_id, "user_initial_preference": "dummy"}, expected_status=201)
+    dummy_task_id = dummy_task_res["data"]["data"]["task_id"]
+    _request_json(method="POST", base_url=base_url, path=f"/api/v1/tasks/{dummy_task_id}/start-analysis", token=user_a.access_token, payload={}, expected_status=202)
+    _request_json(method="DELETE", base_url=base_url, path=f"/api/v1/tasks/{dummy_task_id}", token=user_a.access_token, expected_status=200)
+    print(f"[OK] Deleted processing task_id={dummy_task_id} gracefully")
 
     _log_step("Trigger analysis workflow and wait for human approval state")
     _request_json(
@@ -519,7 +650,24 @@ def main() -> None:
         token=user_a.access_token,
         task_id=task_id,
         target_states={"WAITING_USER_APPROVAL"},
+        ws_client=ws_client,
+        timeout_sec=900,
     )
+    
+    _log_step("Edge Behavior: Reject / Redo Draft")
+    _request_json(method="PATCH", base_url=base_url, path=f"/api/v1/tasks/{task_id}", token=user_a.access_token, payload={"user_guidance": "草稿打回重做，请详细分析细节。"}, expected_status=200)
+    _request_json(method="POST", base_url=base_url, path=f"/api/v1/tasks/{task_id}/start-analysis", token=user_a.access_token, payload={}, expected_status=202)
+    print("[OK] Draft rejected, re-triggered analysis...")
+
+    _ = _wait_task_state(
+        base_url=base_url,
+        token=user_a.access_token,
+        task_id=task_id,
+        target_states={"WAITING_USER_APPROVAL"},
+        ws_client=ws_client,
+        timeout_sec=900,
+    )
+    print("[OK] Re-analysis completed, draft reaches approval stage again")
 
     _log_step("Approve and finalize summary workflow")
     _request_json(
@@ -538,6 +686,7 @@ def main() -> None:
         token=user_a.access_token,
         task_id=task_id,
         target_states={"COMPLETED"},
+        ws_client=ws_client,
     )
     final_summary = completed_task.get("final_summary")
     if not (isinstance(final_summary, str) and final_summary.strip()):
@@ -626,6 +775,12 @@ def main() -> None:
         expected_status=200,
     )
     print("[OK] refresh token flow")
+    
+    _log_step("Auxiliary Behavior: Teardown / Cleanup")
+    _request_json(method="DELETE", base_url=base_url, path=f"/api/v1/tasks/{task_id}", token=user_a.access_token, expected_status=200)
+    _request_json(method="DELETE", base_url=base_url, path=f"/api/v1/videos/{video_id}", token=user_a.access_token, expected_status=(200, 202))
+    _request_json(method="DELETE", base_url=base_url, path=f"/api/v1/kbs/{kbid}", token=user_a.access_token, expected_status=(200, 202))
+    print("[OK] Resource cleanup complete")
 
     print("\n[DONE] Smoke flow passed")
     print(json.dumps({

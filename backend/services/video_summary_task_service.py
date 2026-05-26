@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import UTC, datetime
+import json
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -216,10 +217,28 @@ class VideoSummaryTaskService:
         if video is None:
             raise LookupError("Video resource not found")
 
-        transcript = video.full_transcript or ""
+        # chunk_planner_node / chunk_audio_analyzer 期望收到形如
+        # {"text": "...", "segments": [...]} 的 JSON 字符串。
+        # full_transcript 只存储了平文本，需结合 transcript_segments 重建。
+        transcript_text = video.full_transcript or ""
+        transcript_segments = video.transcript_segments or []
+        if transcript_segments:
+            transcript = json.dumps(
+                {"text": transcript_text, "segments": transcript_segments},
+                ensure_ascii=False,
+            )
+        else:
+            transcript = transcript_text
         keyframes = video.keyframes or []
 
         from backend.tasks.workflow_runtime_tasks import async_execute_analysis_workflow
+        
+        # Update state synchronously to prevent race conditions in clients
+        self._repository.update_state_by_owner_and_id(
+            owner_id=owner_id,
+            task_id=task_id,
+            workflow_state="DRAFT_GENERATING"
+        )
 
         task_result = async_execute_analysis_workflow.apply_async(
             args=[
@@ -262,6 +281,13 @@ class VideoSummaryTaskService:
             )
 
         from backend.tasks.workflow_runtime_tasks import async_execute_finalization_workflow
+        
+        # Update state synchronously to prevent race conditions in clients
+        self._repository.update_state_by_owner_and_id(
+            owner_id=owner_id,
+            task_id=task_id,
+            workflow_state="FINAL_GENERATING"
+        )
 
         task_result = async_execute_finalization_workflow.apply_async(
             args=[

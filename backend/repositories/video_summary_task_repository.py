@@ -101,6 +101,9 @@ class VideoSummaryTaskRepository:
         if row is None:
             return False
 
+        from backend.models.database import VideoQARecord
+        self._session.query(VideoQARecord).filter(VideoQARecord.task_id == task_id).delete(synchronize_session=False)
+
         self._session.delete(row)
         self._session.commit()
         return True
