@@ -150,7 +150,9 @@ def get_rag_agent_service() -> RagAgentService:
 @lru_cache(maxsize=1)
 def get_upload_service() -> UploadService:
     """Create UploadService for TUS upload session orchestration."""
-    redis_client = redis_lib.Redis.from_url("redis://localhost:6379/2", decode_responses=True)
+    import os
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
+    redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
     return UploadService(repository=UploadRepository(redis_client=redis_client))
 
 

@@ -29,7 +29,9 @@ def _create_upload_service():
 
     import redis as redis_lib
 
-    redis_client = redis_lib.Redis.from_url("redis://localhost:6379/2", decode_responses=True)
+    import os
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
+    redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
     return UploadService(UploadRepository(redis_client))
 
 
@@ -75,7 +77,9 @@ def async_finalize_upload(upload_id: str, trace_id: str = "") -> dict:
         from backend.repositories.upload_repository import UploadRepository
         import redis as redis_lib
 
-        redis_client = redis_lib.Redis.from_url("redis://localhost:6379/2", decode_responses=True)
+        import os
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
+        redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
         UploadRepository(redis_client).cleanup_chunks(upload_id)
         UploadRepository(redis_client).update_state(upload_id, "done")
 
@@ -159,8 +163,10 @@ def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str,
         from backend.schemas.domain_event import DomainEvent
         from backend.services.domain_event_bus import DomainEventBus
 
+        import os
+        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
         redis_client = redis_lib.Redis.from_url(
-            "redis://localhost:6379/2", decode_responses=True
+            redis_url, decode_responses=True
         )
         bus = DomainEventBus(redis_client)
 

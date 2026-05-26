@@ -48,8 +48,10 @@ def run_domain_event_listener() -> None:
 
     from backend.services.domain_event_bus import DomainEventBus
 
+    import os
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
     redis_client = redis_lib.Redis.from_url(
-        "redis://localhost:6379/2", decode_responses=True
+        redis_url, decode_responses=True
     )
     bus = DomainEventBus(redis_client)
     consumer_name = _build_consumer_name()
