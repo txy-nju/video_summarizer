@@ -28,26 +28,13 @@ def _build_result_map(chunk_results: List[Dict[str, Any]]) -> Dict[str, Dict[str
     }
 
 
-def _is_chunk_synthesized(item: Dict[str, Any]) -> bool:
-    if bool(str(item.get("chunk_summary", "")).strip()):
+def _is_chunk_completed(item: Dict[str, Any]) -> bool:
+    if "verified_insights" in item:
         return True
 
     modality_status = item.get("modality_status", {})
     if isinstance(modality_status, dict):
-        status = str(modality_status.get("synthesizer", "")).strip().lower()
-        if status in {"timeout", "failed", "degraded"}:
-            return True
-    return False
-
-
-def _modality_ready(item: Dict[str, Any], modality: str) -> bool:
-    insights_key = f"{modality}_insights"
-    if bool(str(item.get(insights_key, "")).strip()):
-        return True
-
-    modality_status = item.get("modality_status", {})
-    if isinstance(modality_status, dict):
-        status = str(modality_status.get(modality, "")).strip().lower()
+        status = str(modality_status.get("vision", "")).strip().lower()
         if status in {"timeout", "failed", "degraded"}:
             return True
     return False
@@ -64,9 +51,12 @@ def _build_chunk_summary_memory(chunk_ids: List[str], result_map: Dict[str, Dict
     memory: Dict[str, str] = {}
     for chunk_id in chunk_ids:
         item = result_map.get(chunk_id, {})
-        summary = _compress_summary(str(item.get("chunk_summary", "")))
-        if summary:
-            memory[chunk_id] = summary
+        insights = item.get("verified_insights", [])
+        if insights:
+            summary_parts = []
+            for insight in insights:
+                summary_parts.append(f"[{insight.get('timestamp', '')}] {insight.get('claim', '')}")
+            memory[chunk_id] = _compress_summary("\n".join(summary_parts))
     return memory
 
 
@@ -143,7 +133,7 @@ def map_dispatch_node(state: VideoSummaryState) -> Dict[str, Any]:
 
     chunk_ids = _chunk_ids_from_plan(chunk_plan)
     result_map = _build_result_map(chunk_results)
-    pending_chunk_ids = [chunk_id for chunk_id in chunk_ids if not _is_chunk_synthesized(result_map.get(chunk_id, {}))]
+    pending_chunk_ids = [chunk_id for chunk_id in chunk_ids if not _is_chunk_completed(result_map.get(chunk_id, {}))]
 
     active_wave_chunk_ids = pending_chunk_ids[: max(1, WAVE_DISPATCH_SIZE)]
     chunk_summary_memory = _build_chunk_summary_memory(chunk_ids, result_map)
@@ -183,71 +173,9 @@ def map_dispatch_node(state: VideoSummaryState) -> Dict[str, Any]:
     }
 
 
-def synthesis_barrier_node(state: VideoSummaryState) -> Dict[str, Any]:
+def route_subgraph_send_tasks(state: VideoSummaryState) -> List[Send]:
     """
-    Send API 路径下的中间汇聚节点。
-
-    地位:
-    - 位于 audio/vision worker 之后，synthesis worker 之前。
-    - 负责把并行分析阶段与并行融合阶段分隔开，形成显式 barrier。
-
-    任务:
-    - 检查每个 chunk 是否同时具备 audio_insights 和 vision_insights。
-    - 记录 synthesis_ready 等门控状态。
-    - 不做业务推理，只做条件汇聚与状态透传。
-
-    主要输入:
-    - state["chunk_plan"]
-    - state["chunk_results"]
-
-    主要输出:
-    - reduce_debug_info: 汇聚完成度与是否可进入 synthesis fan-out。
-    - chunk_results: 原样透传。
-    """
-    reduce_debug_info = state.get("reduce_debug_info", {})
-    if not isinstance(reduce_debug_info, dict):
-        reduce_debug_info = {}
-
-    chunk_plan = state.get("chunk_plan", [])
-    if not isinstance(chunk_plan, list):
-        chunk_plan = []
-    wave_chunk_ids = state.get("active_wave_chunk_ids", [])
-    if not isinstance(wave_chunk_ids, list):
-        wave_chunk_ids = []
-    if not wave_chunk_ids:
-        wave_chunk_ids = _chunk_ids_from_plan(chunk_plan)
-    total_chunks = len(wave_chunk_ids)
-
-    chunk_results = state.get("chunk_results", [])
-    if not isinstance(chunk_results, list):
-        chunk_results = []
-
-    result_map = _build_result_map(chunk_results)
-    ready_chunk_ids = {
-        chunk_id
-        for chunk_id in wave_chunk_ids
-        if _modality_ready(result_map.get(chunk_id, {}), "audio") and _modality_ready(result_map.get(chunk_id, {}), "vision")
-    }
-
-    reduce_debug_info.update(
-        {
-            "synthesis_barrier_reached": True,
-            "synthesis_ready_chunks": len(ready_chunk_ids),
-            "synthesis_total_chunks": total_chunks,
-            "synthesis_ready": total_chunks > 0 and len(ready_chunk_ids) == total_chunks,
-            "synthesis_wave_chunk_ids": wave_chunk_ids,
-        }
-    )
-
-    return {
-        "chunk_results": chunk_results,
-        "reduce_debug_info": reduce_debug_info,
-    }
-
-
-def route_audio_send_tasks(state: VideoSummaryState) -> List[Send]:
-    """
-    为音频分析阶段生成 Send API 派发任务。
+    为子图并发阶段生成 Send API 派发任务。
     """
     chunk_plan = state.get("chunk_plan", [])
     if not isinstance(chunk_plan, list):
@@ -260,57 +188,6 @@ def route_audio_send_tasks(state: VideoSummaryState) -> List[Send]:
 
     sends: List[Send] = []
     transcript = state.get("transcript", "")
-    user_prompt = state.get("user_prompt", "")
-    structured_global_context = state.get("structured_global_context", {})
-    previous_chunk_summaries_by_chunk = state.get("previous_chunk_summaries_by_chunk", {})
-    if not isinstance(previous_chunk_summaries_by_chunk, dict):
-        previous_chunk_summaries_by_chunk = {}
-    chunk_results = state.get("chunk_results", [])
-    if not isinstance(chunk_results, list):
-        chunk_results = []
-    result_map = _build_result_map(chunk_results)
-    for chunk in chunk_plan:
-        if not isinstance(chunk, dict):
-            continue
-        chunk_id = str(chunk.get("chunk_id", "")).strip()
-        if not chunk_id:
-            continue
-        if active_wave_set and chunk_id not in active_wave_set:
-            continue
-        # 避免重复派发：该分片音频模态已 ready（含终结降级）则跳过。
-        if _modality_ready(result_map.get(chunk_id, {}), "audio"):
-            continue
-
-        sends.append(
-            Send(
-                "chunk_audio_worker_node",
-                {
-                    "transcript": transcript,
-                    "user_prompt": user_prompt,
-                    "structured_global_context": structured_global_context,
-                    "previous_chunk_summaries": previous_chunk_summaries_by_chunk.get(chunk_id, []),
-                    "current_chunk": chunk,
-                },
-            )
-        )
-
-    return sends
-
-
-def route_vision_send_tasks(state: VideoSummaryState) -> List[Send]:
-    """
-    为视觉分析阶段生成 Send API 派发任务。
-    """
-    chunk_plan = state.get("chunk_plan", [])
-    if not isinstance(chunk_plan, list):
-        return []
-
-    active_wave_chunk_ids = state.get("active_wave_chunk_ids", [])
-    if not isinstance(active_wave_chunk_ids, list):
-        active_wave_chunk_ids = []
-    active_wave_set = {str(item).strip() for item in active_wave_chunk_ids if str(item).strip()}
-
-    sends: List[Send] = []
     keyframes = state.get("keyframes", [])
     keyframes_base_path = str(state.get("keyframes_base_path", ""))
     user_prompt = state.get("user_prompt", "")
@@ -322,6 +199,7 @@ def route_vision_send_tasks(state: VideoSummaryState) -> List[Send]:
     if not isinstance(chunk_results, list):
         chunk_results = []
     result_map = _build_result_map(chunk_results)
+    
     for chunk in chunk_plan:
         if not isinstance(chunk, dict):
             continue
@@ -330,14 +208,15 @@ def route_vision_send_tasks(state: VideoSummaryState) -> List[Send]:
             continue
         if active_wave_set and chunk_id not in active_wave_set:
             continue
-        # 避免重复派发：该分片视觉模态已 ready（含终结降级）则跳过。
-        if _modality_ready(result_map.get(chunk_id, {}), "vision"):
+        # 避免重复派发：该分片已 completed（含终结降级）则跳过。
+        if _is_chunk_completed(result_map.get(chunk_id, {})):
             continue
 
         sends.append(
             Send(
-                "chunk_vision_worker_node",
+                "chunk_subgraph",
                 {
+                    "transcript": transcript,
                     "keyframes": keyframes,
                     "keyframes_base_path": keyframes_base_path,
                     "user_prompt": user_prompt,
@@ -351,146 +230,7 @@ def route_vision_send_tasks(state: VideoSummaryState) -> List[Send]:
     return sends
 
 
-def route_synthesis_send_tasks(state: VideoSummaryState) -> List[Send]:
-    """
-    为分片融合阶段生成 Send API 派发任务。
-
-    仅在所有 chunk 已同时具备音频和视觉洞察时触发。
-    """
-    chunk_plan = state.get("chunk_plan", [])
-    if not isinstance(chunk_plan, list) or not chunk_plan:
-        return []
-
-    active_wave_chunk_ids = state.get("active_wave_chunk_ids", [])
-    if not isinstance(active_wave_chunk_ids, list):
-        active_wave_chunk_ids = []
-    active_wave_set = {str(item).strip() for item in active_wave_chunk_ids if str(item).strip()}
-
-    planned_chunk_ids: List[str] = []
-    for chunk in chunk_plan:
-        if not isinstance(chunk, dict):
-            continue
-        chunk_id = str(chunk.get("chunk_id", "")).strip()
-        if chunk_id:
-            if active_wave_set and chunk_id not in active_wave_set:
-                continue
-            planned_chunk_ids.append(chunk_id)
-
-    if not planned_chunk_ids:
-        return []
-
-    chunk_results = state.get("chunk_results", [])
-    if not isinstance(chunk_results, list):
-        return []
-
-    result_map: Dict[str, Dict[str, Any]] = _build_result_map(chunk_results)
-
-    # 触发时机保底：必须等待 audio_worker 和 vision_worker 整理完全部 chunk。
-    all_ready = True
-    for chunk_id in planned_chunk_ids:
-        item = result_map.get(chunk_id, {})
-        has_audio = _modality_ready(item, "audio")
-        has_vision = _modality_ready(item, "vision")
-        if not (has_audio and has_vision):
-            all_ready = False
-            break
-
-    if not all_ready:
-        return []
-
-    sends: List[Send] = []
-    user_prompt = str(state.get("user_prompt", ""))
-    structured_global_context = str(state.get("structured_global_context", ""))
-    for chunk in chunk_plan:
-        if not isinstance(chunk, dict):
-            continue
-        chunk_id = str(chunk.get("chunk_id", "")).strip()
-        if not chunk_id:
-            continue
-        if active_wave_set and chunk_id not in active_wave_set:
-            continue
-
-        base_item = result_map.get(chunk_id, {"chunk_id": chunk_id})
-        # 幂等：已生成 chunk_summary 的分片不重复派发
-        if str(base_item.get("chunk_summary", "")).strip():
-            continue
-        if not _modality_ready(base_item, "audio"):
-            continue
-        if not _modality_ready(base_item, "vision"):
-            continue
-
-        sends.append(
-            Send(
-                "chunk_synthesizer_worker_node",
-                {
-                    "user_prompt": user_prompt,
-                    "structured_global_context":structured_global_context,
-                    "current_synthesis_chunk": chunk,
-                    "current_synthesis_base_item": base_item,
-                },
-            )
-        )
-
-    return sends
-
-
-def route_synthesis_bypass_if_ready(state: VideoSummaryState) -> List[Send]:
-    """
-    防死锁旁路：当当前波次所有分片的 audio+vision 均已就绪但 synthesis 尚未完成时，
-    直接向 synthesis_barrier_node 发送一个空 Send，绕过 audio/vision 工作者路径。
-
-    背景：
-    - synthesis_barrier_node 仅能通过 audio/vision 工作者的完成边触达。
-    - 若 CONTINUE_WAVE 重入时所有分片已具备 audio+vision（例如工作者在首波已完成，
-      但 synthesis 因异常未被派发），route_audio/vision_send_tasks 均返回 []，
-      图执行在 map_dispatch_node 处静默终止，永远无法到达 chunk_aggregator_node。
-    - 本函数作为第三条条件边，仅在上述死锁场景下激活一个旁路 Send。
-
-    返回 [] 的安全条件（正常路径不激活）：
-    - chunk_plan 为空。
-    - 当前波次存在任意分片尚未完成 audio 或 vision 分析（正常 worker 派发路径会处理）。
-    - 当前波次所有分片已全部完成 synthesis（无需额外 synthesis 派发）。
-    """
-    chunk_plan = state.get("chunk_plan", [])
-    if not isinstance(chunk_plan, list) or not chunk_plan:
-        return []
-
-    active_wave_chunk_ids = state.get("active_wave_chunk_ids", [])
-    if not isinstance(active_wave_chunk_ids, list):
-        active_wave_chunk_ids = []
-    active_wave_set = {str(item).strip() for item in active_wave_chunk_ids if str(item).strip()}
-
-    chunk_results = state.get("chunk_results", [])
-    if not isinstance(chunk_results, list):
-        chunk_results = []
-    result_map = _build_result_map(chunk_results)
-
-    has_pending_synthesis = False
-    for chunk in chunk_plan:
-        if not isinstance(chunk, dict):
-            continue
-        chunk_id = str(chunk.get("chunk_id", "")).strip()
-        if not chunk_id:
-            continue
-        if active_wave_set and chunk_id not in active_wave_set:
-            continue
-
-        item = result_map.get(chunk_id, {})
-        # 若该分片仍需 audio 或 vision 分析，交由正常 worker 路径处理，本旁路不激活
-        if not _modality_ready(item, "audio") or not _modality_ready(item, "vision"):
-            return []
-        # 标记该波次中是否存在待合成分片
-        if not _is_chunk_synthesized(item):
-            has_pending_synthesis = True
-
-    if not has_pending_synthesis:
-        return []
-
-    # 所有当前波次分片已有 audio+vision 但 synthesis 未完成，触发旁路
-    return [Send("synthesis_barrier_node", {})]
-
-
-def route_after_wave_synthesis(state: VideoSummaryState) -> str:
+def route_after_wave_subgraph(state: VideoSummaryState) -> str:
     """
     波次执行后的路由：若仍有未完成 chunk，继续下一波；否则进入聚合。
     """
@@ -504,7 +244,7 @@ def route_after_wave_synthesis(state: VideoSummaryState) -> str:
 
     result_map = _build_result_map(chunk_results)
     for chunk_id in _chunk_ids_from_plan(chunk_plan):
-        if not _is_chunk_synthesized(result_map.get(chunk_id, {})):
+        if not _is_chunk_completed(result_map.get(chunk_id, {})):
             return ROUTE_CONTINUE_WAVE
 
     return ROUTE_WAVE_DONE

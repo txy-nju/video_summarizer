@@ -1,22 +1,18 @@
 from typing import Any
 from langgraph.graph import StateGraph, START, END
 from core.workflow.video_summary.state import VideoSummaryState
+from core.workflow.video_summary.chunk_state import ChunkState
 from core.workflow.video_summary.planner.chunk_planner import chunk_planner_node
 from core.workflow.video_summary.nodes.outline_bootstrap import outline_bootstrap_node
 from core.workflow.video_summary.nodes.map_dispatcher import (
     map_dispatch_node,
-    synthesis_barrier_node,
-    route_after_wave_synthesis,
-    route_audio_send_tasks,
-    route_synthesis_bypass_if_ready,
-    route_synthesis_send_tasks,
-    route_vision_send_tasks,
+    route_after_wave_subgraph,
+    route_subgraph_send_tasks,
     ROUTE_CONTINUE_WAVE,
     ROUTE_WAVE_DONE,
 )
 from core.workflow.video_summary.nodes.chunk_audio_analyzer import chunk_audio_worker_node
 from core.workflow.video_summary.nodes.chunk_vision_analyzer import chunk_vision_worker_node
-from core.workflow.video_summary.nodes.chunk_synthesizer import chunk_synthesizer_node, chunk_synthesizer_worker_node
 from core.workflow.video_summary.nodes.chunk_aggregator import chunk_aggregator_node
 from core.workflow.video_summary.nodes.human_gate import human_gate_node
 from core.workflow.video_summary.nodes.fusion_drafter import fusion_drafter_node
@@ -37,10 +33,31 @@ from core.workflow.video_summary.edges.router import (
 )
 
 
+def _build_chunk_subgraph() -> Any:
+    sg = StateGraph(ChunkState) # type: ignore
+    sg.add_node("chunk_audio_worker_node", chunk_audio_worker_node) # type: ignore
+    sg.add_node("chunk_vision_worker_node", chunk_vision_worker_node) # type: ignore
+    sg.add_edge(START, "chunk_audio_worker_node")
+    sg.add_edge("chunk_audio_worker_node", "chunk_vision_worker_node")
+    sg.add_edge("chunk_vision_worker_node", END)
+    return sg.compile()
+
+_compiled_chunk_subgraph = _build_chunk_subgraph()
+
+def chunk_subgraph_wrapper(state: Any) -> dict:
+    """
+    包装子图调用，隔离状态。
+    仅将 chunk_results 返回给父图，避免将 current_chunk、transcript 等
+    非 Annotated 字段并发写回父图导致 INVALID_CONCURRENT_GRAPH_UPDATE。
+    """
+    res = _compiled_chunk_subgraph.invoke(state)
+    return {"chunk_results": res.get("chunk_results", [])}
+
+
 def build_video_summary_graph(checkpointer: Any = None) -> Any:
     """
     构建视频总结工作流图。
-    主干流程为：分片规划 -> 音频/视觉分析 -> 分片融合 -> 聚合成文 -> 质量审查闭环。
+    主干流程为：分片规划 -> 音频/视觉并发子图 -> 聚合成文 -> 质量审查闭环。
     """
     # 1. 初始化 StateGraph，绑定状态结构
     workflow = StateGraph(VideoSummaryState) # type: ignore
@@ -50,11 +67,7 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     workflow.add_node("outline_bootstrap_node", outline_bootstrap_node) # type: ignore
     workflow.add_node("data_preparation_node", data_preparation_node) # type: ignore
     workflow.add_node("map_dispatch_node", map_dispatch_node) # type: ignore
-    workflow.add_node("synthesis_barrier_node", synthesis_barrier_node) # type: ignore
-    workflow.add_node("chunk_audio_worker_node", chunk_audio_worker_node) # type: ignore
-    workflow.add_node("chunk_vision_worker_node", chunk_vision_worker_node) # type: ignore
-    workflow.add_node("chunk_synthesizer_worker_node", chunk_synthesizer_worker_node) # type: ignore
-    workflow.add_node("chunk_synthesizer_node", chunk_synthesizer_node) # type: ignore
+    workflow.add_node("chunk_subgraph", chunk_subgraph_wrapper)
     workflow.add_node("chunk_aggregator_node", chunk_aggregator_node) # type: ignore
     workflow.add_node("human_gate_node", human_gate_node) # type: ignore
 
@@ -64,22 +77,12 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     workflow.add_edge("outline_bootstrap_node", "data_preparation_node")
     workflow.add_edge("data_preparation_node", "map_dispatch_node")
 
-    workflow.add_conditional_edges("map_dispatch_node", route_audio_send_tasks)
-    workflow.add_conditional_edges("map_dispatch_node", route_vision_send_tasks)
-    # 防死锁旁路：audio+vision 均已就绪但 synthesis 未完成时，直接触发 synthesis_barrier_node
-    workflow.add_conditional_edges("map_dispatch_node", route_synthesis_bypass_if_ready)
+    workflow.add_conditional_edges("map_dispatch_node", route_subgraph_send_tasks)
 
-    # 先汇聚到 barrier，再触发 synthesis fan-out。
-    workflow.add_edge("chunk_audio_worker_node", "synthesis_barrier_node")
-    workflow.add_edge("chunk_vision_worker_node", "synthesis_barrier_node")
-    workflow.add_conditional_edges("synthesis_barrier_node", route_synthesis_send_tasks)
-
-    workflow.add_edge("chunk_synthesizer_worker_node", "chunk_synthesizer_node")
-
-    # 第三阶段：按波次循环执行，直到所有 chunk 完成 synthesis。
+    # 第三阶段：按波次循环执行，直到所有 chunk 完成
     workflow.add_conditional_edges(
-        "chunk_synthesizer_node",
-        route_after_wave_synthesis,
+        "chunk_subgraph",
+        route_after_wave_subgraph,
         {
             ROUTE_CONTINUE_WAVE: "map_dispatch_node",
             ROUTE_WAVE_DONE: "chunk_aggregator_node",

@@ -14,74 +14,45 @@ from config.settings import (
     CHUNK_WORKER_TIMEOUT_SECONDS,
     ENABLE_CHUNK_CACHE,
 )
-from core.workflow.video_summary.state import VideoSummaryState
-from core.workflow.video_summary.tools.search_tools import execute_tavily_search
+from core.workflow.video_summary.state import VideoSummaryState, _merge_chunk_results
+from core.workflow.video_summary.chunk_state import ChunkState
 from core.workflow.video_summary.utils.frame_utils import resolve_frame_image_base64
 from backend.observability.llm_tracing import trace_llm_call
 from backend.observability.tracing import build_span_name, start_span
-
-_VISION_SEARCH_CACHE: Dict[str, str] = {}
-_VISION_SEARCH_CACHE_LOCK = threading.Lock()
 
 
 FramePayload = Dict[str, Any]
 ChunkResult = Dict[str, Any]
 
 
-def _search_with_cache(query: str) -> str:
-    if ENABLE_CHUNK_CACHE:
-        with _VISION_SEARCH_CACHE_LOCK:
-            cached = _VISION_SEARCH_CACHE.get(query)
-        if cached is not None:
-            return cached
-
-    result = execute_tavily_search(query)
-    if ENABLE_CHUNK_CACHE:
-        with _VISION_SEARCH_CACHE_LOCK:
-            _VISION_SEARCH_CACHE[query] = result
-    return result
 
 
-def _build_vision_structured_fallback(chunk_id: str, frames: List[FramePayload], reason: str) -> Dict[str, Any]:
-    frame_times = [str(frame.get("time", "未知")) for frame in frames[:6]]
-    direct_observation = f"命中 {len(frames)} 帧，时间点: {frame_times}" if frames else "无直接视觉证据"
-    final_summary = reason if reason.strip() else direct_observation
+
+def _build_vision_structured_fallback(chunk_id: str, frames: List[FramePayload], reason: str, audio_insights: List[Dict[str, Any]] = None) -> Dict[str, Any]:
     return {
-        "observation": {
-            "source": "direct_vision",
-            "content": direct_observation,
-        },
-        "context_calibration": {
-            "source": "structured_global_context",
-            "content": "未使用上下文消歧（无前序分片摘要）",
-        },
-        "final_summary": final_summary,
+        "verified_insights": audio_insights or []
     }
 
 
 def _normalize_structured_payload(payload: Dict[str, Any], fallback_summary: str) -> Dict[str, Any]:
-    observation = payload.get("observation")
-    if not isinstance(observation, dict):
-        observation = {"source": "direct_vision", "content": ""}
+    insights = payload.get("verified_insights", [])
+    if not isinstance(insights, list):
+        insights = []
 
-    context_calibration = payload.get("context_calibration")
-    if not isinstance(context_calibration, dict):
-        context_calibration = {"source": "structured_global_context", "content": ""}
-
-    final_summary = str(payload.get("final_summary", "")).strip()
-    if not final_summary:
-        final_summary = fallback_summary.strip() or "证据不足"
+    normalized = []
+    for insight in insights:
+        if not isinstance(insight, dict):
+            continue
+        normalized.append({
+            "time_sec": insight.get("time_sec", 0),
+            "timestamp": str(insight.get("timestamp", "")),
+            "claim": str(insight.get("claim", "")),
+            "exact_quote": str(insight.get("exact_quote", "")),
+            "frame_ref": str(insight.get("frame_ref", ""))
+        })
 
     return {
-        "observation": {
-            "source": str(observation.get("source", "direct_vision") or "direct_vision"),
-            "content": str(observation.get("content", "") or ""),
-        },
-        "context_calibration": {
-            "source": str(context_calibration.get("source", "structured_global_context") or "structured_global_context"),
-            "content": str(context_calibration.get("content", "") or ""),
-        },
-        "final_summary": final_summary,
+        "verified_insights": normalized
     }
 
 
@@ -98,6 +69,7 @@ def _llm_vision_chunk_structured(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    audio_insights: List[Dict[str, Any]],
     timeout_seconds: float,
     llm_model: BaseModel | None = None,
     trace_id: str = "",
@@ -105,16 +77,17 @@ def _llm_vision_chunk_structured(
     if not resolve_api_key("vision"):
         times = [str(frame.get("time", "未知")) for frame in frames[:8]]
         fallback = f"[chunk={chunk_id}] 视觉摘要（降级）：命中 {len(frames)} 帧，时间点 {times}"
-        return _build_vision_structured_fallback(chunk_id, frames, fallback)
+        return _build_vision_structured_fallback(chunk_id, frames, fallback, audio_insights)
 
     content: List[Dict[str, Any]] = [
         {
             "type": "text",
             "text": (
-                "请分析该视频分片关键帧，并输出 JSON 对象且只包含 observation、context_calibration、final_summary。"
+                "请分析该视频分片关键帧。重点是：参考提供的 audio_insights，在画面中寻找证据并补充视觉细节。\n"
                 f"\\n[user_prompt] {user_prompt}\\n[chunk_id] {chunk_id}"
                 f"\\n[structured_global_context] {json.dumps(structured_global_context or {}, ensure_ascii=False)}"
                 f"\\n[previous_chunk_summaries] {json.dumps(previous_chunk_summaries or [], ensure_ascii=False)}"
+                f"\\n[audio_insights] {json.dumps(audio_insights or [], ensure_ascii=False)}"
             ),
         }
     ]
@@ -134,13 +107,17 @@ def _llm_vision_chunk_structured(
     model_client = llm_model or get_model_for_capability("vision")
     model_name = get_model_name_for_capability("vision")
     system_prompt = (
-        "你是严谨的视频分片视觉分析助手。请严格遵守以下证据规则：\n"
-        "1. 一级证据 (observation)：只能描述你在关键帧图片中直接看到的客观画面、动作或文字。\n"
-        "2. 二级证据 (context_calibration)：参考 structured_global_context 和 previous_chunk_summaries（仅前 1-2 个相邻分片摘要），"
-        "对一级证据中模糊的词汇进行纠正。"
-        "绝对禁止用大纲来捏造画面中不存在的动作。\n"
-        "3. 如果画面无法提供有效信息，直接在 final_summary 中声明证据不足。\n"
-        "输出必须是 JSON 对象，且只包含 observation、context_calibration、final_summary。"
+        "你是严谨的视频分片视觉验证助手。请严格遵守以下规则：\n"
+        "1. 你的主要任务是验证和补全 audio_insights 中的事实。\n"
+        "2. 针对 audio_insights 中的每一条事实，如果在画面中看到了相关元素，请在 claim 中增加视觉细节描述（如补充关键帧中ppt的语音未涉及到的知识要点等）；"
+        "如果没有在画面中看到，请显式声明'画面未展示'。\n"
+        "3. 你也可以补充纯视觉发现的重要事实。\n"
+        "4. 输出必须是 JSON 对象，包含 verified_insights 数组。每个对象需包含:\n"
+        "   - time_sec: 秒数 (如果是验证音频，保留原时间戳)\n"
+        "   - timestamp: 时间戳字符串 (如 02:15)\n"
+        "   - claim: 缝合了视听细节的事实陈述\n"
+        "   - exact_quote: 传承下来的音频原话 (如适用)\n"
+        "   - frame_ref: 支撑该视觉结论的画面引用 (例如时间戳或画面序号)"
     )
     messages_payload: Any = [
         {"role": "system", "content": system_prompt},
@@ -164,9 +141,9 @@ def _llm_vision_chunk_structured(
     try:
         parsed = json.loads(raw_content)
     except Exception:
-        return _build_vision_structured_fallback(chunk_id, frames, raw_content)
+        return _build_vision_structured_fallback(chunk_id, frames, raw_content, audio_insights)
     if not isinstance(parsed, dict):
-        return _build_vision_structured_fallback(chunk_id, frames, raw_content)
+        return _build_vision_structured_fallback(chunk_id, frames, raw_content, audio_insights)
 
     fallback_summary = f"[chunk={chunk_id}] 视觉分析结果为空，已降级。"
     return _normalize_structured_payload(parsed, fallback_summary)
@@ -178,6 +155,7 @@ def _run_vision_with_retry(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    audio_insights: List[Dict[str, Any]],
     llm_model: BaseModel | None = None,
     trace_id: str = "",
 ) -> tuple[Dict[str, Any], str, int]:
@@ -190,6 +168,7 @@ def _run_vision_with_retry(
                 user_prompt=user_prompt,
                 structured_global_context=structured_global_context,
                 previous_chunk_summaries=previous_chunk_summaries,
+                audio_insights=audio_insights,
                 timeout_seconds=CHUNK_WORKER_TIMEOUT_SECONDS,
                 llm_model=llm_model,
                 trace_id=trace_id,
@@ -200,7 +179,7 @@ def _run_vision_with_retry(
 
     status = _classify_error(last_error or Exception("vision worker failed"))
     reason = f"{CHUNK_DEGRADED_MARKER}:vision:{status}:retries_exhausted"
-    structured = _build_vision_structured_fallback(chunk_id, frames, reason)
+    structured = _build_vision_structured_fallback(chunk_id, frames, reason, audio_insights)
     return structured, status, CHUNK_WORKER_MAX_RETRIES
 
 
@@ -212,6 +191,7 @@ def _process_single_chunk_vision(
     user_prompt: str,
     structured_global_context: Dict[str, Any],
     previous_chunk_summaries: List[Dict[str, Any]],
+    audio_insights: List[Dict[str, Any]],
     llm_model: BaseModel | None = None,
     trace_id: str = "",
 ) -> tuple[str, ChunkResult]:
@@ -232,8 +212,9 @@ def _process_single_chunk_vision(
             chunk_id,
             selected_frames,
             f"{CHUNK_DEGRADED_MARKER}:vision:degraded:no_keyframe_evidence",
+            audio_insights
         )
-        insights = structured_insights["final_summary"]
+        insights = structured_insights.get("verified_insights", [])
         vision_status = "degraded"
         retry_count = 0
         searches: List[Dict[str, str]] = []
@@ -244,26 +225,20 @@ def _process_single_chunk_vision(
             user_prompt,
             structured_global_context,
             previous_chunk_summaries,
+            audio_insights,
             llm_model,
             trace_id,
         )
-        insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:vision:{vision_status}:empty_summary"
-
-        searches = []
-        for frame in selected_frames[: max(0, CHUNK_MAX_TOOL_CALLS)]:
-            t = str(frame.get("time", "未知"))
-            query = f"video frame context at {t}"
-            searches.append({"query": query, "result": _search_with_cache(query)})
+        insights = structured_insights.get("verified_insights", [])
 
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     delta: ChunkResult = {
         "chunk_id": chunk_id,
         "vision_structured_analysis": structured_insights,
-        "vision_insights": insights,
+        "verified_insights": insights,
         "evidence_refs": {
             "keyframe_indexes": frame_indexes,
-            "vision_searches": searches,
         },
         "token_usage": {
             "vision": 0,
@@ -284,7 +259,7 @@ def _process_single_chunk_vision(
     return chunk_id, delta
 
 
-def chunk_vision_worker_node(state: VideoSummaryState) -> dict:
+def chunk_vision_worker_node(state: ChunkState) -> dict:
     """
     Send API 路径下的单分片视觉分析 worker。
 
@@ -326,6 +301,10 @@ def chunk_vision_worker_node(state: VideoSummaryState) -> dict:
     previous_chunk_summaries = state.get("previous_chunk_summaries", [])
     if not isinstance(previous_chunk_summaries, list):
         previous_chunk_summaries = []
+    chunk_results = state.get("chunk_results", [])
+    audio_insights = []
+    if chunk_results and isinstance(chunk_results, list) and len(chunk_results) > 0:
+        audio_insights = chunk_results[0].get("verified_insights", [])
     trace_id = str(state.get("trace_id", ""))
 
     with start_span(
@@ -345,6 +324,7 @@ def chunk_vision_worker_node(state: VideoSummaryState) -> dict:
             user_prompt,
             structured_global_context,
             previous_chunk_summaries,
+            audio_insights,
             trace_id=trace_id,
         )
 
@@ -353,4 +333,7 @@ def chunk_vision_worker_node(state: VideoSummaryState) -> dict:
         merged["error_code"] = error_code
         merged["status"] = "ERROR"
 
-    return {"chunk_results": [merged]}
+    existing_results = state.get("chunk_results", [])
+    final_results = _merge_chunk_results(existing_results, [merged])
+    
+    return {"chunk_results": final_results}

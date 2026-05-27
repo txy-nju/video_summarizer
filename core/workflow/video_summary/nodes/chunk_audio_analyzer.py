@@ -16,12 +16,9 @@ from config.settings import (
     ENABLE_CHUNK_CACHE,
 )
 from core.workflow.video_summary.state import VideoSummaryState
-from core.workflow.video_summary.tools.search_tools import execute_tavily_search
+from core.workflow.video_summary.chunk_state import ChunkState
 from backend.observability.llm_tracing import trace_llm_call
 from backend.observability.tracing import build_span_name, start_span
-
-_AUDIO_SEARCH_CACHE: Dict[str, str] = {}
-_AUDIO_SEARCH_CACHE_LOCK = threading.Lock()
 
 
 def _load_transcript_data(transcript: str) -> Dict[str, Any]:
@@ -62,47 +59,12 @@ def _extract_chunk_text(transcript_items: List[Dict[str, Any]], indexes: List[in
     return "\n".join(lines)
 
 
-def _candidate_queries(text: str, max_calls: int) -> List[str]:
-    # 以大写缩写和驼峰词作为轻量候选，限制每个 chunk 的搜索次数
-    acronyms = re.findall(r"\b[A-Z]{2,}\b", text)
-    camel_words = re.findall(r"\b[A-Za-z]+[A-Z][A-Za-z]+\b", text)
 
-    candidates: List[str] = []
-    for token in acronyms + camel_words:
-        if token not in candidates:
-            candidates.append(token)
-        if len(candidates) >= max_calls:
-            break
-    return candidates
-
-
-def _search_with_cache(query: str) -> str:
-    if ENABLE_CHUNK_CACHE:
-        with _AUDIO_SEARCH_CACHE_LOCK:
-            cached = _AUDIO_SEARCH_CACHE.get(query)
-        if cached is not None:
-            return cached
-
-    result = execute_tavily_search(query)
-    if ENABLE_CHUNK_CACHE:
-        with _AUDIO_SEARCH_CACHE_LOCK:
-            _AUDIO_SEARCH_CACHE[query] = result
-    return result
 
 
 def _build_audio_structured_fallback(chunk_id: str, chunk_text: str, reason: str) -> Dict[str, Any]:
-    direct_observation = chunk_text[:300] if chunk_text else "无直接音频证据"
-    final_summary = reason if reason.strip() else (direct_observation[:180] if direct_observation else "证据不足")
     return {
-        "observation": {
-            "source": "direct_audio",
-            "content": direct_observation,
-        },
-        "context_calibration": {
-            "source": "structured_global_context",
-            "content": "未使用上下文消歧（无前序分片摘要）",
-        },
-        "final_summary": final_summary,
+        "verified_insights": []
     }
 
 
@@ -114,28 +76,23 @@ def _classify_error(exc: Exception) -> str:
 
 
 def _normalize_structured_payload(payload: Dict[str, Any], fallback_summary: str) -> Dict[str, Any]:
-    observation = payload.get("observation")
-    if not isinstance(observation, dict):
-        observation = {"source": "direct_audio", "content": ""}
-
-    context_calibration = payload.get("context_calibration")
-    if not isinstance(context_calibration, dict):
-        context_calibration = {"source": "structured_global_context", "content": ""}
-
-    final_summary = str(payload.get("final_summary", "")).strip()
-    if not final_summary:
-        final_summary = fallback_summary.strip() or "证据不足"
+    insights = payload.get("verified_insights", [])
+    if not isinstance(insights, list):
+        insights = []
+    
+    normalized = []
+    for insight in insights:
+        if not isinstance(insight, dict):
+            continue
+        normalized.append({
+            "time_sec": insight.get("time_sec", 0),
+            "timestamp": str(insight.get("timestamp", "")),
+            "claim": str(insight.get("claim", "")),
+            "exact_quote": str(insight.get("exact_quote", ""))
+        })
 
     return {
-        "observation": {
-            "source": str(observation.get("source", "direct_audio") or "direct_audio"),
-            "content": str(observation.get("content", "") or ""),
-        },
-        "context_calibration": {
-            "source": str(context_calibration.get("source", "structured_global_context") or "structured_global_context"),
-            "content": str(context_calibration.get("content", "") or ""),
-        },
-        "final_summary": final_summary,
+        "verified_insights": normalized
     }
 
 
@@ -159,12 +116,13 @@ def _llm_audio_chunk_structured(
     previous_summaries_json = json.dumps(previous_chunk_summaries or [], ensure_ascii=False)
     system_prompt = (
         "你是严谨的视频分片音频转录文本分析助手。请严格遵守以下证据规则：\n"
-        "1. 一级证据 (observation)：只能描述你在当前 transcript 分片中直接读到的客观内容，例如术语、陈述、数字、口播要点。\n"
-        "2. 二级证据 (context_calibration)：参考 structured_global_context 和 previous_chunk_summaries（仅前 1-2 个相邻分片摘要），"
-        "对一级证据中的模糊称呼、缩写或术语进行纠正。"
-        "绝对禁止用大纲来捏造 transcript 中没有出现过的观点、结论或因果关系。\n"
-        "3. 如果 transcript 无法提供有效信息，直接在 final_summary 中声明证据不足。\n"
-        "输出必须是 JSON 对象，且只包含 observation、context_calibration、final_summary。"
+        "1. 提取讲师提到的核心事实（例如术语、步骤、结论）。\n"
+        "2. 对于每一条提取的事实，必须在 verified_insights 列表中输出一个对象，包含：\n"
+        "   - claim: 事实陈述\n"
+        "   - exact_quote: 必须是能从 transcript 中找到的原话，找不到原话的禁止输出。\n"
+        "   - timestamp: 原话发生的大致时间（如果有提供秒数，如没有则填空或提供大概位置）。\n"
+        "3. 必须参考 structured_global_context 确定当前分片在全篇的宏观章节定位，严禁越界脑补前后文。\n"
+        "输出必须是 JSON 对象，包含 verified_insights 数组。"
     )
     with trace_llm_call(
         provider="openai_compatible",
@@ -257,7 +215,7 @@ def _process_single_chunk_audio(
             chunk_text,
             f"{CHUNK_DEGRADED_MARKER}:audio:degraded:no_transcript_evidence",
         )
-        insights = structured_insights["final_summary"]
+        insights = structured_insights.get("verified_insights", [])
         audio_status = "degraded"
         retry_count = 0
         searches: List[Dict[str, str]] = []
@@ -271,21 +229,16 @@ def _process_single_chunk_audio(
             llm_model,
             trace_id,
         )
-        insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:audio:{audio_status}:empty_summary"
-
-        searches = []
-        for query in _candidate_queries(chunk_text, max(0, CHUNK_MAX_TOOL_CALLS)):
-            searches.append({"query": query, "result": _search_with_cache(query)})
+        insights = structured_insights.get("verified_insights", [])
 
     latency_ms = int((time.perf_counter() - started) * 1000)
 
     delta = {
         "chunk_id": chunk_id,
         "audio_structured_analysis": structured_insights,
-        "audio_insights": insights,
+        "verified_insights": insights,
         "evidence_refs": {
             "transcript_segment_indexes": indexes,
-            "audio_searches": searches,
         },
         "token_usage": {
             "audio": 0,
@@ -306,7 +259,7 @@ def _process_single_chunk_audio(
     return chunk_id, delta
 
 
-def chunk_audio_worker_node(state: VideoSummaryState) -> dict:
+def chunk_audio_worker_node(state: ChunkState) -> dict:
     """
     Send API 路径下的单分片音频分析 worker。
 
