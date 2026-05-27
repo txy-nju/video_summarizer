@@ -117,12 +117,29 @@ def _create_video_resource(
 ) -> str | None:
     """创建 VideoResource 记录（系统内部操作）。"""
     from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
     from backend.schemas.video_resource import VideoResourceCreateRequest
     from backend.repositories.video_resource_repository import VideoResourceRepository
     from backend.services.video_resource_service import VideoResourceService
 
     db = SessionLocal()
     try:
+        # 1. 优先查找是否存在由前端预注册、但尚未关联文件的同名记录
+        row = (
+            db.query(VideoResource)
+            .filter(
+                VideoResource.owner_id == owner_id,
+                VideoResource.file_name == file_name,
+                (VideoResource.oss_key == "") | (VideoResource.oss_key.is_(None)),
+            )
+            .order_by(VideoResource.video_id.desc())
+            .first()
+        )
+        if row is not None:
+            logger.info("Found pre-registered VideoResource: video_id=%s, reusing it.", row.video_id)
+            return str(row.video_id)
+
+        # 2. 如果没有预注册的同名记录，才新建一条记录
         repo = VideoResourceRepository(db_session=db)
         service = VideoResourceService(repository=repo)
 

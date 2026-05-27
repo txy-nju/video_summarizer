@@ -30,12 +30,14 @@ class KnowledgeBaseRepository:
         *,
         owner_id: str,
         name: str,
-        category: str | None,
-        description: str | None,
-        vector_collection_name: str | None,
-        config: dict,
+        category: str | None = None,
+        description: str | None = None,
+        vector_collection_name: str | None = None,
+        config: dict | None = None,
+        kbid: str | None = None,
     ) -> KnowledgeBaseRecord:
         entity = KnowledgeBase(
+            kbid=kbid,
             owner_id=owner_id,
             name=name,
             category=category,

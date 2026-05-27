@@ -30,7 +30,7 @@ class KnowledgeBaseCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     category: str | None = Field(default=None, max_length=128)
     description: str | None = Field(default=None, max_length=2000)
-    config: KnowledgeBaseConfig
+    config: KnowledgeBaseConfig | None = None
 
 
 class KnowledgeBaseUpdateRequest(BaseModel):
@@ -47,7 +47,7 @@ class KnowledgeBaseView(BaseModel):
     category: str | None = None
     description: str | None = None
     vector_collection_name: str | None = None
-    config: KnowledgeBaseConfig
+    config: KnowledgeBaseConfig | None = None
     created_at: datetime
 
 

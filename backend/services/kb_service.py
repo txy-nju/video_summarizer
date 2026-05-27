@@ -26,7 +26,7 @@ class KnowledgeBaseService:
             category=payload.category,
             description=payload.description,
             vector_collection_name=f"kb_{uuid4().hex}",
-            config=payload.config.model_dump(),
+            config=None if payload.config is None else payload.config.model_dump(),
         )
         return self._to_view(record)
 
@@ -132,7 +132,10 @@ class KnowledgeBaseService:
         return True
 
     def _to_view(self, record: KnowledgeBaseRecord) -> KnowledgeBaseView:
-        return KnowledgeBaseView.model_validate({**asdict(record), "config": KnowledgeBaseConfig.model_validate(record.config)})
+        return KnowledgeBaseView.model_validate({
+            **asdict(record),
+            "config": KnowledgeBaseConfig.model_validate(record.config) if record.config else None,
+        })
 
     def _to_video_item(self, record: VideoResourceRecord) -> KnowledgeBaseVideoItem:
         return KnowledgeBaseVideoItem(

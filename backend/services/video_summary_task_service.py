@@ -249,7 +249,7 @@ class VideoSummaryTaskService:
                 task.user_initial_preference or "",
                 trace_id,
             ],
-            queue="default",
+            queue="celery",
         )
 
         return {
@@ -297,7 +297,7 @@ class VideoSummaryTaskService:
                 human_guidance,
                 trace_id,
             ],
-            queue="default",
+            queue="celery",
         )
 
         return {
