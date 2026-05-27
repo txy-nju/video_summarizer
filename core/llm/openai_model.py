@@ -69,5 +69,6 @@ class OpenAIModel(BaseModel):
                 model=model,
                 file=audio_file,
                 response_format=response_format,
+                timeout=120.0,
             )
         return transcript.model_dump_json(indent=2)

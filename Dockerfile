@@ -24,8 +24,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project files
 COPY video_summarizer /app/
 
-# Copy modular_rag from the private monorepo
-COPY MODULAR-RAG-MCP-SERVER/src/modular_rag /app/modular_rag/
+# Copy modular_rag from the local MCP_RAG_SERVER
+COPY MCP_RAG_SERVER/src /app/modular_rag/
 
 # Create necessary directories
 RUN mkdir -p /app/temp/object_storage /app/test_output

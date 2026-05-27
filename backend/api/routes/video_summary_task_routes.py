@@ -145,8 +145,8 @@ async def delete_video_summary_task(
 @router.post("/{task_id}/start-analysis", response_model=StartAnalysisWorkflowResponse, status_code=status.HTTP_202_ACCEPTED)
 async def start_analysis_workflow(
     task_id: str,
-    payload: StartAnalysisWorkflowRequest,
     request: Request,
+    payload: StartAnalysisWorkflowRequest | None = None,
     current_user: UserView = Depends(get_current_user),
     task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
     workflow_service: WorkflowOrchestrationService = Depends(get_workflow_orchestration_service),

@@ -28,3 +28,8 @@ evaluation/reports/*
 # 临时测试日志
 *.log
 test_out.log
+
+# 个人配置文件
+Z/
+start_dev.bat
+start_prod.bat

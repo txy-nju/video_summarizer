@@ -5,7 +5,10 @@ from fastapi import HTTPException, status
 from backend.auth.models import TokenResponseData, UserView
 from backend.auth.utils import create_token, verify_password
 from backend.config import Settings
+from backend.repositories.kb_repository import KnowledgeBaseRepository
 from backend.repositories.user_repository import UserRepository
+
+DEFAULT_KB_NAME = "默认知识库"
 
 
 class AuthService:
@@ -15,20 +18,28 @@ class AuthService:
     - User registration and login via UserRepository
     - JWT token generation and refresh
     - Password verification
+    - Auto-creates a default knowledge base on first registration
     """
 
-    def __init__(self, user_repository: UserRepository, settings: Settings):
-        """Initialize with UserRepository and Settings.
+    def __init__(
+        self,
+        user_repository: UserRepository,
+        settings: Settings,
+        kb_repository: KnowledgeBaseRepository | None = None,
+    ):
+        """Initialize with UserRepository, Settings, and optional KnowledgeBaseRepository.
 
         Args:
             user_repository: Persistence layer for user data.
             settings: Application configuration.
+            kb_repository: Optional KB persistence layer for auto-creating default KB.
         """
         self._user_repository = user_repository
         self._settings = settings
+        self._kb_repository = kb_repository
 
     def register_user(self, username: str, password: str) -> UserView:
-        """Register a new user.
+        """Register a new user and auto-create a default knowledge base.
 
         Args:
             username: Unique username.
@@ -46,6 +57,13 @@ class AuthService:
         except ValueError as e:
             # Repository layer raises ValueError on duplicate username
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+
+        # Auto-create default knowledge base so the client can immediately create tasks
+        if self._kb_repository is not None:
+            self._kb_repository.create(
+                owner_id=str(user_record.user_id),
+                name=DEFAULT_KB_NAME,
+            )
 
         return UserView(user_id=str(user_record.user_id), username=user_record.username)
 
