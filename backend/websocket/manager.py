@@ -112,7 +112,6 @@ class ConnectionManager:
 
         channels = [
             _channel_name("tenant", tenant_id),
-            _channel_name("control", ""),
         ]
         main_loop = asyncio.get_running_loop()
 
