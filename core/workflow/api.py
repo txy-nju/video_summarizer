@@ -16,6 +16,7 @@ from core.workflow.time_travel import (
     parse_timestamp_to_seconds,
     find_nearest_keyframe,
     extract_transcript_window,
+    format_seconds,
 )
 from config.settings import (
     CHECKPOINT_BACKEND,
@@ -423,8 +424,9 @@ def answer_question_at_timestamp(
 
     if status_callback:
         frame_count = len(representative_frames)
+        end_timestamp = format_seconds(target_seconds + window_seconds)
         status_callback(
-            f"🎯 [Time Travel] 已定位目标窗口 {timestamp} ±{window_seconds}s，"
+            f"🎯 [Time Travel] 已定位目标窗口 {timestamp} - {end_timestamp} ({window_seconds}s)，"
             f"已选取 {frame_count} 帧代表性关键帧（时间戳: {frame_times_str}）"
         )
 

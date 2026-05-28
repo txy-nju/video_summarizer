@@ -40,7 +40,7 @@ class TestTimeTravelUtils(unittest.TestCase):
             {"time": "00:40", "image": "e"},
             {"time": "00:50", "image": "f"},
         ]
-        # 时间窗口：[30-20, 30+20] = [10, 50]，应该返回 3-5 帧
+        # 时间窗口：[30, 30+20] = [30, 50]，应该返回 3 帧
         result = find_nearest_keyframe(keyframes, 30, window_seconds=20)
         self.assertIsInstance(result, list)
         self.assertGreaterEqual(len(result), 3)
@@ -48,7 +48,7 @@ class TestTimeTravelUtils(unittest.TestCase):
         # 验证返回的帧都在窗口范围内
         for frame in result:
             frame_time = int(frame["time"].split(":")[1])
-            self.assertGreaterEqual(frame_time, 10)
+            self.assertGreaterEqual(frame_time, 30)
             self.assertLessEqual(frame_time, 50)
 
     def test_find_nearest_keyframe_multi_frame_empty_window(self):

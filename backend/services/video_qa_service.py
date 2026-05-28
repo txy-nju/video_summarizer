@@ -264,10 +264,8 @@ class VideoQAService:
     @staticmethod
     def _compute_time_window(timestamp: str, window_seconds: int) -> tuple[str, str]:
         hours, minutes, seconds = (int(part) for part in timestamp.split(":"))
-        center_seconds = hours * 3600 + minutes * 60 + seconds
-        half_window = max(window_seconds // 2, 0)
-        start_seconds = max(center_seconds - half_window, 0)
-        end_seconds = center_seconds + half_window
+        start_seconds = hours * 3600 + minutes * 60 + seconds
+        end_seconds = start_seconds + window_seconds
         return VideoQAService._seconds_to_hms(start_seconds), VideoQAService._seconds_to_hms(end_seconds)
 
     @staticmethod
