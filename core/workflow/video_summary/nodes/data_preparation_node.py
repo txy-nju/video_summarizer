@@ -29,7 +29,7 @@ _DEFAULT_MAX_CONCURRENCY = 8
 _DEFAULT_FETCH_TIMEOUT = 30.0
 
 
-async def _fetch_image_from_local(path_str: str) -> bytes | None:
+def _fetch_image_from_local(path_str: str) -> bytes | None:
     """从本地文件路径读取图片字节（本地开发兼容路径）。"""
     p = Path(path_str)
     if p.exists():
@@ -40,13 +40,13 @@ async def _fetch_image_from_local(path_str: str) -> bytes | None:
     return None
 
 
-async def _fetch_keyframe_bytes(oss_key: str) -> bytes | None:
+def _fetch_keyframe_bytes(oss_key: str) -> bytes | None:
     """
     根据 oss_key 获取关键帧图片字节。
     当前优先尝试本地文件模式；生产环境替换为 OSS 预签名 URL 下载。
     """
     # 尝试本地路径（frames/ 前缀时映射至 TEMP_FRAMES_DIR）
-    local_data = await _fetch_image_from_local(oss_key)
+    local_data = _fetch_image_from_local(oss_key)
     if local_data:
         return local_data
 
@@ -55,7 +55,17 @@ async def _fetch_keyframe_bytes(oss_key: str) -> bytes | None:
         from config.settings import TEMP_FRAMES_DIR
         fname = Path(oss_key).name
         candidate = TEMP_FRAMES_DIR / fname
-        local_data = await _fetch_image_from_local(str(candidate))
+        local_data = _fetch_image_from_local(str(candidate))
+        if local_data:
+            return local_data
+    except Exception:
+        pass
+
+    # 尝试从 OSS_LOCAL_ROOT（本地对象存储根目录）解析
+    try:
+        from config.settings import OSS_LOCAL_ROOT_PATH
+        candidate = OSS_LOCAL_ROOT_PATH / oss_key
+        local_data = _fetch_image_from_local(str(candidate))
         if local_data:
             return local_data
     except Exception:
@@ -63,14 +73,15 @@ async def _fetch_keyframe_bytes(oss_key: str) -> bytes | None:
 
     # TODO: step 5.5 后接入 OSS 预签名 URL 下载：
     #   presigned_url = oss_client.generate_presigned_url(oss_key, expires=3600)
-    #   async with aiohttp.ClientSession() as session:
-    #       async with session.get(presigned_url) as resp:
-    #           return await resp.read()
+    #   import requests
+    #   resp = requests.get(presigned_url, timeout=5)
+    #   if resp.status_code == 200:
+    #       return resp.content
 
     return None
 
 
-async def _prepare_keyframes_async(
+def _prepare_keyframes_sync(
     keyframes: list[dict[str, Any]],
     max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     fetch_timeout: float = _DEFAULT_FETCH_TIMEOUT,
@@ -79,49 +90,75 @@ async def _prepare_keyframes_async(
     并发预取关键帧图片，返回每帧增加 image（base64）字段的列表。
     已有 image 字段的帧跳过拉取。
     """
-    sem = asyncio.Semaphore(max_concurrency)
+    import concurrent.futures
+
     per_frame_timeout = max(1.0, fetch_timeout / max(len(keyframes), 1))
 
-    async def fetch_one(frame: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    def fetch_one(frame: dict[str, Any]) -> tuple[dict[str, Any], str]:
         if frame.get("image"):
             return frame, "already"
         source_key = frame.get("oss_key") or frame.get("frame_file")
         if not source_key:
             return frame, "missing_source"
-        async with sem:
-            try:
-                raw = await asyncio.wait_for(
-                    _fetch_keyframe_bytes(source_key),
-                    timeout=per_frame_timeout,
-                )
-                if raw:
-                    return {**frame, "image": base64.b64encode(raw).decode("utf-8")}, "fetched"
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "data_preparation_node: timeout fetching keyframe oss_key=%s", source_key
-                )
-                return frame, "timeout"
-            except Exception as exc:
-                logger.warning(
-                    "data_preparation_node: failed to fetch keyframe oss_key=%s: %s",
-                    source_key,
-                    exc,
-                )
-                return frame, "error"
+        try:
+            # 执行同步的文件读取/下载
+            raw = _fetch_keyframe_bytes(source_key)
+            if raw:
+                return {**frame, "image": base64.b64encode(raw).decode("utf-8")}, "fetched"
+        except Exception as exc:
+            logger.warning(
+                "data_preparation_node: failed to fetch keyframe oss_key=%s: %s",
+                source_key,
+                exc,
+            )
+            return frame, "error"
         return frame, "not_found"
 
-    tasks = [fetch_one(f) for f in keyframes]
-    pairs = list(await asyncio.gather(*tasks))
-    enriched = [item for item, _ in pairs]
     stats = {
-        "fetched": sum(1 for _, s in pairs if s == "fetched"),
-        "already": sum(1 for _, s in pairs if s == "already"),
-        "timeout": sum(1 for _, s in pairs if s == "timeout"),
-        "error": sum(1 for _, s in pairs if s == "error"),
-        "missing_source": sum(1 for _, s in pairs if s == "missing_source"),
-        "not_found": sum(1 for _, s in pairs if s == "not_found"),
+        "fetched": 0,
+        "already": 0,
+        "timeout": 0,
+        "error": 0,
+        "missing_source": 0,
+        "not_found": 0,
     }
-    return enriched, stats
+    enriched = []
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrency) as executor:
+        futures = {executor.submit(fetch_one, f): f for f in keyframes}
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=fetch_timeout):
+                try:
+                    item, status = future.result()
+                    enriched.append(item)
+                    stats[status] += 1
+                except Exception as exc:
+                    frame = futures[future]
+                    enriched.append(frame)
+                    stats["error"] += 1
+                    logger.warning("data_preparation_node: task failed: %s", exc)
+        except concurrent.futures.TimeoutError:
+            logger.warning("data_preparation_node: prefetch execution timed out globally")
+            # 填充剩余未完成的任务
+            for future, frame in futures.items():
+                if not future.done():
+                    future.cancel()
+                    enriched.append(frame)
+                    stats["timeout"] += 1
+
+    # 按照输入的 keyframes 顺序排列结果
+    enriched_by_key = {}
+    for f in enriched:
+        key = f.get("oss_key") or f.get("frame_file") or ""
+        if key:
+            enriched_by_key[key] = f
+
+    ordered_enriched = []
+    for f in keyframes:
+        key = f.get("oss_key") or f.get("frame_file") or ""
+        ordered_enriched.append(enriched_by_key.get(key, f))
+
+    return ordered_enriched, stats
 
 
 def _record_observable_event(event: dict[str, Any]) -> None:
@@ -183,7 +220,7 @@ def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
         }
 
     try:
-        enriched, stats = asyncio.run(_prepare_keyframes_async(keyframes))
+        enriched, stats = _prepare_keyframes_sync(keyframes)
         fetched_count = stats.get("fetched", 0)
         missing_count = len(missing)
         failed_count = max(0, missing_count - fetched_count)
@@ -236,53 +273,6 @@ def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
                 "error": None,
             },
         }
-    except RuntimeError as exc:
-        # asyncio.run() 在已有事件循环时会抛出 RuntimeError；降级回退
-        logger.warning("data_preparation_node: asyncio.run() conflict, using fallback: %s", exc)
-        try:
-            import concurrent.futures
-            
-            def run_fallback():
-                return asyncio.run(_prepare_keyframes_async(keyframes))
-                
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(run_fallback)
-                enriched, _stats = future.result()
-            return {
-                "keyframes": enriched,
-                "data_preparation_status": {
-                    "status": "completed",
-                    "fetched": len(enriched),
-                    "total": len(keyframes),
-                    "error": None,
-                },
-            }
-        except Exception as inner:
-            logger.warning("data_preparation_node: fallback also failed: %s", inner)
-            error_payload = _build_recoverable_error(
-                message="data_preparation fallback failed",
-                details={"exception": str(inner)},
-                retry_after=5,
-            )
-            event = {
-                "event_type": "status_update",
-                "scope": "video_summary_task",
-                "scope_id": str(state.get("thread_id", "")),
-                "node": "data_preparation_node",
-                "status": "DEGRADED",
-                "progress": 100,
-                "payload": error_payload,
-            }
-            _record_observable_event(event)
-            return {
-                "data_preparation_status": {
-                    "status": "degraded",
-                    "fetched": 0,
-                    "total": len(keyframes),
-                    "error": error_payload,
-                },
-                "data_preparation_events": [event],
-            }
     except Exception as exc:
         logger.warning("data_preparation_node: degraded fallback due to: %s", exc)
         error_payload = _build_recoverable_error(
@@ -301,6 +291,7 @@ def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
         }
         _record_observable_event(event)
         return {
+            "keyframes": keyframes,  # 确保返回原始 keyframes 以免数据丢失
             "data_preparation_status": {
                 "status": "degraded",
                 "fetched": 0,

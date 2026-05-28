@@ -40,6 +40,9 @@ def _sanitize_frames_for_db(
     - 保留 time, scene_change_score, scene_change_level
     - 将 frame_file 或 image 替换为 oss_key（不持久化 base64）
     """
+    import base64 as b64_lib
+    import tempfile
+
     result = []
     for i, frame in enumerate(raw_frames):
         frame_file = frame.get("frame_file")
@@ -53,6 +56,19 @@ def _sanitize_frames_for_db(
         frame_oss_key = _build_oss_key(owner_id, video_id, filename)
         if frame_file and Path(frame_file).exists():
             storage_client.upload_file(local_path=Path(frame_file), object_key=frame_oss_key)
+        elif frame.get("image"):
+            # 如果没有 frame_file 但有内联的 base64 图片，先写入临时文件再上传
+            try:
+                img_data = b64_lib.b64decode(frame["image"])
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_data)
+                    tmp_path = Path(tmp.name)
+                try:
+                    storage_client.upload_file(local_path=tmp_path, object_key=frame_oss_key)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+            except Exception as e:
+                logger.error("Failed to upload inline base64 keyframe image to storage: %s", e)
 
         db_frame = {
             "time": frame.get("time", ""),
