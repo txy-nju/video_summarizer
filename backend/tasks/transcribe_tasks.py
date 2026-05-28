@@ -62,6 +62,7 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
 
         full_text = ""
         segments = None
+        duration = None
         if audio_path:
             api_key = os.getenv("OPENAI_API_KEY", "")
             base_url = os.getenv("OPENAI_BASE_URL") or None
@@ -71,6 +72,11 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
                 parsed = json.loads(raw)
                 full_text = parsed.get("text", raw)
                 segments = parsed.get("segments") or None
+                if "duration" in parsed:
+                    try:
+                        duration = int(round(float(parsed["duration"])))
+                    except Exception:
+                        pass
             except (json.JSONDecodeError, AttributeError):
                 full_text = raw
                 segments = None
@@ -79,6 +85,7 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
             video_id=video_id,
             full_transcript=full_text,
             transcript_segments=segments,
+            duration=duration,
         )
 
         from backend.tasks.vector_tasks import async_embed_transcript_chunks_background

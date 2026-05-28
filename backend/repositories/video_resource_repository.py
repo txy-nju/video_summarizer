@@ -159,6 +159,7 @@ class VideoResourceRepository:
         *,
         full_transcript: str | None = None,
         transcript_segments: list | None = None,
+        duration: int | None = None,
     ) -> None:
         row = self._session.query(VideoResource).filter(
             VideoResource.video_id == video_id,
@@ -170,6 +171,8 @@ class VideoResourceRepository:
             row.full_transcript = full_transcript
         if transcript_segments is not None:
             row.transcript_segments = transcript_segments
+        if duration is not None:
+            row.duration = duration
         self._session.commit()
 
     def update_frame_extraction(
