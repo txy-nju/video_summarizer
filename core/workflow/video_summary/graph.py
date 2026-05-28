@@ -7,13 +7,12 @@ from core.workflow.video_summary.nodes.outline_bootstrap import outline_bootstra
 from core.workflow.video_summary.nodes.map_dispatcher import (
     map_dispatch_node,
     wave_gate_node,
-    route_chunk_subgraph_tasks,
+    route_chunk_multimodal_tasks,
     route_after_wave_synthesis,
     ROUTE_CONTINUE_WAVE,
     ROUTE_WAVE_DONE,
 )
-from core.workflow.video_summary.nodes.chunk_audio_analyzer import chunk_audio_worker_node
-from core.workflow.video_summary.nodes.chunk_vision_analyzer import chunk_vision_worker_node
+from core.workflow.video_summary.nodes.chunk_multimodal_analyzer import chunk_multimodal_worker_node
 from core.workflow.video_summary.nodes.chunk_aggregator import chunk_aggregator_node
 from core.workflow.video_summary.nodes.human_gate import human_gate_node
 from core.workflow.video_summary.nodes.fusion_drafter import fusion_drafter_node
@@ -34,54 +33,31 @@ from core.workflow.video_summary.edges.router import (
 )
 
 
-def build_chunk_subgraph() -> Any:
+def _make_chunk_multimodal_node():
     """
-    构建 chunk 子图：START → chunk_audio_worker_node → chunk_vision_worker_node → END。
+    返回 chunk_multimodal_worker_node 包装函数。
 
-    子图状态类型为 ChunkState，可独立编译用于单元测试。
-    主图中使用 chunk_subgraph_node wrapper 函数驱动子图逻辑，
-    以便将 ChunkState 结果正确映射回 VideoSummaryState.chunk_results。
-    """
-    subgraph = StateGraph(ChunkState)  # type: ignore
-    subgraph.add_node("chunk_audio_worker_node", chunk_audio_worker_node)  # type: ignore
-    subgraph.add_node("chunk_vision_worker_node", chunk_vision_worker_node)  # type: ignore
-    subgraph.add_edge(START, "chunk_audio_worker_node")
-    subgraph.add_edge("chunk_audio_worker_node", "chunk_vision_worker_node")
-    subgraph.add_edge("chunk_vision_worker_node", END)
-    return subgraph.compile()
-
-
-def _make_chunk_subgraph_node():
-    """
-    返回 chunk_subgraph_node 包装函数。
-
-    包装函数顺序执行 audio → vision 两步，并将 ChunkState 结果映射回
+    包装函数执行多模态分析，并将 ChunkState 结果映射回
     VideoSummaryState.chunk_results（通过 _merge_chunk_results reducer 写回主图）。
     """
-    def chunk_subgraph_node(state: dict) -> dict:
+    def chunk_multimodal_node_wrapper(state: dict) -> dict:
         chunk_id = str(state.get("chunk_id", "")).strip()
         if not chunk_id:
             return {"chunk_results": []}
 
-        # Step 1: audio worker
-        audio_delta = chunk_audio_worker_node(state)  # type: ignore
-        chunk_state = {**state, **audio_delta}
-
-        # Step 2: vision worker（读取 audio worker 产出的 transcript_claims）
-        vision_delta = chunk_vision_worker_node(chunk_state)  # type: ignore
-        chunk_state.update(vision_delta)
+        multimodal_delta = chunk_multimodal_worker_node(state)  # type: ignore
+        chunk_state = {**state, **multimodal_delta}
 
         result = {
             "chunk_id": chunk_id,
-            "transcript_claims": chunk_state.get("transcript_claims", []),
-            "frame_references": chunk_state.get("frame_references", []),
+            "chunk_insights_md": chunk_state.get("chunk_insights_md", ""),
             "chunk_summary": chunk_state.get("chunk_summary", ""),
             "modality_status": chunk_state.get("modality_status", {}),
             "latency_ms": chunk_state.get("latency_ms", {}),
         }
         return {"chunk_results": [result]}
 
-    return chunk_subgraph_node
+    return chunk_multimodal_node_wrapper
 
 
 def build_video_summary_graph(checkpointer: Any = None) -> Any:
@@ -94,8 +70,8 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
         → outline_bootstrap_node       (输出 narrative_arc)
         → data_preparation_node
         → map_dispatch_node
-            → route_chunk_subgraph_tasks  [fan-out Send × N]
-            → chunk_subgraph_node         (audio → vision 顺序，per chunk)
+            → route_chunk_multimodal_tasks  [fan-out Send × N]
+            → chunk_multimodal_worker_node
             → wave_gate_node              [fan-in，排序 + 调试信息]
             → route_after_wave_synthesis
                 ├─ CONTINUE_WAVE → map_dispatch_node
@@ -110,7 +86,7 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     workflow.add_node("outline_bootstrap_node", outline_bootstrap_node)  # type: ignore
     workflow.add_node("data_preparation_node", data_preparation_node)  # type: ignore
     workflow.add_node("map_dispatch_node", map_dispatch_node)  # type: ignore
-    workflow.add_node("chunk_subgraph_node", _make_chunk_subgraph_node())  # type: ignore
+    workflow.add_node("chunk_multimodal_worker_node", _make_chunk_multimodal_node())  # type: ignore
     workflow.add_node("wave_gate_node", wave_gate_node)  # type: ignore
     workflow.add_node("chunk_aggregator_node", chunk_aggregator_node)  # type: ignore
     workflow.add_node("human_gate_node", human_gate_node)  # type: ignore
@@ -121,11 +97,11 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     workflow.add_edge("outline_bootstrap_node", "data_preparation_node")
     workflow.add_edge("data_preparation_node", "map_dispatch_node")
 
-    # fan-out：map_dispatch_node → [chunk_subgraph_node × N]
-    workflow.add_conditional_edges("map_dispatch_node", route_chunk_subgraph_tasks)
+    # fan-out：map_dispatch_node → [chunk_multimodal_worker_node × N]
+    workflow.add_conditional_edges("map_dispatch_node", route_chunk_multimodal_tasks)
 
-    # fan-in：每个 chunk_subgraph_node 完成后汇聚到 wave_gate_node
-    workflow.add_edge("chunk_subgraph_node", "wave_gate_node")
+    # fan-in：每个 chunk_multimodal_worker_node 完成后汇聚到 wave_gate_node
+    workflow.add_edge("chunk_multimodal_worker_node", "wave_gate_node")
 
     # 波次循环：wave_gate_node → route_after_wave_synthesis
     workflow.add_conditional_edges(
@@ -141,6 +117,8 @@ def build_video_summary_graph(checkpointer: Any = None) -> Any:
     workflow.add_edge("human_gate_node", END)
 
     return workflow.compile(checkpointer=checkpointer)
+
+
 
 
 def build_finalization_graph(checkpointer: Any = None) -> Any:

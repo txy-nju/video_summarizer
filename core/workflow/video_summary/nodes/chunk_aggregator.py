@@ -30,35 +30,20 @@ def _safe_sec(value: Any) -> int:
     return int(value) if isinstance(value, (int, float)) else 0
 
 
-def _format_claims_with_frames(
-    transcript_claims: List[Dict],
-    frame_references: List[Dict],
-) -> List[str]:
-    """将 transcript_claims + frame_references 格式化为带缩进的 Markdown 列表。"""
-    lines: List[str] = []
-    for claim_item in transcript_claims:
-        if not isinstance(claim_item, dict):
-            continue
-        claim = _safe_str(claim_item.get("claim", ""))
-        exact_quote = _safe_str(claim_item.get("exact_quote", ""))
-        timestamp = _safe_str(claim_item.get("timestamp", ""))
-        if not claim:
-            continue
-        prefix = f"[{timestamp}] " if timestamp else ""
-        quote_part = f' ("{exact_quote}")' if exact_quote else ""
-        lines.append(f"- {prefix}{claim}{quote_part}")
-    for frame_ref in frame_references:
-        if not isinstance(frame_ref, dict):
-            continue
-        frame_time = _safe_str(frame_ref.get("frame_time", ""))
-        observation = _safe_str(frame_ref.get("observation", ""))
-        audio_claim_match = _safe_str(frame_ref.get("audio_claim_match", ""))
-        if not observation:
-            continue
-        match_tag = f" [{audio_claim_match}]" if audio_claim_match else ""
-        lines.append(f"  - 🖼 {frame_time}: {observation}{match_tag}")
-    return lines
+import re
 
+EVENT_PATTERN = re.compile(r"^\s*[-*]\s*\[?\s*(\d{1,2}:\d{2}(?::\d{2})?)(?:\s*-\s*(\d{1,2}:\d{2}(?::\d{2})?))?\s*\]?:?\s*")
+
+def _parse_time(t_str: str) -> int:
+    parts = t_str.strip().split(':')
+    try:
+        if len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+    except Exception:
+        pass
+    return 0
 
 def _build_primary_path(
     ordered_ids: List[str],
@@ -67,7 +52,10 @@ def _build_primary_path(
     narrative_arc: List[Dict],
     user_prompt: str,
 ) -> Tuple[str, int]:
-    """主路径：按 narrative_arc 章节归组，输出 transcript_claims + frame_references 交叉验证证据。"""
+    """主路径：按 narrative_arc 章节归组，输出分片多模态分析 markdown 结构。
+    
+    解析 markdown 中的时间戳，将不同时间的观察块精确分配到对应的章节中。
+    """
     lines: List[str] = []
     lines.append("# Chunk Aggregated Insights")
     lines.append("")
@@ -76,7 +64,7 @@ def _build_primary_path(
     lines.append(f"- total_chunks: {len(ordered_ids)}")
     lines.append("")
 
-    chapter_chunk_map: Dict[str, List[str]] = {}
+    chapter_chunk_map: Dict[str, List[Tuple[str, str]]] = {}
     for chapter in narrative_arc:
         if not isinstance(chapter, dict):
             continue
@@ -84,27 +72,59 @@ def _build_primary_path(
         if cid:
             chapter_chunk_map[cid] = []
 
-    unassigned: List[str] = []
+    unassigned: List[Tuple[str, str]] = []
+    dropped_count = 0
+
     for chunk_id in ordered_ids:
         plan_item = plan_map.get(chunk_id, {})
+        item = result_map.get(chunk_id, {})
         p_start = _safe_sec(plan_item.get("start_sec", 0))
         p_end = _safe_sec(plan_item.get("end_sec", 0))
-        mid = (p_start + p_end) / 2.0
-        assigned = False
-        for chapter in narrative_arc:
-            if not isinstance(chapter, dict):
-                continue
-            cid = _safe_str(chapter.get("chapter_id", ""))
-            c_start = _safe_sec(chapter.get("start_sec", 0))
-            c_end = _safe_sec(chapter.get("end_sec", 0))
-            if cid and c_start <= mid <= c_end:
-                chapter_chunk_map[cid].append(chunk_id)
-                assigned = True
-                break
-        if not assigned:
-            unassigned.append(chunk_id)
+        chunk_mid = (p_start + p_end) / 2.0
+        
+        insights_md = _safe_str(item.get("chunk_insights_md", ""))
+        if not insights_md:
+            dropped_count += 1
+            continue
+            
+        current_block_lines: List[str] = []
+        current_mid = chunk_mid
+        
+        def flush_block():
+            if not current_block_lines:
+                return
+            block_text = "\n".join(current_block_lines)
+            
+            assigned = False
+            for chapter in narrative_arc:
+                if not isinstance(chapter, dict):
+                    continue
+                cid = _safe_str(chapter.get("chapter_id", ""))
+                c_start = _safe_sec(chapter.get("start_sec", 0))
+                c_end = _safe_sec(chapter.get("end_sec", 0))
+                if cid and c_start <= current_mid <= c_end:
+                    chapter_chunk_map[cid].append((chunk_id, block_text))
+                    assigned = True
+                    break
+            
+            if not assigned:
+                unassigned.append((chunk_id, block_text))
+            
+            current_block_lines.clear()
 
-    dropped_count = 0
+        for line in insights_md.split('\n'):
+            match = EVENT_PATTERN.match(line)
+            if match:
+                flush_block()
+                start_str = match.group(1)
+                end_str = match.group(2)
+                start_sec = _parse_time(start_str)
+                end_sec = _parse_time(end_str) if end_str else start_sec
+                current_mid = (start_sec + end_sec) / 2.0
+                
+            current_block_lines.append(line)
+            
+        flush_block()
 
     for chapter in narrative_arc:
         if not isinstance(chapter, dict):
@@ -116,61 +136,44 @@ def _build_primary_path(
         c_start = _safe_sec(chapter.get("start_sec", 0))
         c_end = _safe_sec(chapter.get("end_sec", 0))
         time_span = f"[{_to_hhmmss(c_start)} - {_to_hhmmss(c_end)}]"
-        chunk_ids_in_chapter = chapter_chunk_map.get(cid, [])
+        blocks = chapter_chunk_map.get(cid, [])
 
         lines.append(f"# {title} {time_span}")
         lines.append("")
 
-        if not chunk_ids_in_chapter:
+        if not blocks:
             lines.append("_（本章节无已处理分片）_")
             lines.append("")
             continue
 
-        for chunk_id in chunk_ids_in_chapter:
-            item = result_map.get(chunk_id, {})
+        grouped_blocks: Dict[str, List[str]] = {}
+        for chunk_id, block_text in blocks:
+            grouped_blocks.setdefault(chunk_id, []).append(block_text)
+
+        for chunk_id, block_texts in grouped_blocks.items():
             plan_item = plan_map.get(chunk_id, {})
             p_start = _safe_sec(plan_item.get("start_sec", 0))
             p_end = _safe_sec(plan_item.get("end_sec", 0))
-            time_span_chunk = f"[{_to_hhmmss(p_start)} - {_to_hhmmss(p_end)}]"
-
-            transcript_claims = item.get("transcript_claims", [])
-            frame_references = item.get("frame_references", [])
-            if not isinstance(transcript_claims, list):
-                transcript_claims = []
-            if not isinstance(frame_references, list):
-                frame_references = []
-
-            if not transcript_claims and not frame_references:
-                dropped_count += 1
-                continue
-
-            lines.append(f"## {chunk_id} {time_span_chunk}")
-            lines.extend(_format_claims_with_frames(transcript_claims, frame_references))
+            
+            for b in block_texts:
+                lines.append(b)
             lines.append("")
 
     if unassigned:
         lines.append("# 未归章节分片")
         lines.append("")
-        for chunk_id in unassigned:
-            item = result_map.get(chunk_id, {})
+        
+        grouped_blocks: Dict[str, List[str]] = {}
+        for chunk_id, block_text in unassigned:
+            grouped_blocks.setdefault(chunk_id, []).append(block_text)
+            
+        for chunk_id, block_texts in grouped_blocks.items():
             plan_item = plan_map.get(chunk_id, {})
             p_start = _safe_sec(plan_item.get("start_sec", 0))
             p_end = _safe_sec(plan_item.get("end_sec", 0))
-            time_span_chunk = f"[{_to_hhmmss(p_start)} - {_to_hhmmss(p_end)}]"
-
-            transcript_claims = item.get("transcript_claims", [])
-            frame_references = item.get("frame_references", [])
-            if not isinstance(transcript_claims, list):
-                transcript_claims = []
-            if not isinstance(frame_references, list):
-                frame_references = []
-
-            if not transcript_claims and not frame_references:
-                dropped_count += 1
-                continue
-
-            lines.append(f"## {chunk_id} {time_span_chunk}")
-            lines.extend(_format_claims_with_frames(transcript_claims, frame_references))
+            
+            for b in block_texts:
+                lines.append(b)
             lines.append("")
 
     return "\n".join(lines).strip(), dropped_count
@@ -182,7 +185,7 @@ def _build_fallback_path(
     plan_map: Dict[str, Dict],
     user_prompt: str,
 ) -> Tuple[str, int]:
-    """降级路径：narrative_arc 为空时，平铺各分片的 chunk_summary。"""
+    """降级路径：narrative_arc 为空时，平铺各分片的 chunk_insights_md。"""
     lines: List[str] = []
     lines.append("# Chunk Aggregated Insights")
     lines.append("")
@@ -200,13 +203,13 @@ def _build_fallback_path(
         p_end = _safe_sec(plan_item.get("end_sec", 0))
         time_span = f"[{_to_hhmmss(p_start)} - {_to_hhmmss(p_end)}]"
 
-        chunk_summary = _safe_str(item.get("chunk_summary", ""))
-        if not chunk_summary:
+        insights_md = _safe_str(item.get("chunk_insights_md", ""))
+        if not insights_md:
             dropped_count += 1
             continue
 
         lines.append(f"## {chunk_id} {time_span}")
-        lines.append(chunk_summary)
+        lines.append(insights_md)
         lines.append("")
 
     return "\n".join(lines).strip(), dropped_count
@@ -217,15 +220,15 @@ def chunk_aggregator_node(state: VideoSummaryState) -> dict:
     分片聚合节点。
 
     主路径（narrative_arc 非空）：
-      按章节归组，输出 transcript_claims + frame_references 交叉验证证据。
-      chunk_summary 不参与主路径，仅作降级兜底，避免两份叙事并存。
+      按章节归组，输出 multimodal 分析证据（chunk_insights_md）。
+      chunk_summary 仅作滑动窗口上下文，不在最终 Markdown 报告中展示。
 
     降级路径（narrative_arc 为空）：
-      平铺 chunk_summary，保持鲁棒性。
+      平铺 chunk_insights_md，保持鲁棒性。
 
     主要输入:
     - state["chunk_plan"]
-    - state["chunk_results"]   每条含 transcript_claims、frame_references、chunk_summary
+    - state["chunk_results"]   每条含 chunk_insights_md、chunk_summary
     - state["narrative_arc"]   全局叙事章节（主路径依赖）
     - state["user_prompt"]
 

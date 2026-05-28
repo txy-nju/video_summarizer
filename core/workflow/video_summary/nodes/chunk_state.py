@@ -2,10 +2,9 @@ from typing import TypedDict, List, Dict, Any, Optional
 
 
 class ChunkState(TypedDict):
-    """子图（audio → vision 顺序流水线）的内部状态契约。
-
-    该 TypedDict 仅在 chunk_subgraph 内部流转，不向 VideoSummaryState 直接暴露。
-    子图执行结束后，相关字段通过 chunk_results reducer 写回主图状态。
+    """分片执行任务的状态契约。
+    
+    由 map_dispatcher 发送，由 chunk_multimodal_worker_node 执行。
     """
     # ---- 分片标识 ----
     chunk_id: str                           # 分片唯一标识，如 "chunk_0"
@@ -22,13 +21,10 @@ class ChunkState(TypedDict):
     # ---- 滑动窗口上下文 ----
     previous_chunk_summaries: List[Dict[str, Any]]  # 最近 N 个分片的压缩摘要，用于 context_calibration
 
-    # ---- audio worker 输出（chunk_audio_analyzer 写入） ----
-    transcript_claims: List[Dict]           # 来自 transcript 的原子断言，结构: [{claim, exact_quote, timestamp}]
-
-    # ---- vision worker 输出（chunk_vision_analyzer 写入） ----
-    frame_references: List[Dict]            # 画面观察与音频断言交叉验证，结构: [{frame_time, observation, audio_claim_match}]
-    chunk_summary: str                      # 融合音频事实 + 画面验证的叙事摘要（vision worker 产出，聚合器降级兜底用）
+    # ---- worker 输出（chunk_multimodal_worker_node 写入） ----
+    chunk_insights_md: str                  # 结构化 Markdown 输出，包含摘要与图文事件核验
+    chunk_summary: str                      # 纯文本压缩摘要，用于 context_calibration（滑动窗口记忆）
 
     # ---- 可观测字段 ----
-    modality_status: Dict[str, str]         # 各模态处理状态，如 {"audio": "done", "vision": "done"}
+    modality_status: Dict[str, str]         # 各模态处理状态，如 {"multimodal": "ok"}
     latency_ms: Dict[str, Any]             # 各步骤耗时，结构与主图 chunk_results 内 latency_ms 一致

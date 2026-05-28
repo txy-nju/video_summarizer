@@ -45,18 +45,10 @@ def _is_chunk_synthesized(item: Dict[str, Any]) -> bool:
 
 def _modality_ready(item: Dict[str, Any], modality: str) -> bool:
     """检查指定模态是否已完成（含降级终结态）。
-
-    新字段映射：
-    - audio -> transcript_claims 非空
-    - vision -> frame_references 非空
     """
-    if modality == "audio":
-        claims = item.get("transcript_claims")
-        if isinstance(claims, list) and claims:
-            return True
-    elif modality == "vision":
-        refs = item.get("frame_references")
-        if isinstance(refs, list) and refs:
+    if modality == "multimodal":
+        insights = item.get("chunk_insights_md")
+        if isinstance(insights, str) and insights.strip():
             return True
 
     modality_status = item.get("modality_status", {})
@@ -209,13 +201,11 @@ def map_dispatch_node(state: VideoSummaryState) -> Dict[str, Any]:
     }
 
 
-def route_chunk_subgraph_tasks(state: VideoSummaryState) -> List[Send]:
+def route_chunk_multimodal_tasks(state: VideoSummaryState) -> List[Send]:
     """
-    为当前波次的每个待处理分片生成 Send API 派发任务（chunk 子图版）。
+    为当前波次的每个待处理分片生成 Send API 派发任务（多模态版）。
 
-    替代原 route_audio_send_tasks + route_vision_send_tasks + route_synthesis_send_tasks。
-    每个分片以 ChunkState-shaped dict 发送给 chunk_subgraph_node，
-    由子图内部顺序执行 audio → vision 两步。
+    每个分片以 ChunkState-shaped dict 发送给 chunk_multimodal_worker_node。
     """
     chunk_plan = state.get("chunk_plan", [])
     if not isinstance(chunk_plan, list):
@@ -279,13 +269,12 @@ def route_chunk_subgraph_tasks(state: VideoSummaryState) -> List[Send]:
             "previous_chunk_summaries": previous_chunk_summaries_by_chunk.get(chunk_id, []),
             "user_prompt": user_prompt,
             "trace_id": trace_id,
-            "transcript_claims": [],
-            "frame_references": [],
+            "chunk_insights_md": "",
             "chunk_summary": "",
             "modality_status": {},
             "latency_ms": {},
         }
-        sends.append(Send("chunk_subgraph_node", chunk_state_payload))
+        sends.append(Send("chunk_multimodal_worker_node", chunk_state_payload))
 
     return sends
 
