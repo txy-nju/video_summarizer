@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Dict, Any, Annotated
+from typing import TypedDict, List, Dict, Any, Annotated, Optional
 
 
 def _deep_merge_dict(base: Dict[str, Any], update: Dict[str, Any]) -> Dict[str, Any]:
@@ -95,7 +95,7 @@ class VideoSummaryState(TypedDict):
     keyframes: List[Dict]           # 关键帧列表，元素至少包含 time，可能包含 image 或 frame_file
     keyframes_base_path: str        # 关键帧文件引用模式下的根目录
     user_prompt: str                # 用户具体的总结侧重点
-    structured_global_context: Dict[str, Any]  # 写入: outline_bootstrap_node；消费: map worker 与后续上下文增强阶段
+    narrative_arc: Optional[List[Dict]]  # 写入: outline_bootstrap_node；消费: map worker / chunk workers；结构: [{chapter_id, title, start_sec, end_sec, summary}]
     data_preparation_status: Dict[str, Any]  # 写入: data_preparation_node；消费: 状态透传/可观测
     data_preparation_events: List[Dict[str, Any]]  # 写入: data_preparation_node；消费: 状态服务与前端诊断
     
