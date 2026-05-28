@@ -108,19 +108,17 @@ class VideoSummaryState(TypedDict):
 
     # 分片执行中间态
     video_duration_seconds: int     # 写入: chunk_planner_node；消费: 主要用于观测和测试，当前主链路不直接依赖
-    chunk_plan: List[Dict]          # 写入: chunk_planner_node；消费: map_dispatch_node / worker 路由函数 / chunk_synthesizer_node / chunk_aggregator_node
+    chunk_plan: List[Dict]          # 写入: chunk_planner_node；消费: map_dispatch_node / worker 路由函数 / chunk_subgraph_node / chunk_aggregator_node
     chunk_results: Annotated[List[Dict], _merge_chunk_results]  # 写入: chunk_audio_worker / chunk_vision_worker（子图）；消费: wave_gate_node / chunk_aggregator_node / 进度上报逻辑
     chunk_summary_memory: Dict[str, str]  # 写入: map_dispatch_node；消费: worker context_calibration 轻量上下文
     previous_chunk_summaries_by_chunk: Dict[str, List[Dict[str, Any]]]  # 写入: map_dispatch_node；消费: route_audio_send_tasks / route_vision_send_tasks
     active_wave_chunk_ids: List[str]  # 写入: map_dispatch_node；消费: audio/vision/synthesis 路由与 barrier
     wave_index: int                # 写入: map_dispatch_node；消费: 调度诊断、前端可观测
     current_chunk: Dict             # 写入: route_audio_send_tasks / route_vision_send_tasks；消费: chunk_audio_worker_node / chunk_vision_worker_node
-    current_synthesis_chunk: Dict   # 写入: route_synthesis_send_tasks；消费: chunk_synthesizer_worker_node
-    current_synthesis_base_item: Dict  # 写入: route_synthesis_send_tasks；消费: chunk_synthesizer_worker_node
     chunk_audio_insights: Dict      # 预留字段；当前主链路未稳定写入，未来可用于按 chunk_id 建立音频侧映射缓存
     chunk_visual_insights: Dict     # 预留字段；当前主链路未稳定写入，未来可用于按 chunk_id 建立视觉侧映射缓存
     chunk_retry_count: Dict         # 写入: map_dispatch_node；消费: 当前主链路主要用于状态透传和未来重试策略扩展
-    reduce_debug_info: Dict         # 写入: map_dispatch_node / synthesis_barrier_node / chunk_aggregator_node；消费: 前端调试展示、测试断言、运行诊断
+    reduce_debug_info: Dict         # 写入: map_dispatch_node / wave_gate_node / chunk_aggregator_node；消费: 前端调试展示、测试断言、运行诊断
     
     # 输出与循环控制
     draft_summary: str              # 写入: fusion_drafter_node；消费: hallucination_grader_node / usefulness_grader_node / finalize_summary() 返回

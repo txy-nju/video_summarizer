@@ -74,6 +74,7 @@ def _seed_video() -> VideoResourceRecord:
         oss_key="videos/user-1/vid-1/original.mp4",
         duration=120,
         full_transcript=None,
+        transcript_segments=None,
         transcribe_status="UPLOADED",
         transcript_vector_ids=None,
         keyframes=None,

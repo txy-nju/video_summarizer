@@ -18,7 +18,7 @@ from config.settings import (
     OUTLINE_ZH_REGEX_MIN,
     OUTLINE_ZH_STOPWORDS_PATH,
 )
-from core.llm.factory import get_model_for_capability
+from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 from core.workflow.video_summary.state import VideoSummaryState
 
 try:
@@ -345,11 +345,15 @@ def _extract_narrative_arc_llm(
 
     try:
         model_client = llm_model or get_model_for_capability("chat")
-        response = model_client.invoke([
-            {"role": "system", "content": _NARRATIVE_ARC_SYSTEM_PROMPT},
-            {"role": "user", "content": f"以下是视频转录稿，请提取叙事章节大纲：\n\n{transcript_text}"},
-        ])
-        raw_text = response.content if hasattr(response, "content") else str(response)
+        model_name = get_model_name_for_capability("chat")
+        raw_text = model_client.chat_completion(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": _NARRATIVE_ARC_SYSTEM_PROMPT},
+                {"role": "user", "content": f"以下是视频转录稿，请提取叙事章节大纲：\n\n{transcript_text}"},
+            ],
+            temperature=0.2,
+        )
         raw_text = raw_text.strip()
 
         # 尝试提取 JSON 数组（兼容模型在输出前后加额外文字的情况）

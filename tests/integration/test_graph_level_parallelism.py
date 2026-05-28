@@ -5,11 +5,12 @@ from core.workflow.video_summary.state import _merge_chunk_results
 
 
 class TestChunkResultsMerger(unittest.TestCase):
+
     def test_merge_empty_base_returns_update(self):
         base: List[Dict[str, Any]] = []
         update = [
-            {"chunk_id": "c1", "audio_insights": "audio_1"},
-            {"chunk_id": "c2", "audio_insights": "audio_2"},
+            {"chunk_id": "c1", "transcript_claims": [{"claim": "x"}]},
+            {"chunk_id": "c2", "transcript_claims": [{"claim": "y"}]},
         ]
         result = _merge_chunk_results(base, update)
         self.assertEqual(len(result), 2)
@@ -18,21 +19,21 @@ class TestChunkResultsMerger(unittest.TestCase):
 
     def test_merge_empty_update_returns_base(self):
         base = [
-            {"chunk_id": "c1", "vision_insights": "vision_1"},
-            {"chunk_id": "c2", "vision_insights": "vision_2"},
+            {"chunk_id": "c1", "frame_references": [{"observation": "scene"}]},
+            {"chunk_id": "c2", "frame_references": []},
         ]
         update: List[Dict[str, Any]] = []
         result = _merge_chunk_results(base, update)
         self.assertEqual(len(result), 2)
-        self.assertEqual(result[0]["vision_insights"], "vision_1")
+        self.assertEqual(result[0]["frame_references"], [{"observation": "scene"}])
 
     def test_merge_overlapping_chunks_combines_fields(self):
-        base = [{"chunk_id": "c1", "audio_insights": "audio_analysis_c1"}]
-        update = [{"chunk_id": "c1", "vision_insights": "vision_analysis_c1"}]
+        base = [{"chunk_id": "c1", "transcript_claims": [{"claim": "audio fact"}]}]
+        update = [{"chunk_id": "c1", "frame_references": [{"observation": "visual fact"}]}]
         result = _merge_chunk_results(base, update)
         self.assertEqual(len(result), 1)
-        self.assertEqual(result[0]["audio_insights"], "audio_analysis_c1")
-        self.assertEqual(result[0]["vision_insights"], "vision_analysis_c1")
+        self.assertEqual(result[0]["transcript_claims"], [{"claim": "audio fact"}])
+        self.assertEqual(result[0]["frame_references"], [{"observation": "visual fact"}])
 
     def test_merge_latency_ms_recursive_merge(self):
         base = [{"chunk_id": "c1", "latency_ms": {"audio": 100}}]

@@ -271,4 +271,15 @@ class AudioTranscriber:
             response_format="verbose_json",
         )
         print(f"Transcription successful: {audio_path.name}")
+        try:
+            _result = json.loads(transcript_json)
+            _text = _result.get("text", "").strip()
+            _lang = _result.get("language", "unknown")
+            _dur = _result.get("duration", 0)
+            print(
+                f"[Whisper] 语言={_lang} | 时长={_dur:.1f}s\n"
+                f"[Whisper] 转录文本: {_text}\n"
+            )
+        except Exception:
+            print(f"[Whisper] 原始结果: {transcript_json[:500]}")
         return transcript_json

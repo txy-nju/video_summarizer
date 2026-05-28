@@ -109,9 +109,8 @@ def analyze_video(
         "map_dispatch_node": "🗺️ [Dispatcher] 正在为微智能体群编排分片执行配方，准备发起并行实时处理...",
         "chunk_audio_worker_node": "🎧 [Chunk Audio Send Worker] 图级 fan-out：正在处理单分片音频洞察...",
         "chunk_vision_worker_node": "📸 [Chunk Vision Send Worker] 图级 fan-out：正在处理单分片视觉洞察...",
-        "synthesis_barrier_node": "🧱 [Synthesis Barrier] 正在等待音视频分片证据全部汇聚，准备进入融合分发路由...",
-        "chunk_synthesizer_worker_node": "⚡ [Chunk Synthesizer Send Worker] 图级 fan-out：正在处理单分片融合总结...",
-        "chunk_synthesizer_node": "⚡ [Chunk Synthesizer] 并行汇聚：将分片级音视频洞察实时融合为中间层 chunk_summary...",
+        "chunk_subgraph_node": "⚡ [Chunk Subgraph] 正在处理单分片音视频串行分析（音频→视觉）...",
+        "wave_gate_node": "🧱 [Wave Gate] 正在校验当前波次分片完成状态，准备进入下一波次或聚合...",
         "chunk_aggregator_node": "🧾 [Chunk Aggregator] 正在按时间线整合 n 个分片洞察，生成统一证据底稿...",
         "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
     }
@@ -225,7 +224,7 @@ def analyze_video(
 
                 if status_callback and node_name in node_msg_map:
                     msg = node_msg_map[node_name]
-                    if node_name == "chunk_synthesizer_node":
+                    if node_name == "chunk_aggregator_node":
                         chunk_results = current_state.get("chunk_results", [])
                         if isinstance(chunk_results, list) and chunk_results:
                             num_chunks = len(chunk_results)
