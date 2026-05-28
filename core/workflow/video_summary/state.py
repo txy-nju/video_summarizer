@@ -109,7 +109,7 @@ class VideoSummaryState(TypedDict):
     # 分片执行中间态
     video_duration_seconds: int     # 写入: chunk_planner_node；消费: 主要用于观测和测试，当前主链路不直接依赖
     chunk_plan: List[Dict]          # 写入: chunk_planner_node；消费: map_dispatch_node / worker 路由函数 / chunk_synthesizer_node / chunk_aggregator_node
-    chunk_results: Annotated[List[Dict], _merge_chunk_results]  # 写入: audio/vision/synthesizer 各节点与对应 worker；消费: synthesis_barrier_node / chunk_synthesizer_node / chunk_aggregator_node / 进度上报逻辑
+    chunk_results: Annotated[List[Dict], _merge_chunk_results]  # 写入: chunk_audio_worker / chunk_vision_worker（子图）；消费: wave_gate_node / chunk_aggregator_node / 进度上报逻辑
     chunk_summary_memory: Dict[str, str]  # 写入: map_dispatch_node；消费: worker context_calibration 轻量上下文
     previous_chunk_summaries_by_chunk: Dict[str, List[Dict[str, Any]]]  # 写入: map_dispatch_node；消费: route_audio_send_tasks / route_vision_send_tasks
     active_wave_chunk_ids: List[str]  # 写入: map_dispatch_node；消费: audio/vision/synthesis 路由与 barrier

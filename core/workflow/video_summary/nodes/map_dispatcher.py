@@ -41,9 +41,20 @@ def _is_chunk_synthesized(item: Dict[str, Any]) -> bool:
 
 
 def _modality_ready(item: Dict[str, Any], modality: str) -> bool:
-    insights_key = f"{modality}_insights"
-    if bool(str(item.get(insights_key, "")).strip()):
-        return True
+    """检查指定模态是否已完成（含降级终结态）。
+
+    新字段映射：
+    - audio -> transcript_claims 非空
+    - vision -> frame_references 非空
+    """
+    if modality == "audio":
+        claims = item.get("transcript_claims")
+        if isinstance(claims, list) and claims:
+            return True
+    elif modality == "vision":
+        refs = item.get("frame_references")
+        if isinstance(refs, list) and refs:
+            return True
 
     modality_status = item.get("modality_status", {})
     if isinstance(modality_status, dict):
@@ -261,7 +272,9 @@ def route_audio_send_tasks(state: VideoSummaryState) -> List[Send]:
     sends: List[Send] = []
     transcript = state.get("transcript", "")
     user_prompt = state.get("user_prompt", "")
-    structured_global_context = state.get("structured_global_context", {})
+    narrative_arc = state.get("narrative_arc") or []
+    if not isinstance(narrative_arc, list):
+        narrative_arc = []
     previous_chunk_summaries_by_chunk = state.get("previous_chunk_summaries_by_chunk", {})
     if not isinstance(previous_chunk_summaries_by_chunk, dict):
         previous_chunk_summaries_by_chunk = {}
@@ -287,7 +300,7 @@ def route_audio_send_tasks(state: VideoSummaryState) -> List[Send]:
                 {
                     "transcript": transcript,
                     "user_prompt": user_prompt,
-                    "structured_global_context": structured_global_context,
+                    "narrative_arc": narrative_arc,
                     "previous_chunk_summaries": previous_chunk_summaries_by_chunk.get(chunk_id, []),
                     "current_chunk": chunk,
                 },
@@ -314,7 +327,9 @@ def route_vision_send_tasks(state: VideoSummaryState) -> List[Send]:
     keyframes = state.get("keyframes", [])
     keyframes_base_path = str(state.get("keyframes_base_path", ""))
     user_prompt = state.get("user_prompt", "")
-    structured_global_context = state.get("structured_global_context", {})
+    narrative_arc = state.get("narrative_arc") or []
+    if not isinstance(narrative_arc, list):
+        narrative_arc = []
     previous_chunk_summaries_by_chunk = state.get("previous_chunk_summaries_by_chunk", {})
     if not isinstance(previous_chunk_summaries_by_chunk, dict):
         previous_chunk_summaries_by_chunk = {}
@@ -341,7 +356,7 @@ def route_vision_send_tasks(state: VideoSummaryState) -> List[Send]:
                     "keyframes": keyframes,
                     "keyframes_base_path": keyframes_base_path,
                     "user_prompt": user_prompt,
-                    "structured_global_context": structured_global_context,
+                    "narrative_arc": narrative_arc,
                     "previous_chunk_summaries": previous_chunk_summaries_by_chunk.get(chunk_id, []),
                     "current_chunk": chunk,
                 },
@@ -400,7 +415,7 @@ def route_synthesis_send_tasks(state: VideoSummaryState) -> List[Send]:
 
     sends: List[Send] = []
     user_prompt = str(state.get("user_prompt", ""))
-    structured_global_context = str(state.get("structured_global_context", ""))
+    narrative_arc_str = json.dumps(state.get("narrative_arc") or [], ensure_ascii=False)
     for chunk in chunk_plan:
         if not isinstance(chunk, dict):
             continue
@@ -424,7 +439,7 @@ def route_synthesis_send_tasks(state: VideoSummaryState) -> List[Send]:
                 "chunk_synthesizer_worker_node",
                 {
                     "user_prompt": user_prompt,
-                    "structured_global_context":structured_global_context,
+                    "narrative_arc": state.get("narrative_arc") or [],
                     "current_synthesis_chunk": chunk,
                     "current_synthesis_base_item": base_item,
                 },

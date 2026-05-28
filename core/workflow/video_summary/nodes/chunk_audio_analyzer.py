@@ -1,7 +1,6 @@
 import json
 import re
 import time
-import threading
 from typing import Any, Dict, List, Tuple
 
 from core.llm.base import BaseModel
@@ -10,100 +9,69 @@ from core.llm.factory import get_model_for_capability, get_model_name_for_capabi
 
 from config.settings import (
     CHUNK_DEGRADED_MARKER,
-    CHUNK_MAX_TOOL_CALLS,
     CHUNK_WORKER_MAX_RETRIES,
     CHUNK_WORKER_TIMEOUT_SECONDS,
-    ENABLE_CHUNK_CACHE,
 )
-from core.workflow.video_summary.state import VideoSummaryState
-from core.workflow.video_summary.tools.search_tools import execute_tavily_search
+from core.workflow.video_summary.nodes.chunk_state import ChunkState
 from backend.observability.llm_tracing import trace_llm_call
 from backend.observability.tracing import build_span_name, start_span
 
-_AUDIO_SEARCH_CACHE: Dict[str, str] = {}
-_AUDIO_SEARCH_CACHE_LOCK = threading.Lock()
+_AUDIO_SYSTEM_PROMPT = (
+    "你是严谨的视频分片转录文本分析助手。\n\n"
+    "【任务】从当前分片的 transcript 中提取原子事实断言（claims）。\n\n"
+    "【严格约束】：\n"
+    "1. 禁止补造：每条 claim 必须有 exact_quote（直接引自 transcript 原文）。\n"
+    "2. 时间戳：timestamp 必须来自 transcript 中对应片段的时间信息（秒数或 HH:MM:SS）。\n"
+    "3. 章节定位：参考 narrative_arc 中当前时间段所属章节，帮助理解上下文语义，"
+    "但禁止用章节内容补充 transcript 中未出现的断言。\n"
+    "4. JSON 输出：直接输出 JSON 数组，不要有其他说明文字。\n\n"
+    "输出格式（JSON 数组）：\n"
+    '[  {"claim": "断言内容", "exact_quote": "transcript 原话", "timestamp": "HH:MM:SS 或秒数"}, ... ]'
+)
 
 
-def _load_transcript_data(transcript: str) -> Dict[str, Any]:
-    if not transcript or not transcript.strip():
-        return {}
+def _format_timestamp(seconds) -> str:
     try:
-        data = json.loads(transcript)
+        s = float(seconds)
+        h = int(s // 3600)
+        m = int((s % 3600) // 60)
+        sec = int(s % 60)
+        return f"{h:02d}:{m:02d}:{sec:02d}"
     except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
+        return str(seconds)
 
 
-def _build_transcript_items(transcript_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    items: List[Dict[str, Any]] = []
-    segments = transcript_data.get("segments", [])
-    if isinstance(segments, list):
-        for seg in segments:
-            if isinstance(seg, dict):
-                items.append(seg)
-
-    chunks = transcript_data.get("chunks", [])
-    if isinstance(chunks, list):
-        for chunk in chunks:
-            if isinstance(chunk, dict):
-                items.append(chunk)
-
-    return items
-
-
-def _extract_chunk_text(transcript_items: List[Dict[str, Any]], indexes: List[int]) -> str:
+def _build_transcript_text_with_timestamps(transcript_segments: List[Dict[str, Any]]) -> str:
     lines: List[str] = []
-    for idx in indexes:
-        if not isinstance(idx, int) or idx < 0 or idx >= len(transcript_items):
-            continue
-        text = str(transcript_items[idx].get("text", "")).strip()
+    for seg in transcript_segments:
+        start = seg.get("start", seg.get("timestamp", 0))
+        text = str(seg.get("text", "")).strip()
         if text:
-            lines.append(text)
+            lines.append(f"[{_format_timestamp(start)}] {text}")
     return "\n".join(lines)
 
 
-def _candidate_queries(text: str, max_calls: int) -> List[str]:
-    # 以大写缩写和驼峰词作为轻量候选，限制每个 chunk 的搜索次数
-    acronyms = re.findall(r"\b[A-Z]{2,}\b", text)
-    camel_words = re.findall(r"\b[A-Za-z]+[A-Z][A-Za-z]+\b", text)
-
-    candidates: List[str] = []
-    for token in acronyms + camel_words:
-        if token not in candidates:
-            candidates.append(token)
-        if len(candidates) >= max_calls:
-            break
-    return candidates
-
-
-def _search_with_cache(query: str) -> str:
-    if ENABLE_CHUNK_CACHE:
-        with _AUDIO_SEARCH_CACHE_LOCK:
-            cached = _AUDIO_SEARCH_CACHE.get(query)
-        if cached is not None:
-            return cached
-
-    result = execute_tavily_search(query)
-    if ENABLE_CHUNK_CACHE:
-        with _AUDIO_SEARCH_CACHE_LOCK:
-            _AUDIO_SEARCH_CACHE[query] = result
-    return result
-
-
-def _build_audio_structured_fallback(chunk_id: str, chunk_text: str, reason: str) -> Dict[str, Any]:
-    direct_observation = chunk_text[:300] if chunk_text else "无直接音频证据"
-    final_summary = reason if reason.strip() else (direct_observation[:180] if direct_observation else "证据不足")
-    return {
-        "observation": {
-            "source": "direct_audio",
-            "content": direct_observation,
-        },
-        "context_calibration": {
-            "source": "structured_global_context",
-            "content": "未使用上下文消歧（无前序分片摘要）",
-        },
-        "final_summary": final_summary,
-    }
+def _parse_transcript_claims(raw_text: str) -> List[Dict[str, Any]]:
+    try:
+        raw_text = raw_text.strip()
+        json_match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+        if json_match:
+            raw_text = json_match.group(0)
+        claims = json.loads(raw_text)
+        if not isinstance(claims, list):
+            return []
+        validated: List[Dict[str, Any]] = []
+        for c in claims:
+            if not isinstance(c, dict):
+                continue
+            validated.append({
+                "claim": str(c.get("claim", "")).strip(),
+                "exact_quote": str(c.get("exact_quote", "")).strip(),
+                "timestamp": str(c.get("timestamp", "")).strip(),
+            })
+        return validated
+    except Exception:
+        return []
 
 
 def _classify_error(exc: Exception) -> str:
@@ -113,59 +81,33 @@ def _classify_error(exc: Exception) -> str:
     return "failed"
 
 
-def _normalize_structured_payload(payload: Dict[str, Any], fallback_summary: str) -> Dict[str, Any]:
-    observation = payload.get("observation")
-    if not isinstance(observation, dict):
-        observation = {"source": "direct_audio", "content": ""}
-
-    context_calibration = payload.get("context_calibration")
-    if not isinstance(context_calibration, dict):
-        context_calibration = {"source": "structured_global_context", "content": ""}
-
-    final_summary = str(payload.get("final_summary", "")).strip()
-    if not final_summary:
-        final_summary = fallback_summary.strip() or "证据不足"
-
-    return {
-        "observation": {
-            "source": str(observation.get("source", "direct_audio") or "direct_audio"),
-            "content": str(observation.get("content", "") or ""),
-        },
-        "context_calibration": {
-            "source": str(context_calibration.get("source", "structured_global_context") or "structured_global_context"),
-            "content": str(context_calibration.get("content", "") or ""),
-        },
-        "final_summary": final_summary,
-    }
-
-
-def _llm_audio_chunk_structured(
+def _llm_extract_transcript_claims(
     chunk_id: str,
-    chunk_text: str,
+    transcript_text: str,
     user_prompt: str,
-    structured_global_context: Dict[str, Any],
+    narrative_arc: List[Dict[str, Any]],
     previous_chunk_summaries: List[Dict[str, Any]],
     timeout_seconds: float,
-    llm_model: BaseModel | None = None,
+    llm_model: "BaseModel | None" = None,
     trace_id: str = "",
-) -> Dict[str, Any]:
+) -> List[Dict[str, Any]]:
     if not resolve_api_key("chat"):
-        fallback = f"[chunk={chunk_id}] 音频摘要（降级）:\n" + (chunk_text[:500] if chunk_text else "无可用语音证据")
-        return _build_audio_structured_fallback(chunk_id, chunk_text, fallback)
+        return []
 
     model_client = llm_model or get_model_for_capability("chat")
     model_name = get_model_name_for_capability("chat")
-    global_context_json = json.dumps(structured_global_context or {}, ensure_ascii=False)
+
+    narrative_arc_json = json.dumps(narrative_arc or [], ensure_ascii=False)
     previous_summaries_json = json.dumps(previous_chunk_summaries or [], ensure_ascii=False)
-    system_prompt = (
-        "你是严谨的视频分片音频转录文本分析助手。请严格遵守以下证据规则：\n"
-        "1. 一级证据 (observation)：只能描述你在当前 transcript 分片中直接读到的客观内容，例如术语、陈述、数字、口播要点。\n"
-        "2. 二级证据 (context_calibration)：参考 structured_global_context 和 previous_chunk_summaries（仅前 1-2 个相邻分片摘要），"
-        "对一级证据中的模糊称呼、缩写或术语进行纠正。"
-        "绝对禁止用大纲来捏造 transcript 中没有出现过的观点、结论或因果关系。\n"
-        "3. 如果 transcript 无法提供有效信息，直接在 final_summary 中声明证据不足。\n"
-        "输出必须是 JSON 对象，且只包含 observation、context_calibration、final_summary。"
+
+    user_content = (
+        f"[chunk_id]\n{chunk_id}\n\n"
+        f"[user_prompt]\n{user_prompt}\n\n"
+        f"[narrative_arc（全局章节大纲，仅用于语义定位）]\n{narrative_arc_json}\n\n"
+        f"[previous_chunk_summaries（相邻分片摘要，仅用于消歧）]\n{previous_summaries_json}\n\n"
+        f"[chunk_transcript]\n{transcript_text}"
     )
+
     with trace_llm_call(
         provider="openai_compatible",
         model=model_name,
@@ -176,177 +118,78 @@ def _llm_audio_chunk_structured(
         raw_content = model_client.chat_completion(
             model=model_name,
             messages=[
-                {
-                    "role": "system",
-                    "content": system_prompt,
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"[chunk_id]\n{chunk_id}\n\n"
-                        f"[user_prompt]\n{user_prompt}\n\n"
-                        f"[structured_global_context]\n{global_context_json}\n\n"
-                        f"[previous_chunk_summaries]\n{previous_summaries_json}\n\n"
-                        f"[chunk_transcript]\n{chunk_text}"
-                    ),
-                },
+                {"role": "system", "content": _AUDIO_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
             ],
-            temperature=0.2,
-            response_format={"type": "json_object"},
+            temperature=0.1,
             timeout=timeout_seconds,
         )
-    try:
-        parsed = json.loads(raw_content)
-    except Exception:
-        return _build_audio_structured_fallback(chunk_id, chunk_text, raw_content)
-    if not isinstance(parsed, dict):
-        return _build_audio_structured_fallback(chunk_id, chunk_text, raw_content)
 
-    fallback_summary = f"[chunk={chunk_id}] 音频分析结果为空，已降级。"
-    return _normalize_structured_payload(parsed, fallback_summary)
+    return _parse_transcript_claims(raw_content)
 
 
 def _run_audio_with_retry(
     chunk_id: str,
-    chunk_text: str,
+    transcript_text: str,
     user_prompt: str,
-    structured_global_context: Dict[str, Any],
+    narrative_arc: List[Dict[str, Any]],
     previous_chunk_summaries: List[Dict[str, Any]],
-    llm_model: BaseModel | None = None,
+    llm_model: "BaseModel | None" = None,
     trace_id: str = "",
-) -> Tuple[Dict[str, Any], str, int]:
-    last_error: Exception | None = None
+) -> "Tuple[List[Dict[str, Any]], str, int]":
+    last_error: "Exception | None" = None
     for attempt in range(CHUNK_WORKER_MAX_RETRIES + 1):
         try:
-            structured = _llm_audio_chunk_structured(
+            claims = _llm_extract_transcript_claims(
                 chunk_id=chunk_id,
-                chunk_text=chunk_text,
+                transcript_text=transcript_text,
                 user_prompt=user_prompt,
-                structured_global_context=structured_global_context,
+                narrative_arc=narrative_arc,
                 previous_chunk_summaries=previous_chunk_summaries,
                 timeout_seconds=CHUNK_WORKER_TIMEOUT_SECONDS,
                 llm_model=llm_model,
                 trace_id=trace_id,
             )
-            return structured, "ok", attempt
+            return claims, "ok", attempt
         except Exception as exc:
             last_error = exc
 
     status = _classify_error(last_error or Exception("audio worker failed"))
-    reason = f"{CHUNK_DEGRADED_MARKER}:audio:{status}:retries_exhausted"
-    structured = _build_audio_structured_fallback(chunk_id, chunk_text, reason)
-    return structured, status, CHUNK_WORKER_MAX_RETRIES
+    return [], status, CHUNK_WORKER_MAX_RETRIES
 
 
-def _process_single_chunk_audio(
-    chunk_id: str,
-    indexes: List[int],
-    transcript_items: List[Dict[str, Any]],
-    user_prompt: str,
-    structured_global_context: Dict[str, Any],
-    previous_chunk_summaries: List[Dict[str, Any]],
-    llm_model: BaseModel | None = None,
-    trace_id: str = "",
-) -> Tuple[str, Dict[str, Any]]:
-    started = time.perf_counter()
-    chunk_text = _extract_chunk_text(transcript_items, indexes)
-
-    if not chunk_text:
-        structured_insights = _build_audio_structured_fallback(
-            chunk_id,
-            chunk_text,
-            f"{CHUNK_DEGRADED_MARKER}:audio:degraded:no_transcript_evidence",
-        )
-        insights = structured_insights["final_summary"]
-        audio_status = "degraded"
-        retry_count = 0
-        searches: List[Dict[str, str]] = []
-    else:
-        structured_insights, audio_status, retry_count = _run_audio_with_retry(
-            chunk_id,
-            chunk_text,
-            user_prompt,
-            structured_global_context,
-            previous_chunk_summaries,
-            llm_model,
-            trace_id,
-        )
-        insights = str(structured_insights.get("final_summary", "")).strip() or f"{CHUNK_DEGRADED_MARKER}:audio:{audio_status}:empty_summary"
-
-        searches = []
-        for query in _candidate_queries(chunk_text, max(0, CHUNK_MAX_TOOL_CALLS)):
-            searches.append({"query": query, "result": _search_with_cache(query)})
-
-    latency_ms = int((time.perf_counter() - started) * 1000)
-
-    delta = {
-        "chunk_id": chunk_id,
-        "audio_structured_analysis": structured_insights,
-        "audio_insights": insights,
-        "evidence_refs": {
-            "transcript_segment_indexes": indexes,
-            "audio_searches": searches,
-        },
-        "token_usage": {
-            "audio": 0,
-        },
-        "modality_status": {
-            "audio": audio_status,
-        },
-        "chunk_retry_count": {
-            "audio": retry_count,
-        },
-        "degraded_context": {
-            "audio": audio_status != "ok",
-        },
-        "latency_ms": {
-            "audio": latency_ms,
-        },
-    }
-    return chunk_id, delta
-
-
-def chunk_audio_worker_node(state: VideoSummaryState) -> dict:
+def chunk_audio_worker_node(state: ChunkState, llm_model: "BaseModel | None" = None) -> dict:
     """
-    Send API 路径下的单分片音频分析 worker。
+    子图内的音频分析 worker（audio -> vision 顺序流水线中的第一步）。
 
-    地位:
-    - Send API 图级 fan-out 下的单分片执行单元。
-
-    任务:
-    - 仅读取 current_chunk 对应的 transcript 片段。
-    - 生成单个 chunk 的 audio_insights。
-
-    主要输入:
-    - state["current_chunk"]
-    - state["transcript"]
-    - state["user_prompt"]
-
-    主要输出:
-    - chunk_results: 长度为 1 的列表，包含当前 chunk 的音频分析结果。
+    输出写入 ChunkState:
+    - transcript_claims: [{claim, exact_quote, timestamp}]
+    - modality_status: {"audio": "ok"|"degraded"|"timeout"|"failed"}
+    - latency_ms: {"audio": <ms>}
     """
-    current_chunk = state.get("current_chunk", {})
-    if not isinstance(current_chunk, dict):
-        return {"chunk_results": []}
-
-    chunk_id = str(current_chunk.get("chunk_id", "")).strip()
+    chunk_id = str(state.get("chunk_id", "")).strip()
     if not chunk_id:
-        return {"chunk_results": []}
+        return {
+            "transcript_claims": [],
+            "modality_status": {"audio": "degraded"},
+            "latency_ms": {"audio": 0},
+        }
 
-    indexes = current_chunk.get("transcript_segment_indexes", [])
-    if not isinstance(indexes, list):
-        indexes = []
+    transcript_segments = state.get("transcript_segments", [])
+    if not isinstance(transcript_segments, list):
+        transcript_segments = []
 
-    transcript = str(state.get("transcript", ""))
     user_prompt = str(state.get("user_prompt", ""))
-    structured_global_context = state.get("structured_global_context", {})
-    if not isinstance(structured_global_context, dict):
-        structured_global_context = {}
+    narrative_arc = state.get("narrative_arc") or []
+    if not isinstance(narrative_arc, list):
+        narrative_arc = []
     previous_chunk_summaries = state.get("previous_chunk_summaries", [])
     if not isinstance(previous_chunk_summaries, list):
         previous_chunk_summaries = []
     trace_id = str(state.get("trace_id", ""))
-    transcript_items = _build_transcript_items(_load_transcript_data(transcript))
+
+    started = time.perf_counter()
+    transcript_text = _build_transcript_text_with_timestamps(transcript_segments)
 
     with start_span(
         build_span_name("workflow", "chunk_audio", "analyze"),
@@ -357,19 +200,34 @@ def chunk_audio_worker_node(state: VideoSummaryState) -> dict:
             "workflow_state": "ANALYSIS",
         },
     ):
-        _, merged = _process_single_chunk_audio(
-            chunk_id,
-            indexes,
-            transcript_items,
-            user_prompt,
-            structured_global_context,
-            previous_chunk_summaries,
-            trace_id=trace_id,
-        )
+        if not transcript_text:
+            transcript_claims: List[Dict[str, Any]] = []
+            audio_status = "degraded"
+            print(f"  -> [Audio Worker] {chunk_id}: no transcript evidence, degraded.")
+        else:
+            transcript_claims, audio_status, _ = _run_audio_with_retry(
+                chunk_id=chunk_id,
+                transcript_text=transcript_text,
+                user_prompt=user_prompt,
+                narrative_arc=narrative_arc,
+                previous_chunk_summaries=previous_chunk_summaries,
+                llm_model=llm_model,
+                trace_id=trace_id,
+            )
+            if audio_status != "ok":
+                print(f"  -> [Audio Worker] {chunk_id}: status={audio_status}, claims={len(transcript_claims)}")
+            else:
+                print(f"  -> [Audio Worker] {chunk_id}: extracted {len(transcript_claims)} transcript claims.")
 
-    if str(merged.get("modality_status", {}).get("audio", "ok")).lower() != "ok":
-        error_code = f"AUDIO_{str(merged.get('modality_status', {}).get('audio', 'FAILED')).upper()}"
-        merged["error_code"] = error_code
-        merged["status"] = "ERROR"
+    latency_ms = int((time.perf_counter() - started) * 1000)
 
-    return {"chunk_results": [merged]}
+    existing_modality = state.get("modality_status") or {}
+    new_modality = {**existing_modality, "audio": audio_status}
+    existing_latency = state.get("latency_ms") or {}
+    new_latency = {**existing_latency, "audio": latency_ms}
+
+    return {
+        "transcript_claims": transcript_claims,
+        "modality_status": new_modality,
+        "latency_ms": new_latency,
+    }
