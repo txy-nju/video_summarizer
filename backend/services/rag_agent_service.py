@@ -39,7 +39,7 @@ class RagAgentService:
         attachments: list[dict],
     ) -> Iterator[str]:
         """真实 LLM token 流：先检索再流式生成，token 到达即 yield。"""
-        collection = f"video_{task_id}"
+        collection = self._resolve_video_collection(task_id)
         context = self._build_retrieval_context(question_content, collection, top_k=5, rerank=True)
         context.frames.extend(self._download_attachment_frames(attachments))
         yield from self._stream_from_context(question_content, context)
@@ -236,6 +236,26 @@ class RagAgentService:
         yield from llm.stream_text(question=question, results=context.results)
 
     # ── 工具方法 ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_video_collection(task_id: str) -> str:
+        """从 task_id 反查 video_id，构建向量库 collection 名。
+
+        向量化任务以 video_{video_id} 命名 collection，而 RAG 调用方只有 task_id。
+        此方法通过查库获取 video_id，确保检索目标与写入目标一致。
+        """
+        from backend.db.session import SessionLocal
+        from backend.repositories.video_summary_task_repository import VideoSummaryTaskRepository
+
+        db = SessionLocal()
+        try:
+            repo = VideoSummaryTaskRepository(db_session=db)
+            task = repo.get_by_id_system(task_id)
+            if task and task.video_id:
+                return f"video_{task.video_id}"
+        finally:
+            db.close()
+        return f"video_{task_id}"
 
     @staticmethod
     def _resolve_kb_collection(kbid: str) -> str:
