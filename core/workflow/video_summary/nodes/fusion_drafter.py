@@ -120,10 +120,5 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
             }
         except Exception as e:
             print(f"  -> [Fusion Drafter Node] Error during synthesis: {str(e)}")
-            # 将异常上抛，由后续路由或最终结果展现
-            return {
-                "draft_summary": f"[系统自动提示]：综合图文大纲失败，LLM 调用发生异常：{str(e)}",
-                "revision_count": current_count + 1,
-                "error_code": "FUSION_DRAFTER_FAILED",
-                "status": "ERROR",
-            }
+            # 上抛异常，让编排层将 state 正确标记为 FAILED 并触发 Celery 重试
+            raise

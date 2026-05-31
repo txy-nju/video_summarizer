@@ -4,6 +4,7 @@ from typing import Any
 from langgraph.checkpoint.memory import InMemorySaver
 
 _CHECKPOINTER_CACHE: dict[str, Any] = {}
+_CHECKPOINTER_CONTEXTS: dict[str, Any] = {}  # 持有 context manager 引用，防止连接被回收
 
 
 def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
@@ -11,7 +12,7 @@ def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
     创建 LangGraph checkpointer。
 
     - memory: 使用 InMemorySaver（开发环境默认）
-    - postgres: 预留生产路径；若依赖缺失会给出明确异常
+    - postgres: 使用 PostgresSaver，连接字符串通过 CHECKPOINT_DB_URL 配置
     """
     normalized = (backend or "memory").strip().lower()
     cache_key = f"{normalized}:{postgres_url}"
@@ -38,7 +39,12 @@ def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
         if not postgres_url:
             raise ValueError("CHECKPOINT_BACKEND=postgres requires CHECKPOINT_DB_URL.")
 
-        checkpointer = PostgresSaver.from_conn_string(postgres_url)
+        # from_conn_string 是 @contextmanager，需要进入上下文后持有引用，
+        # 使数据库连接在进程生命周期内保持有效
+        cm = PostgresSaver.from_conn_string(postgres_url)
+        checkpointer = cm.__enter__()
+        checkpointer.setup()  # 自动创建 checkpoints / checkpoint_writes / checkpoint_blobs 表
+        _CHECKPOINTER_CONTEXTS[cache_key] = cm
         _CHECKPOINTER_CACHE[cache_key] = checkpointer
         return checkpointer
 
