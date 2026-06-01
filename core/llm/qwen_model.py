@@ -52,6 +52,8 @@ class QwenModel(BaseModel):
             kwargs["timeout"] = timeout
 
         response = self._client.chat.completions.create(**kwargs)
+        if not response.choices:
+            return ""
         return response.choices[0].message.content or ""
 
     def stream_chat_completion(
@@ -66,6 +68,8 @@ class QwenModel(BaseModel):
             kwargs["max_tokens"] = max_tokens
         with self._client.chat.completions.create(**kwargs) as stream:
             for chunk in stream:
+                if not chunk.choices:
+                    continue
                 delta = chunk.choices[0].delta.content or ""
                 if delta:
                     yield delta
