@@ -1,6 +1,6 @@
 import unittest
 from typing import cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from core.workflow.video_summary.nodes.data_preparation_node import data_preparation_node
 from core.workflow.video_summary.state import VideoSummaryState
@@ -10,7 +10,6 @@ class TestDataPreparationNode(unittest.TestCase):
     @patch("core.workflow.video_summary.nodes.data_preparation_node._record_observable_event")
     @patch(
         "core.workflow.video_summary.nodes.data_preparation_node._fetch_keyframe_bytes",
-        new_callable=AsyncMock,
     )
     def test_returns_recoverable_degraded_status_and_event_when_prefetch_partial_failed(
         self,

@@ -39,7 +39,14 @@ class _ServiceSuccess:
     def get_video_resource_for_system(self, *, video_id: str):
         return _FakeVideo(oss_key=self.video_path)
 
-    def mark_transcription_completed(self, *, video_id: str, full_transcript: str) -> None:
+    def mark_transcription_completed(
+        self,
+        *,
+        video_id: str,
+        full_transcript: str,
+        transcript_segments: list | None = None,
+        duration: int | None = None,
+    ) -> None:
         self.completed_payload = full_transcript
 
 

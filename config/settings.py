@@ -47,6 +47,10 @@ TEMP_VIDEO_DIR = TEMP_DIR / "videos"
 TEMP_AUDIO_DIR = TEMP_DIR / "audios"
 TEMP_FRAMES_DIR = TEMP_DIR / "frames"
 
+# 本地对象存储根目录（与 backend/config.py 的 OSS_LOCAL_ROOT 对齐）
+_oss_local_raw = os.getenv("OSS_LOCAL_ROOT", "temp/object_storage")
+OSS_LOCAL_ROOT_PATH = (BASE_DIR / _oss_local_raw).resolve()
+
 # 确保目录存在
 for dir_path in [TEMP_VIDEO_DIR, TEMP_AUDIO_DIR, TEMP_FRAMES_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)

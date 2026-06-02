@@ -74,9 +74,9 @@ def find_nearest_keyframe(
 
         return nearest
 
-    # 多帧模式：在时间窗口内选取有代表性的帧
+    # 多帧模式：在时间窗口内选取有代表性的帧（起止模式：从 target_seconds 到 target_seconds + window_seconds）
     window_size = max(0, window_seconds)
-    left = max(0, target_seconds - window_size)
+    left = max(0, target_seconds)
     right = target_seconds + window_size
 
     # 收集窗口范围内的所有关键帧
@@ -136,7 +136,7 @@ def extract_transcript_window(transcript: str, target_seconds: int, window_secon
         text = data.get("text", "") if isinstance(data, dict) else ""
         return text[:1200] if text else "[无可用转录分段]"
 
-    left = max(0, target_seconds - max(0, window_seconds))
+    left = max(0, target_seconds)
     right = target_seconds + max(0, window_seconds)
     lines: List[str] = []
 

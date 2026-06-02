@@ -16,6 +16,7 @@ from core.workflow.time_travel import (
     parse_timestamp_to_seconds,
     find_nearest_keyframe,
     extract_transcript_window,
+    format_seconds,
 )
 from config.settings import (
     CHECKPOINT_BACKEND,
@@ -413,8 +414,9 @@ def answer_question_at_timestamp(
 
     if status_callback:
         frame_count = len(representative_frames)
+        end_timestamp = format_seconds(target_seconds + window_seconds)
         status_callback(
-            f"🎯 [Time Travel] 已定位目标窗口 {timestamp} ±{window_seconds}s，"
+            f"🎯 [Time Travel] 已定位目标窗口 {timestamp} - {end_timestamp} ({window_seconds}s)，"
             f"已选取 {frame_count} 帧代表性关键帧（时间戳: {frame_times_str}）"
         )
 
@@ -425,9 +427,6 @@ def answer_question_at_timestamp(
             transcript_window=transcript_window,
             reason="未配置 CHAT_API_KEY 或 OPENAI_API_KEY，当前返回的是证据抽取结果（已选取 {} 帧视觉证据）。".format(len(representative_frames)),
         )
-
-    model_client = get_model_for_capability("chat")
-    model_name = get_model_name_for_capability("chat")
 
     system_prompt = (
         "你是一名严谨的视频证据问答助手。"
@@ -448,10 +447,12 @@ def answer_question_at_timestamp(
     user_content: List[Dict] = [{"type": "text", "text": evidence_text + f"\n\n[追问问题]\n{question}"}]
     
     # 为所有代表性帧添加图像证据
+    has_images = False
     for idx, frame in enumerate(representative_frames, 1):
         if isinstance(frame, dict):
             frame_image_b64 = resolve_frame_image_base64(frame, keyframes_base_path)
             if frame_image_b64:
+                has_images = True
                 frame_time = frame.get("time", "未知")
                 user_content.append(
                     {
@@ -464,6 +465,13 @@ def answer_question_at_timestamp(
                 )
                 # 在文本中添加帧的时间戳标注
                 user_content[0]["text"] += f"\n[视觉证据帧 {idx}] 时间戳: {frame_time}"
+
+    if has_images:
+        model_client = get_model_for_capability("vision")
+        model_name = get_model_name_for_capability("vision")
+    else:
+        model_client = get_model_for_capability("chat")
+        model_name = get_model_name_for_capability("chat")
 
     messages_payload: Any = [
         {"role": "system", "content": system_prompt},

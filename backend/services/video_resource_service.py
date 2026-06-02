@@ -237,6 +237,7 @@ class VideoResourceService:
         video_id: str,
         full_transcript: str,
         transcript_segments: list | None = None,
+        duration: int | None = None,
     ) -> None:
         """System-only hook: set transcribe status to COMPLETED with transcript payload."""
         video = self._repository.get_by_id_system(video_id)
@@ -247,6 +248,7 @@ class VideoResourceService:
             TranscribeStatus.COMPLETED,
             full_transcript=full_transcript,
             transcript_segments=transcript_segments,
+            duration=duration,
         )
         self._publish_status_update(
             user_id=video.owner_id,
