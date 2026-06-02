@@ -14,7 +14,16 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from evaluation.llm_as_a_judge import score_claim_based_hallucination, score_task_alignment
+from evaluation.qa_judge import evaluate_qa_answer
 from services.workflow_service import VideoSummaryService
+
+
+@dataclass
+class QAPair:
+    question: str
+    timestamp: str
+    reference_answer: str
+    key_points: List[str]
 
 
 @dataclass
@@ -29,6 +38,7 @@ class EvalSample:
     tags: List[str]
     human_guidance: str
     edited_aggregated_chunk_insights: str
+    qa_pairs: List[QAPair]
 
 
 @dataclass
@@ -85,7 +95,31 @@ def _normalize_sample(raw: Dict[str, Any]) -> EvalSample:
         tags=_to_list_of_str(raw.get("tags", [])),
         human_guidance=str(raw.get("human_guidance", "")).strip(),
         edited_aggregated_chunk_insights=str(raw.get("edited_aggregated_chunk_insights", "")).strip(),
+        qa_pairs=_normalize_qa_pairs(raw.get("qa_pairs", [])),
     )
+
+
+def _normalize_qa_pairs(raw_qa_pairs: Any) -> List[QAPair]:
+    """从数据集 JSON 中解析 qa_pairs 数组。"""
+    if not isinstance(raw_qa_pairs, list):
+        return []
+    pairs: List[QAPair] = []
+    for item in raw_qa_pairs:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get("question", "")).strip()
+        timestamp = str(item.get("timestamp", "")).strip()
+        if not question or not timestamp:
+            continue
+        pairs.append(
+            QAPair(
+                question=question,
+                timestamp=timestamp,
+                reference_answer=str(item.get("reference_answer", "")).strip(),
+                key_points=_to_list_of_str(item.get("key_points", [])),
+            )
+        )
+    return pairs
 
 
 def _load_samples(dataset_path: Path) -> List[EvalSample]:
@@ -111,6 +145,7 @@ def _run_fact_judge(
     api_key: str,
     base_url: Optional[str],
     sample_id: str,
+    judge_model: Optional[str] = None,
 ) -> JudgeResult:
     print(f"  [Judge:Fact] sample={sample_id} 开始声明级幻觉评分（Claim Extraction -> Claim Verification）")
     if not reference_evidence:
@@ -123,6 +158,7 @@ def _run_fact_judge(
             reference_evidence=reference_evidence,
             api_key=api_key,
             base_url=base_url,
+            model_name=judge_model,
         )
         print(
             "  [Judge:Fact] sample={} 完成：label={} score={} claims={} support_ratio={} hallucination_density={}".format(
@@ -152,6 +188,7 @@ def _run_task_judge(
     api_key: str,
     base_url: Optional[str],
     sample_id: str,
+    judge_model: Optional[str] = None,
 ) -> JudgeResult:
     print(f"  [Judge:Task] sample={sample_id} 开始任务对齐评分（Requirement Extraction -> Requirement Verification）")
     if not user_prompt and not human_guidance:
@@ -170,6 +207,7 @@ def _run_task_judge(
             human_guidance=human_guidance,
             api_key=api_key,
             base_url=base_url,
+            model_name=judge_model,
         )
         print(
             "  [Judge:Task] sample={} 完成：label={} score={} requirements={} coverage_ratio={}".format(
@@ -271,6 +309,11 @@ def _render_markdown(report: Dict[str, Any]) -> str:
     lines.append(f"- total_entity_hallucinations: {summary['total_entity_hallucinations']}")
     lines.append(f"- total_relation_action_hallucinations: {summary['total_relation_action_hallucinations']}")
     lines.append(f"- total_fabrications: {summary['total_fabrications']}")
+    lines.append(f"- qa_total_pairs: {summary.get('qa_total_pairs', 0)}")
+    lines.append(f"- qa_passed_pairs: {summary.get('qa_passed_pairs', 0)}")
+    lines.append(f"- qa_failed_pairs: {summary.get('qa_failed_pairs', 0)}")
+    lines.append(f"- qa_avg_score: {summary.get('qa_avg_score')}")
+    lines.append(f"- qa_avg_confidence: {summary.get('qa_avg_confidence')}")
     lines.append("")
 
     lines.append("## Low Score Samples")
@@ -346,6 +389,7 @@ def run_eval(
     api_key: str,
     base_url: Optional[str],
     baseline_report_path: Optional[Path],
+    judge_model: Optional[str] = None,
 ) -> Dict[str, Any]:
     samples = _load_samples(dataset_path)
     enabled_samples = [s for s in samples if s.enabled]
@@ -422,6 +466,7 @@ def run_eval(
                     api_key,
                     base_url,
                     sample.sample_id,
+                    judge_model,
                 )
                 task_future = executor.submit(
                     _run_task_judge,
@@ -431,10 +476,76 @@ def run_eval(
                     api_key,
                     base_url,
                     sample.sample_id,
+                    judge_model,
                 )
                 fact_judge = fact_future.result()
                 task_judge = task_future.result()
             print(f"  [Judge] sample={sample.sample_id} Fact/Task 评分已汇总")
+
+            # ── 时间旅行追问评估 ──────────────────────────
+            qa_results: List[Dict[str, Any]] = []
+            if sample.qa_pairs:
+                print(f"  [Judge:QA] sample={sample.sample_id} 开始时间旅行追问评估（共 {len(sample.qa_pairs)} 个问题）")
+                thread_id_for_qa = str(review_package.get("thread_id", thread_id))
+                for qa_idx, qa_pair in enumerate(sample.qa_pairs, start=1):
+                    qa_label = f"{sample.sample_id}/qa-{qa_idx}"
+                    try:
+                        qa_started = time.perf_counter()
+                        qa_answer = service.ask_at_timestamp(
+                            timestamp=qa_pair.timestamp,
+                            question=qa_pair.question,
+                            thread_id=thread_id_for_qa,
+                        )
+                        qa_ms = int((time.perf_counter() - qa_started) * 1000)
+
+                        qa_judge = evaluate_qa_answer(
+                            generated_answer=qa_answer,
+                            question=qa_pair.question,
+                            timestamp=qa_pair.timestamp,
+                            reference_answer=qa_pair.reference_answer,
+                            reference_key_points=qa_pair.key_points,
+                            api_key=api_key,
+                            base_url=base_url,
+                            model_name=judge_model,
+                        )
+                        print(
+                            f"    [Judge:QA] {qa_label}: label={qa_judge.get('label')} "
+                            f"score={qa_judge.get('score')} confidence={qa_judge.get('judge_confidence')}"
+                        )
+                        qa_results.append(
+                            {
+                                "qa_index": qa_idx,
+                                "question": qa_pair.question,
+                                "timestamp": qa_pair.timestamp,
+                                "generated_answer": qa_answer,
+                                "reference_answer": qa_pair.reference_answer,
+                                "reference_key_points": qa_pair.key_points,
+                                "judge": qa_judge,
+                                "timing_ms": qa_ms,
+                            }
+                        )
+                    except Exception as exc:
+                        print(f"    [Judge:QA] {qa_label} 异常：{exc}")
+                        qa_results.append(
+                            {
+                                "qa_index": qa_idx,
+                                "question": qa_pair.question,
+                                "timestamp": qa_pair.timestamp,
+                                "generated_answer": "",
+                                "reference_answer": qa_pair.reference_answer,
+                                "reference_key_points": qa_pair.key_points,
+                                "judge": {
+                                    "score": None,
+                                    "label": "na",
+                                    "details": str(exc),
+                                    "dimensions": {},
+                                    "judge_confidence": 0,
+                                    "judge_reasoning": "",
+                                },
+                                "timing_ms": 0,
+                                "error": str(exc),
+                            }
+                        )
 
             final_summary_path = sample_dir / "final_summary.md"
             sample_result_path = sample_dir / "result.json"
@@ -459,6 +570,7 @@ def run_eval(
                             "details": task_judge.details,
                             "metrics": task_judge.metrics,
                         },
+                        "qa": qa_results,
                     },
                     "timing": {
                         "analyze_ms": analyze_ms,
@@ -467,6 +579,23 @@ def run_eval(
                     },
                 },
             )
+
+            # ── QA 聚合指标（跨该样本的所有 qa_pairs） ──
+            qa_scores = [
+                qr["judge"]["score"]
+                for qr in qa_results
+                if qr["judge"].get("score") is not None
+            ]
+            qa_confidence_values = [
+                qr["judge"].get("judge_confidence", 0)
+                for qr in qa_results
+                if qr["judge"].get("score") is not None
+            ]
+            qa_total = len(qa_results)
+            qa_passed = sum(1 for qr in qa_results if qr["judge"].get("label") == "qa-pass")
+            qa_warned = sum(1 for qr in qa_results if qr["judge"].get("label") == "qa-warn")
+            qa_failed = sum(1 for qr in qa_results if qr["judge"].get("label") == "qa-fail")
+            qa_na = sum(1 for qr in qa_results if qr["judge"].get("label") == "na")
 
             results.append(
                 {
@@ -508,6 +637,16 @@ def run_eval(
                     "partial_requirement_importance": task_judge.metrics.get("partial_requirement_importance", 0),
                     "unsatisfied_requirement_importance": task_judge.metrics.get("unsatisfied_requirement_importance", 0),
                     "task_coverage_ratio": task_judge.metrics.get("coverage_ratio"),
+                    # QA 摘要
+                    "qa_total": qa_total,
+                    "qa_passed": qa_passed,
+                    "qa_warned": qa_warned,
+                    "qa_failed": qa_failed,
+                    "qa_na": qa_na,
+                    "qa_avg_score": _safe_mean(qa_scores),
+                    "qa_avg_confidence": _safe_mean(qa_confidence_values),
+                    "qa_results": qa_results,
+                    # 耗时
                     "analyze_ms": analyze_ms,
                     "finalize_ms": finalize_ms,
                     "total_ms": int((time.perf_counter() - sample_started_at) * 1000),
@@ -556,6 +695,14 @@ def run_eval(
                     "partial_requirement_importance": 0,
                     "unsatisfied_requirement_importance": 0,
                     "task_coverage_ratio": None,
+                    "qa_total": 0,
+                    "qa_passed": 0,
+                    "qa_warned": 0,
+                    "qa_failed": 0,
+                    "qa_na": 0,
+                    "qa_avg_score": None,
+                    "qa_avg_confidence": None,
+                    "qa_results": [],
                     "analyze_ms": 0,
                     "finalize_ms": 0,
                     "total_ms": int((time.perf_counter() - sample_started_at) * 1000),
@@ -587,6 +734,25 @@ def run_eval(
     total_claim_importance = _metric_int_sum(results, "total_claim_importance")
     total_requirement_importance = _metric_int_sum(results, "total_requirement_importance")
 
+    # QA 汇聚
+    qa_all_scores: List[float] = []
+    qa_all_confidence: List[float] = []
+    qa_total_pairs = 0
+    qa_total_passed = 0
+    qa_total_failed = 0
+    for item in results:
+        if item["status"] != "success":
+            continue
+        qa_total_pairs += int(item.get("qa_total", 0))
+        qa_total_passed += int(item.get("qa_passed", 0))
+        qa_total_failed += int(item.get("qa_failed", 0))
+        qa_score = item.get("qa_avg_score")
+        qa_conf = item.get("qa_avg_confidence")
+        if qa_score is not None:
+            qa_all_scores.append(float(qa_score))
+        if qa_conf is not None:
+            qa_all_confidence.append(float(qa_conf))
+
     low_score_samples = [
         item
         for item in results
@@ -616,6 +782,12 @@ def run_eval(
             "total_entity_hallucinations": total_entity_hallucinations,
             "total_relation_action_hallucinations": total_relation_action_hallucinations,
             "total_fabrications": total_fabrications,
+            "qa_total_pairs": qa_total_pairs,
+            "qa_passed_pairs": qa_total_passed,
+            "qa_failed_pairs": qa_total_failed,
+            "qa_avg_score": _safe_mean(qa_all_scores),
+            "qa_avg_confidence": _safe_mean(qa_all_confidence),
+            "qa_samples_with_pairs": len(qa_all_scores),
         },
         "low_score_samples": low_score_samples,
         "results": results,
@@ -680,6 +852,13 @@ def _parse_args() -> argparse.Namespace:
         default="",
         help="Optional baseline report.json path for simple comparison",
     )
+    parser.add_argument(
+        "--judge-model",
+        default="",
+        help="Judge model name for LLM-as-a-judge evaluation. "
+        "If empty, uses EVAL_JUDGE_MODEL env var, then OPENAI_MODEL_NAME env var, then gpt-4o. "
+        "Use a cheaper model like gpt-4o-mini to reduce eval cost.",
+    )
     return parser.parse_args()
 
 
@@ -704,6 +883,8 @@ def main() -> None:
     if args.baseline_report.strip():
         baseline_report_path = (PROJECT_ROOT / args.baseline_report).resolve()
 
+    judge_model = args.judge_model.strip() or None
+
     run_eval(
         dataset_path=dataset_path,
         output_dir=output_dir,
@@ -713,6 +894,7 @@ def main() -> None:
         api_key=api_key,
         base_url=base_url or None,
         baseline_report_path=baseline_report_path,
+        judge_model=judge_model,
     )
 
 

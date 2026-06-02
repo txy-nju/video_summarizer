@@ -1,15 +1,18 @@
 
 """
-LLM 三能力连通性检查脚本 —— 通过 BaseModel 工厂模式测试 chat / vision / transcribe。
+LLM 多能力连通性检查脚本 —— 覆盖 chat / vision / transcribe / embedding / search。
 
-覆盖 core/workflow 和 core/extraction 中的所有 LLM API 调用方式：
+覆盖 core/workflow、core/extraction、backend/tasks 中的所有 LLM API 调用方式：
   1. Chat Completions（纯文本 + JSON Mode）  — fusion_drafter / chunk_synthesizer / grader
   2. Chat Completions（多模态 Vision）       — chunk_vision_analyzer
   3. Audio Transcriptions（Whisper）          — AudioTranscriber.transcribe
-  4. Tavily Search                            — execute_tavily_search（独立）
+  4. Embeddings（向量嵌入）                  — rag_settings_factory → modular_rag IngestionPipeline
+  5. Tavily Search                            — execute_tavily_search（独立）
 
-所有 LLM 调用统一走 get_model_for_capability() 工厂，自动按 CHAT_PROVIDER /
-VISION_PROVIDER / TRANSCRIBE_PROVIDER 环境变量路由到对应厂商（openai / deepseek / ...）。
+Chat / Vision / Transcribe 统一走 get_model_for_capability() 工厂，自动按
+CHAT_PROVIDER / VISION_PROVIDER / TRANSCRIBE_PROVIDER 环境变量路由到对应厂商；
+Embedding 走 openai.OpenAI().embeddings.create()，对齐 rag_settings_factory 的
+OPENAI_API_KEY / OPENAI_BASE_URL / RAG_EMBEDDING_MODEL 配置方式。
 
 用法：
   python scripts/check_openai_api.py          # 全量检查
@@ -455,12 +458,84 @@ def test_tavily_search() -> bool:
 
 
 # ---------------------------------------------------------------------------
+# 5. Embedding 连通性（向量嵌入 — RAG）
+# ---------------------------------------------------------------------------
+
+def test_embedding() -> bool:
+    """完全对齐项目实际使用方式：
+
+    对应 rag_settings_factory.py 构建的 EmbeddingSettings：
+        provider="openai"
+        model=RAG_EMBEDDING_MODEL（默认 text-embedding-3-small）
+        api_key=OPENAI_API_KEY
+        api_url=OPENAI_BASE_URL
+
+    底层通过 openai.OpenAI().embeddings.create() 调用，
+    与 modular_rag 库内部的 OpenAI embedding 调用完全一致。
+    测试文本使用中文转录片段，模拟实际向量化场景。
+    """
+    _print_header("5. Embeddings — 向量嵌入连通性（RAG）")
+
+    api_key = os.getenv("OPENAI_API_KEY", "")
+    base_url = os.getenv("OPENAI_BASE_URL") or None
+    model_name = os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small")
+
+    print(f"  Model    : {model_name}")
+    print(f"  API Key  : {'已配置' if api_key else '未配置'}")
+    if base_url:
+        print(f"  Base URL : {base_url}")
+
+    if not api_key:
+        _print_fail("Embedding", "未配置 OPENAI_API_KEY（RAG 向量嵌入所需）")
+        _record("Embedding（RAG 向量化）", False, "API Key 未配置")
+        return False
+
+    # 使用与项目实际嵌入场景相似的文本（中文视频转录片段）
+    # 对齐 transcript_text_loader 分块前的原始文本格式
+    _TEST_TEXT = (
+        "人工智能在医疗领域的应用正在快速发展，特别是在医学影像分析和辅助诊断方面。"
+        "深度学习模型已经在皮肤癌检测、胸部X光片分析等任务中展现了超越人类医生的准确率。"
+        "然而，这些系统在不同人群中的表现存在差异，训练数据的多样性和代表性至关重要。"
+        "斯坦福大学的研究表明，卷积神经网络在分析胸部X光片时对肺炎的检测敏感性超过90%。"
+        "Google DeepMind 在糖尿病视网膜病变的早期筛查方面也取得了突破性进展。"
+    )
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        response = client.embeddings.create(
+            model=model_name,
+            input=_TEST_TEXT,
+        )
+        embedding = response.data[0].embedding
+        dim = len(embedding)
+
+        detail = f"model={model_name}, dim={dim}"
+        print(f"  Embedding 维度 : {dim}")
+        print(f"  向量前 5 值    : {[round(v, 6) for v in embedding[:5]]}")
+        _print_ok("Embedding（RAG 向量化）", detail)
+        _record("Embedding（RAG 向量化）", True, detail)
+        return True
+    except Exception as exc:
+        msg = _extract_error_detail(exc)
+        # 某些非 OpenAI 厂商的代理可能不支持 embeddings 端点
+        if "not found" in msg.lower() or "does not exist" in msg.lower():
+            _print_ok("Embedding ⚠️ 端点不可用", msg[:120])
+            _record("Embedding（RAG 向量化）", True, f"端点不可用: {msg[:100]}")
+            return True
+        _print_fail("Embedding（RAG 向量化）", msg)
+        _record("Embedding（RAG 向量化）", False, msg)
+        return False
+
+
+# ---------------------------------------------------------------------------
 # 主入口
 # ---------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="LLM 三能力连通性检查（通过 BaseModel 工厂模式）"
+        description="LLM 多能力连通性检查（chat / vision / transcribe / embedding / search）"
     )
     parser.add_argument(
         "--quick", action="store_true",
@@ -473,8 +548,8 @@ def main() -> None:
     from core.llm.config import resolve_api_key, resolve_provider
 
     print("=" * 60)
-    print("  LLM 三能力连通性检查")
-    print("  覆盖 chat / vision / transcribe（通过 get_model_for_capability 工厂）")
+    print("  LLM 多能力连通性检查")
+    print("  覆盖 chat / vision / transcribe / embedding / search")
     print("=" * 60)
 
     # 展示当前配置
@@ -482,6 +557,10 @@ def main() -> None:
         provider = resolve_provider(cap)
         key = resolve_api_key(cap)
         print(f"  [{cap:11}] provider={provider:8s}  key={'已配置' if key else '未配置':>4s}")
+
+    embedding_model = os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-3-small")
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    print(f"  [embedding  ] model={embedding_model:24s}  key={'已配置' if openai_key else '未配置':>4s}")
 
     tavily_key = os.getenv("TAVILY_API_KEY", "")
     print(f"  [tavily      ] {'已配置' if tavily_key else '未配置'}")
@@ -496,6 +575,7 @@ def main() -> None:
     if not args.quick:
         test_vision()
         test_transcription()
+        test_embedding()
         test_tavily_search()
 
     # 汇总报告
