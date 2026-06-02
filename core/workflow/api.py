@@ -110,9 +110,8 @@ def analyze_video(
         "map_dispatch_node": "🗺️ [Dispatcher] 正在为微智能体群编排分片执行配方，准备发起并行实时处理...",
         "chunk_audio_worker_node": "🎧 [Chunk Audio Send Worker] 图级 fan-out：正在处理单分片音频洞察...",
         "chunk_vision_worker_node": "📸 [Chunk Vision Send Worker] 图级 fan-out：正在处理单分片视觉洞察...",
-        "synthesis_barrier_node": "🧱 [Synthesis Barrier] 正在等待音视频分片证据全部汇聚，准备进入融合分发路由...",
-        "chunk_synthesizer_worker_node": "⚡ [Chunk Synthesizer Send Worker] 图级 fan-out：正在处理单分片融合总结...",
-        "chunk_synthesizer_node": "⚡ [Chunk Synthesizer] 并行汇聚：将分片级音视频洞察实时融合为中间层 chunk_summary...",
+        "chunk_subgraph_node": "⚡ [Chunk Subgraph] 正在处理单分片音视频串行分析（音频→视觉）...",
+        "wave_gate_node": "🧱 [Wave Gate] 正在校验当前波次分片完成状态，准备进入下一波次或聚合...",
         "chunk_aggregator_node": "🧾 [Chunk Aggregator] 正在按时间线整合 n 个分片洞察，生成统一证据底稿...",
         "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
     }
@@ -121,7 +120,6 @@ def analyze_video(
         total_chunks: int,
         audio_done_ids: set[str],
         vision_done_ids: set[str],
-        synthesis_done_ids: set[str],
         stage: str = "running",
     ) -> None:
         if not status_callback:
@@ -130,9 +128,8 @@ def analyze_video(
         safe_total = max(0, total_chunks)
         audio_done = len(audio_done_ids)
         vision_done = len(vision_done_ids)
-        synthesis_done = len(synthesis_done_ids)
-        overall_total = safe_total * 3
-        overall_done = audio_done + vision_done + synthesis_done
+        overall_total = safe_total * 2
+        overall_done = audio_done + vision_done
         overall_percent = int((overall_done / overall_total) * 100) if overall_total > 0 else 0
 
         payload = {
@@ -141,7 +138,6 @@ def analyze_video(
             "total_chunks": safe_total,
             "audio_done": audio_done,
             "vision_done": vision_done,
-            "synthesis_done": synthesis_done,
             "overall_done": overall_done,
             "overall_total": overall_total,
             "overall_percent": overall_percent,
@@ -153,9 +149,8 @@ def analyze_video(
     node_event_counts: Dict[str, int] = {}
     audio_done_ids: set[str] = set()
     vision_done_ids: set[str] = set()
-    synthesis_done_ids: set[str] = set()
     total_chunks = 0
-    last_progress_signature: tuple[int, int, int, int] = (-1, -1, -1, -1)
+    last_progress_signature: tuple[int, int, int] = (-1, -1, -1)
 
     with start_span(
         build_span_name("workflow", "analysis", "run"),
@@ -184,7 +179,7 @@ def analyze_video(
                 if node_name in {
                     "chunk_audio_worker_node",
                     "chunk_vision_worker_node",
-                    "chunk_synthesizer_worker_node",
+                    "chunk_subgraph_node",
                 }:
                     updated_chunks = state_update.get("chunk_results", []) if isinstance(state_update, dict) else []
                     if isinstance(updated_chunks, list):
@@ -194,25 +189,21 @@ def analyze_video(
                             chunk_id = str(chunk_item.get("chunk_id", "")).strip()
                             if not chunk_id:
                                 continue
-                            if str(chunk_item.get("audio_insights", "")).strip():
+                            if isinstance(chunk_item.get("transcript_claims"), list) and chunk_item["transcript_claims"]:
                                 audio_done_ids.add(chunk_id)
-                            if str(chunk_item.get("vision_insights", "")).strip():
+                            if isinstance(chunk_item.get("frame_references"), list) and chunk_item["frame_references"]:
                                 vision_done_ids.add(chunk_id)
-                            if str(chunk_item.get("chunk_summary", "")).strip():
-                                synthesis_done_ids.add(chunk_id)
 
                     progress_signature = (
                         total_chunks,
                         len(audio_done_ids),
                         len(vision_done_ids),
-                        len(synthesis_done_ids),
                     )
                     if progress_signature != last_progress_signature:
                         _emit_chunk_progress(
                             total_chunks,
                             audio_done_ids,
                             vision_done_ids,
-                            synthesis_done_ids,
                             stage="running",
                         )
                         last_progress_signature = progress_signature
@@ -234,7 +225,7 @@ def analyze_video(
 
                 if status_callback and node_name in node_msg_map:
                     msg = node_msg_map[node_name]
-                    if node_name == "chunk_synthesizer_node":
+                    if node_name == "chunk_aggregator_node":
                         chunk_results = current_state.get("chunk_results", [])
                         if isinstance(chunk_results, list) and chunk_results:
                             num_chunks = len(chunk_results)
@@ -245,7 +236,6 @@ def analyze_video(
         total_chunks,
         audio_done_ids,
         vision_done_ids,
-        synthesis_done_ids,
         stage="finished",
     )
 

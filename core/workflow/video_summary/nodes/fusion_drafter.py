@@ -49,7 +49,8 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
         "【架构级约束指令】：\n"
         "1. 🔗 证据优先：仅允许使用输入证据中的信息，不得补造事实。\n"
         "2. 🧭 时间一致性：尽量保持时间线顺序与逻辑衔接，必要时指出跨片段关联。\n"
-        "3. 📝 专业排版规范：输出必须使用易于阅读的 Markdown 语法。建议包含：【内容导读】、【核心内容解析】、【关键结论】、【总结与建议】等模块。"
+        "3. 📝 专业排版规范：输出必须使用易于阅读的 Markdown 语法。建议包含：【内容导读】、【核心内容解析】、【关键结论】、【总结与建议】等模块。\n"
+        "4. ⏰ 时间戳锚定：每个实质性陈述句末须附 [HH:MM] 时间戳引用（直接来自输入证据中的时间戳字段），以供读者精准定位视频片段。\n"
     )
 
     if human_guidance and str(human_guidance).strip():
@@ -119,10 +120,5 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
             }
         except Exception as e:
             print(f"  -> [Fusion Drafter Node] Error during synthesis: {str(e)}")
-            # 将异常上抛，由后续路由或最终结果展现
-            return {
-                "draft_summary": f"[系统自动提示]：综合图文大纲失败，LLM 调用发生异常：{str(e)}",
-                "revision_count": current_count + 1,
-                "error_code": "FUSION_DRAFTER_FAILED",
-                "status": "ERROR",
-            }
+            # 上抛异常，让编排层将 state 正确标记为 FAILED 并触发 Celery 重试
+            raise

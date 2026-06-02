@@ -34,6 +34,10 @@ from backend.websocket.schemas import WSEventType, WSScope, WSStage
 
 logger = logging.getLogger(__name__)
 
+# 进度心跳间隔（秒）：在长时间 LLM 调用期间定期向 WebSocket 发送 keepalive，
+# 防止前端 180s 无消息超时断开。
+_HEARTBEAT_INTERVAL_SECONDS = 30.0
+
 
 class WorkflowOrchestrationService:
     """High-level workflow orchestration facade for backend integration.
@@ -66,6 +70,30 @@ class WorkflowOrchestrationService:
         self._progress_publisher = progress_publisher
         self._task_status_service = task_status_service
         self._notification_service = notification_service
+
+    async def _heartbeat_loop(
+        self,
+        user_id: str,
+        task_id: str,
+        trace_id: str,
+        interval: float = _HEARTBEAT_INTERVAL_SECONDS,
+    ) -> None:
+        """周期性向 WebSocket 发送 keepalive 消息，防止前端 180s 无消息超时断开。"""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                self._progress_publisher.publish_progress(
+                    user_id=user_id,
+                    scope=WSScope.VIDEO_SUMMARY_TASK,
+                    scope_id=task_id,
+                    stage=WSStage.ANALYSIS,
+                    status="RUNNING",
+                    progress=0,
+                    message="任务正在进行中...",
+                    trace_id=trace_id,
+                )
+            except Exception:
+                logger.debug("heartbeat publish failed (non-critical)", exc_info=True)
 
     def _build_workflow_callback(
         self,
@@ -190,9 +218,12 @@ class WorkflowOrchestrationService:
             trace_id=trace_id,
         )
 
-        # Run workflow in executor to avoid blocking event loop
+        # Run workflow in executor with keepalive heartbeat
         loop = asyncio.get_event_loop()
         callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id)
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(owner_id, task_id, trace_id)
+        )
 
         try:
             result = await loop.run_in_executor(
@@ -285,6 +316,12 @@ class WorkflowOrchestrationService:
                 )
 
             raise
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     async def start_finalization_workflow_async(
         self,
@@ -338,9 +375,12 @@ class WorkflowOrchestrationService:
             trace_id=trace_id,
         )
 
-        # Run workflow in executor
+        # Run workflow in executor with keepalive heartbeat
         loop = asyncio.get_event_loop()
         callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id)
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_loop(owner_id, task_id, trace_id)
+        )
 
         try:
             final_summary = await loop.run_in_executor(
@@ -418,6 +458,12 @@ class WorkflowOrchestrationService:
                 )
 
             raise
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
 
     async def start_time_travel_qa_async(
         self,

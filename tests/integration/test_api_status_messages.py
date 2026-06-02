@@ -92,7 +92,7 @@ class TestApiStatusMessages(unittest.TestCase):
                 {"map_dispatch_node": {}},
                 {"chunk_audio_worker_node": {"chunk_results": [{"chunk_id": "c1", "audio_insights": "test"}]}} ,
                 {"chunk_vision_worker_node": {"chunk_results": [{"chunk_id": "c1", "vision_insights": "test"}]}} ,
-                {"chunk_synthesizer_node": {"chunk_results": [{"chunk_id": "c1", "chunk_summary": "test"}]}},
+                {"chunk_aggregator_node": {"chunk_results": [{"chunk_id": "c1", "chunk_summary": "test"}]}},
             ])
             
             try:
@@ -109,11 +109,11 @@ class TestApiStatusMessages(unittest.TestCase):
 ]
             vision_msgs = [m for m in messages if "Chunk Vision Micro-Agent" in m or "📸" in m
 ]
-            synth_msgs = [m for m in messages if "Chunk Synthesizer" in m or "⚡" in m]
+            synth_msgs = [m for m in messages if "Chunk Aggregator" in m or "🧾" in m]
             
             self.assertTrue(len(audio_msgs) > 0, "Audio Micro-Agent 消息应该被传递")
             self.assertTrue(len(vision_msgs) > 0, "Vision Micro-Agent 消息应该被传递")
-            self.assertTrue(len(synth_msgs) > 0, "Synthesizer 消息应该被传递")
+            self.assertTrue(len(synth_msgs) > 0, "Chunk Aggregator 消息应该被传递")
 
     def test_dispatcher_message_present(self):
         """验证分发器 (Dispatcher) 的播报信息"""
@@ -150,8 +150,8 @@ class TestApiStatusMessages(unittest.TestCase):
                 "Dispatcher 的播报信息应该被传递给 status_callback"
             )
 
-    def test_chunk_synthesizer_shows_chunk_count(self):
-        """验证 chunk_synthesizer 完成时动态显示分片计数"""
+    def test_chunk_aggregator_shows_chunk_count(self):
+        """验证 chunk_aggregator 完成时动态显示分片计数"""
         messages = []
         
         def mock_callback(msg):
@@ -167,7 +167,7 @@ class TestApiStatusMessages(unittest.TestCase):
             # 模拟包含 3 个分片的完整结果
             mock_app.stream.return_value = iter([
                 {
-                    "chunk_synthesizer_node": {
+                    "chunk_aggregator_node": {
                         "chunk_results": [
                             {"chunk_id": "c1", "chunk_summary": "summary1"},
                             {"chunk_id": "c2", "chunk_summary": "summary2"},
@@ -187,10 +187,10 @@ class TestApiStatusMessages(unittest.TestCase):
                 pass
             
             # 验证分片计数信息
-            synth_msgs = [m for m in messages if "Chunk Synthesizer" in m or "⚡" in m]
+            synth_msgs = [m for m in messages if "Chunk Aggregator" in m or "🧾" in m]
             self.assertTrue(
                 any("3 个分片" in m for m in synth_msgs),
-                "Synthesizer 消息应该包含分片计数"
+                "Chunk Aggregator 消息应该包含分片计数"
             )
 
     def test_human_gate_message_present(self):
@@ -252,24 +252,16 @@ class TestApiStatusMessages(unittest.TestCase):
                 {
                     "chunk_audio_worker_node": {
                         "chunk_results": [
-                            {"chunk_id": "c1", "audio_insights": "a1"},
-                            {"chunk_id": "c2", "audio_insights": "a2"},
+                            {"chunk_id": "c1", "transcript_claims": ["claim-a1"]},
+                            {"chunk_id": "c2", "transcript_claims": ["claim-a2"]},
                         ]
                     }
                 },
                 {
                     "chunk_vision_worker_node": {
                         "chunk_results": [
-                            {"chunk_id": "c1", "vision_insights": "v1"},
-                            {"chunk_id": "c2", "vision_insights": "v2"},
-                        ]
-                    }
-                },
-                {
-                    "chunk_synthesizer_worker_node": {
-                        "chunk_results": [
-                            {"chunk_id": "c1", "chunk_summary": "s1"},
-                            {"chunk_id": "c2", "chunk_summary": "s2"},
+                            {"chunk_id": "c1", "frame_references": ["ref-v1"]},
+                            {"chunk_id": "c2", "frame_references": ["ref-v2"]},
                         ]
                     }
                 },
@@ -286,9 +278,10 @@ class TestApiStatusMessages(unittest.TestCase):
 
         payload = json.loads(progress_msgs[-1][len("[[PROGRESS]]"):])
         self.assertEqual(payload.get("type"), "chunk_progress")
-        self.assertEqual(payload.get("synthesis_done"), 2)
-        self.assertEqual(payload.get("overall_total"), 6)
-        self.assertEqual(payload.get("overall_done"), 6)
+        self.assertEqual(payload.get("audio_done"), 2)
+        self.assertEqual(payload.get("vision_done"), 2)
+        self.assertEqual(payload.get("overall_total"), 4)
+        self.assertEqual(payload.get("overall_done"), 4)
 
 
 if __name__ == "__main__":

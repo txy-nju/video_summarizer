@@ -2,38 +2,10 @@ import os
 from typing import Any
 
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore
 
 _CHECKPOINTER_CACHE: dict[str, Any] = {}
-_POSTGRES_SETUP_DONE: set[str] = set()
-
-
-def _create_postgres_checkpointer(postgres_url: str) -> Any:
-    """Create a PostgresSaver with a fresh database connection.
-
-    PostgresSaver state lives in the database, so caching the instance is
-    unnecessary and harmful — the underlying psycopg connection can go stale
-    between Celery tasks.  Instead, we open a new connection each time and
-    only call ``setup()`` once per URL to create the required tables.
-
-    If the connection fails (e.g. PostgreSQL unreachable), falls back to
-    an InMemorySaver to avoid blocking the workflow indefinitely.
-    """
-    from langgraph.checkpoint.postgres import PostgresSaver  # type: ignore
-    import psycopg  # type: ignore
-
-    conn = psycopg.connect(
-        postgres_url,
-        autocommit=True,
-        connect_timeout=5,  # 5 秒连接超时，防止卡死
-    )
-
-    checkpointer = PostgresSaver(conn)
-
-    if postgres_url not in _POSTGRES_SETUP_DONE:
-        checkpointer.setup()
-        _POSTGRES_SETUP_DONE.add(postgres_url)
-
-    return checkpointer
+_CHECKPOINTER_CONTEXTS: dict[str, Any] = {}  # 持有 context manager 引用，防止连接被回收
 
 
 def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
@@ -41,7 +13,9 @@ def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
     创建 LangGraph checkpointer。
 
     - memory: 使用 InMemorySaver（开发环境默认，缓存单例以保持内存状态）
-    - postgres: 每次创建新连接以避免连接过期问题（状态持久化在数据库中）
+    - postgres: 使用 PostgresSaver，连接字符串通过 CHECKPOINT_DB_URL 配置。
+                每次创建新连接以避免连接过期问题（状态持久化在数据库中）。
+                连接失败时自动回退为 InMemorySaver。
     """
     normalized = (backend or "memory").strip().lower()
 
@@ -58,8 +32,18 @@ def create_checkpointer(backend: str, postgres_url: str = "") -> Any:
             postgres_url = os.getenv("CHECKPOINT_DB_URL", "")
         if not postgres_url:
             raise ValueError("CHECKPOINT_BACKEND=postgres requires CHECKPOINT_DB_URL.")
+
+        cache_key = f"{normalized}:{postgres_url}"
+
+        # from_conn_string 是 @contextmanager，需要进入上下文后持有引用，
+        # 使数据库连接在进程生命周期内保持有效
         try:
-            return _create_postgres_checkpointer(postgres_url)
+            cm = PostgresSaver.from_conn_string(postgres_url)
+            checkpointer = cm.__enter__()
+            checkpointer.setup()  # 自动创建 checkpoints / checkpoint_writes / checkpoint_blobs 表
+            _CHECKPOINTER_CONTEXTS[cache_key] = cm
+            _CHECKPOINTER_CACHE[cache_key] = checkpointer
+            return checkpointer
         except Exception as exc:
             import logging
             logger = logging.getLogger(__name__)

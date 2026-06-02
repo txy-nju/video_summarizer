@@ -92,55 +92,95 @@ def _print_fail(name: str, detail: str = "") -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. Chat 连通性（纯文本 + JSON Mode）
+# 1. Chat 连通性（音频 Worker 模式 + Fusion Drafter 模式）
 # ---------------------------------------------------------------------------
 
 def test_chat() -> bool:
-    """对应 fusion_drafter_node、chunk_synthesizer._llm_chunk_fusion、grader 等风格。
-       通过 get_model_for_capability("chat") 获取模型实例。"""
-    _print_header("1. Chat Completions — 纯文本 + JSON Mode")
+    """完全对齐工作流真实调用方式：
+
+    1a. Audio Worker 模式（chunk_audio_analyzer._llm_extract_transcript_claims）
+        temperature=0.1, timeout=CHUNK_WORKER_TIMEOUT_SECONDS, JSON 数组输出
+    1b. Fusion Drafter / Grader 模式
+        temperature=0.0, response_format=json_object, JSON 对象输出
+    """
+    _print_header("1. Chat Completions — Audio Worker 模式 + Fusion Drafter 模式")
 
     from core.llm.config import resolve_api_key, resolve_provider
     from core.llm.factory import get_model_for_capability, get_model_name_for_capability
+    from config.settings import CHUNK_WORKER_TIMEOUT_SECONDS
 
     provider = resolve_provider("chat")
     model_name = get_model_name_for_capability("chat")
     print(f"  Provider : {provider}")
     print(f"  Model    : {model_name}")
+    print(f"  Timeout  : {CHUNK_WORKER_TIMEOUT_SECONDS}s（同 CHUNK_WORKER_TIMEOUT_SECONDS）")
 
     if not resolve_api_key("chat"):
         _print_fail("Chat", "未配置 CHAT_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY")
-        _record("Chat（文本 + JSON）", False, "API Key 未配置")
+        _record("Chat（Audio Worker 模式）", False, "API Key 未配置")
+        _record("Chat（Fusion Drafter 模式）", False, "API Key 未配置")
         return False
 
     try:
         chat_model = get_model_for_capability("chat")
     except Exception as exc:
         _print_fail("Chat 模型初始化", _extract_error_detail(exc))
-        _record("Chat（文本 + JSON）", False, _extract_error_detail(exc))
+        _record("Chat（Audio Worker 模式）", False, _extract_error_detail(exc))
+        _record("Chat（Fusion Drafter 模式）", False, _extract_error_detail(exc))
         return False
 
     all_ok = True
 
-    # ---- 1a. 纯文本 ----
+    # ---- 1a. Audio Worker 模式 ----
+    # 对齐 _llm_extract_transcript_claims: temperature=0.1, timeout=CHUNK_WORKER_TIMEOUT_SECONDS
+    # 使用中等长度 transcript 模拟真实负载（过于简短无法暴露超时问题）
+    _SYNTHETIC_TRANSCRIPT = (
+        "[00:00:01] 今天我们来讨论人工智能在医疗领域的应用，特别是影像识别和辅助诊断。\n"
+        "[00:00:15] 机器学习模型已经能够在某些场景下超越人类医生的诊断准确率。\n"
+        "[00:00:30] 但是我们也需要关注模型的可解释性和对偏见数据的敏感性。\n"
+        "[00:00:45] 研究表明，在皮肤癌检测中，深度学习模型达到了皮肤科专家的水平。\n"
+        "[00:01:00] 然而这些系统在不同人群中的表现存在显著差异，训练数据多样性至关重要。\n"
+        "[00:01:20] 下面我们将看几个具体的案例研究，展示AI辅助诊断的真实效果。\n"
+        "[00:01:35] 第一个案例来自斯坦福大学医学中心，他们使用卷积神经网络分析胸部X光片。\n"
+        "[00:01:50] 结果显示，在检测肺炎方面，AI系统的敏感性达到90%以上。\n"
+        "[00:02:10] 第二个案例涉及眼科疾病，特别是糖尿病视网膜病变的早期筛查。\n"
+        "[00:02:25] Google DeepMind的研究在这一领域取得了突破性进展。\n"
+    )
+    _AUDIO_SYSTEM_PROMPT_MINI = (
+        "你是严谨的视频分片转录文本分析助手。\n"
+        "从 transcript 中提取原子事实断言（claims）。\n"
+        "输出格式（JSON 数组）：\n"
+        '[  {"claim": "断言内容", "exact_quote": "transcript 原话", "timestamp": "HH:MM:SS"} ]'
+    )
     try:
         response = chat_model.chat_completion(
             model=model_name,
             messages=[
-                {"role": "system", "content": "你是一个严谨的测试助手。请用一句话回答。"},
-                {"role": "user", "content": "说'API连通性测试通过'。"},
+                {"role": "system", "content": _AUDIO_SYSTEM_PROMPT_MINI},
+                {"role": "user", "content": f"[chunk_transcript]\n{_SYNTHETIC_TRANSCRIPT}"},
             ],
-            temperature=0.5,
+            temperature=0.1,
+            timeout=CHUNK_WORKER_TIMEOUT_SECONDS,
         )
-        print(f"  纯文本回复: {response[:200]}")
-        _print_ok("Chat 纯文本")
-        _record("Chat 纯文本", True, response[:100])
+        try:
+            import re as _re
+            json_match = _re.search(r"\[.*\]", response, _re.DOTALL)
+            claims = json.loads(json_match.group(0)) if json_match else []
+            claim_count = len(claims) if isinstance(claims, list) else 0
+        except Exception:
+            claim_count = -1
+        detail = f"timeout={CHUNK_WORKER_TIMEOUT_SECONDS}s, claims={claim_count}"
+        print(f"  Audio Worker 回复 (前200字): {response[:200]}")
+        _print_ok("Chat Audio Worker 模式", detail)
+        _record("Chat（Audio Worker 模式）", True, detail)
     except Exception as exc:
-        _print_fail("Chat 纯文本", _extract_error_detail(exc))
-        _record("Chat 纯文本", False, _extract_error_detail(exc))
+        msg = _extract_error_detail(exc)
+        _print_fail("Chat Audio Worker 模式", msg)
+        _record("Chat（Audio Worker 模式）", False, msg)
         all_ok = False
 
-    # ---- 1b. JSON Mode (temperature=0.0) ----
+    # ---- 1b. Fusion Drafter / Grader 模式 ----
+    # 对齐 fusion_drafter / grader: temperature=0.0, response_format=json_object
     try:
         response = chat_model.chat_completion(
             model=model_name,
@@ -160,14 +200,14 @@ def test_chat() -> bool:
         parsed = json.loads(response)
         score = parsed.get("score", "")
         ok = score == "yes"
-        print(f"  JSON Mode score: {score}")
-        _print_ok("Chat JSON Mode" if ok else f"Chat JSON Mode ⚠️ score={score}")
-        _record("Chat JSON Mode", ok, f"score={score}")
+        print(f"  Fusion Drafter JSON score: {score}")
+        _print_ok("Chat Fusion Drafter 模式" if ok else f"Chat Fusion Drafter 模式 ⚠️ score={score}")
+        _record("Chat（Fusion Drafter 模式）", ok, f"score={score}")
         if not ok:
             all_ok = False
     except Exception as exc:
-        _print_fail("Chat JSON Mode", _extract_error_detail(exc))
-        _record("Chat JSON Mode", False, _extract_error_detail(exc))
+        _print_fail("Chat Fusion Drafter 模式", _extract_error_detail(exc))
+        _record("Chat（Fusion Drafter 模式）", False, _extract_error_detail(exc))
         all_ok = False
 
     return all_ok
@@ -178,29 +218,34 @@ def test_chat() -> bool:
 # ---------------------------------------------------------------------------
 
 def test_vision() -> bool:
-    """对应 _llm_vision_chunk_structured 风格：多模态输入，temperature=0.2，
-       max_tokens=1024, response_format={"type": "json_object"}。
-       通过 get_model_for_capability("vision") 获取模型实例。"""
-    _print_header("2. Vision Completions — 多模态视觉")
+    """完全对齐工作流真实调用方式：
+
+    对应 chunk_vision_analyzer._llm_vision_analyze：
+        temperature=0.2, max_tokens=1500, timeout=CHUNK_WORKER_TIMEOUT_SECONDS,
+        response_format=json_object, 输出 frame_references + chunk_summary
+    """
+    _print_header("2. Vision Completions — Vision Worker 模式（多模态）")
 
     from core.llm.config import resolve_api_key, resolve_provider
     from core.llm.factory import get_model_for_capability, get_model_name_for_capability
+    from config.settings import CHUNK_WORKER_TIMEOUT_SECONDS
 
     provider = resolve_provider("vision")
     model_name = get_model_name_for_capability("vision")
     print(f"  Provider : {provider}")
     print(f"  Model    : {model_name}")
+    print(f"  Timeout  : {CHUNK_WORKER_TIMEOUT_SECONDS}s（同 CHUNK_WORKER_TIMEOUT_SECONDS）")
 
     if not resolve_api_key("vision"):
         _print_fail("Vision", "未配置 VISION_API_KEY / DEEPSEEK_API_KEY / OPENAI_API_KEY")
-        _record("Vision 多模态", False, "API Key 未配置")
+        _record("Vision Worker 模式", False, "API Key 未配置")
         return False
 
     try:
         vision_model = get_model_for_capability("vision")
     except Exception as exc:
         _print_fail("Vision 模型初始化", _extract_error_detail(exc))
-        _record("Vision 多模态", False, _extract_error_detail(exc))
+        _record("Vision Worker 模式", False, _extract_error_detail(exc))
         return False
 
     # 生成一张 64x64 纯蓝 PNG 作为测试图片（满足各厂商最小分辨率限制）
@@ -212,7 +257,6 @@ def test_vision() -> bool:
 
         w, h = 64, 64
         ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
-        # 每行: 1 字节 filter(0) + w*3 字节 RGB 像素
         row = b"\x00" + b"\x00\x00\xff" * w  # 蓝色
         raw = row * h
         compressed = zlib.compress(raw)
@@ -220,49 +264,62 @@ def test_vision() -> bool:
 
     img_b64 = base64.b64encode(_make_test_png()).decode("utf-8")
 
+    # 对齐 _llm_vision_analyze 的真实消息结构（text + image_url）
+    _VISION_SYSTEM_PROMPT_MINI = (
+        "你是严谨的视频分片视觉分析助手。\n"
+        "根据关键帧画面，输出 JSON 对象：\n"
+        '{"frame_references": [{"frame_time": "00:00:00", "observation": "画面描述", '
+        '"audio_claim_match": "absent"}], "chunk_summary": "综合摘要"}'
+    )
+    content = [
+        {
+            "type": "text",
+            "text": (
+                "[chunk_id] test-chunk-000\n"
+                "[user_prompt] 测试视觉连通性\n"
+                "[transcript_claims] []\n\n"
+                "请分析以下关键帧并输出 frame_references + chunk_summary："
+            ),
+        },
+        {"type": "text", "text": "关键帧时间戳: 00:00:01"},
+        {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": "low"},
+        },
+    ]
+
     try:
         response = vision_model.chat_completion(
             model=model_name,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "你是一个视觉测试助手。请输出 JSON 对象，"
-                        '包含字段 "color"（你看到的图片主色调）和 "resolution"（图片分辨率）。'
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "请描述这张图片的颜色和尺寸。"},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{img_b64}", "detail": "low"},
-                        },
-                    ],
-                },
+                {"role": "system", "content": _VISION_SYSTEM_PROMPT_MINI},
+                {"role": "user", "content": content},
             ],
             temperature=0.2,
-            max_tokens=1024,
+            max_tokens=1500,
+            timeout=CHUNK_WORKER_TIMEOUT_SECONDS,
             response_format={"type": "json_object"},
         )
         try:
             parsed = json.loads(response)
-            color = parsed.get("color", "未知")
+            frame_count = len(parsed.get("frame_references", []))
+            summary = str(parsed.get("chunk_summary", ""))[:80]
         except Exception:
-            color = response[:80]
-        print(f"  识别结果: {color}")
-        _print_ok("Vision 多模态", f"识别颜色={color}")
-        _record("Vision 多模态", True, color)
+            frame_count = -1
+            summary = response[:80]
+        detail = f"timeout={CHUNK_WORKER_TIMEOUT_SECONDS}s, frames={frame_count}, summary={summary}"
+        print(f"  Vision Worker 回复 (前200字): {response[:200]}")
+        _print_ok("Vision Worker 模式", detail)
+        _record("Vision Worker 模式", True, detail)
         return True
     except Exception as exc:
         msg = str(exc)
         if "not supported" in msg.lower() or "does not support" in msg.lower():
             _print_ok("Vision ⚠️ 模型不支持视觉", msg[:120])
-            _record("Vision 多模态", True, f"模型不支持: {msg[:100]}")
+            _record("Vision Worker 模式", True, f"模型不支持: {msg[:100]}")
             return True
-        _print_fail("Vision 多模态", _extract_error_detail(exc))
-        _record("Vision 多模态", False, _extract_error_detail(exc))
+        _print_fail("Vision Worker 模式", _extract_error_detail(exc))
+        _record("Vision Worker 模式", False, _extract_error_detail(exc))
         return False
 
 
