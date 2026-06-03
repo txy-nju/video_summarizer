@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 
 from backend.infrastructure.storage.oss_client import get_object_storage_client
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,8 @@ def _create_video_resource_service():
     max_retries=3,
     default_retry_delay=60,
     acks_late=True,
+    task_soft_time_limit=300,
+    task_time_limit=600,
 )
 def async_cascade_delete_video(self, video_id: str) -> dict:
     """
@@ -78,12 +81,17 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
 
     except Exception as exc:
         logger.exception("async_cascade_delete_video failed for video_id=%s", video_id)
-        try:
-            fail_service, fail_db = _create_video_resource_service()
-            fail_service.mark_deletion_failed(video_id=video_id)
-            fail_db.close()
-        except Exception:
-            pass
-        raise self.retry(exc=exc)
+        # 仅在重试耗尽时标记 DELETE_FAILED；重试期间保留原状态
+        if self.is_last_attempt:
+            logger.critical(
+                "async_cascade_delete_video: retries exhausted for video_id=%s", video_id,
+            )
+            try:
+                fail_service, fail_db = _create_video_resource_service()
+                fail_service.mark_deletion_failed(video_id=video_id)
+                fail_db.close()
+            except Exception:
+                pass
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()

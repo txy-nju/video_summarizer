@@ -113,10 +113,23 @@ class RagAgentService:
 
         settings = build_rag_settings()
         hybrid = HybridSearch(settings=settings)
+
+        logger.info(
+            "RAG retrieval start: collection=%s top_k=%s question_len=%s "
+            "chroma_path=%s",
+            collection, top_k, len(question),
+            getattr(settings.vector_store, "persist_path", "N/A"),
+        )
+
         results = hybrid.search(
             query=question,
             top_k=top_k,
             filters={"collection": collection},
+        )
+
+        logger.info(
+            "RAG retrieval done: collection=%s top_k=%s result_count=%s",
+            collection, top_k, len(results),
         )
 
         fallback_reason: str | None = None

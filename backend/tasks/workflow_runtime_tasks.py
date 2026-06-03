@@ -24,6 +24,7 @@ import logging
 from typing import Any
 
 from backend.db.session import SessionLocal
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -103,11 +104,14 @@ def _build_orchestration_service() -> Any:
 
 
 @celery_app.task(
+    base=BaseTask,
     name="backend.tasks.workflow_runtime_tasks.async_execute_analysis_workflow",
     bind=True,
     acks_late=True,
     max_retries=3,
     default_retry_delay=60,
+    task_soft_time_limit=1200,
+    task_time_limit=1800,
 )
 def async_execute_analysis_workflow(
     self,
@@ -178,18 +182,21 @@ def async_execute_analysis_workflow(
     except Exception as e:
         logger.error(f"[WorkflowRuntimeTasks] Analysis workflow failed: {e}", exc_info=True)
         # Retry up to max_retries times
-        raise self.retry(exc=e, countdown=60)  # type: ignore
+        raise self.retry(exc=e, countdown=self.compute_retry_countdown())
 
     finally:
         db.close()
 
 
 @celery_app.task(
+    base=BaseTask,
     name="backend.tasks.workflow_runtime_tasks.async_execute_finalization_workflow",
     bind=True,
     acks_late=True,
     max_retries=3,
     default_retry_delay=60,
+    task_soft_time_limit=1200,
+    task_time_limit=1800,
 )
 def async_execute_finalization_workflow(
     self,
@@ -260,18 +267,21 @@ def async_execute_finalization_workflow(
     except Exception as e:
         logger.error(f"[WorkflowRuntimeTasks] Finalization workflow failed: {e}", exc_info=True)
         # Retry up to max_retries times
-        raise self.retry(exc=e, countdown=60)  # type: ignore
+        raise self.retry(exc=e, countdown=self.compute_retry_countdown())
 
     finally:
         db.close()
 
 
 @celery_app.task(
+    base=BaseTask,
     name="backend.tasks.workflow_runtime_tasks.async_execute_time_travel_qa",
     bind=True,
     acks_late=True,
     max_retries=2,
     default_retry_delay=30,
+    task_soft_time_limit=300,
+    task_time_limit=600,
 )
 def async_execute_time_travel_qa(
     self,
@@ -340,7 +350,7 @@ def async_execute_time_travel_qa(
     except Exception as e:
         logger.error(f"[WorkflowRuntimeTasks] Time travel Q&A failed: {e}", exc_info=True)
         # Retry up to max_retries times
-        raise self.retry(exc=e, countdown=30)  # type: ignore
+        raise self.retry(exc=e, countdown=self.compute_retry_countdown())
 
     finally:
         db.close()

@@ -6,16 +6,22 @@ from __future__ import annotations
 
 import logging
 
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
+    bind=True,
     name="backend.tasks.global_retrieval_tasks.async_rebuild_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=60,
+    task_soft_time_limit=1800,
+    task_time_limit=3600,
 )
-def async_rebuild_vector_collection(kbid: str) -> dict:
+def async_rebuild_vector_collection(self, kbid: str) -> dict:
     """
     全量重建知识库向量集合。
     1. 查询 KB 的 vector_collection_name 与所有关联视频
@@ -24,6 +30,7 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
     source_path 使用 transcript://kb/{collection}/{video_id}，
     与单视频 collection（transcript://video/{video_id}）的 source_path 不同，
     避免 Chroma chunk_id 冲突。
+    先删后建保证幂等性。
     """
     from backend.db.session import SessionLocal
     from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -97,15 +104,25 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
             "videos_ingested": ingested,
             "videos_skipped": skipped,
         }
+    except Exception as exc:
+        logger.exception("async_rebuild_vector_collection failed for kbid=%s", kbid)
+        if self.is_last_attempt:
+            logger.critical("async_rebuild_vector_collection: retries exhausted for kbid=%s", kbid)
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()
 
 
 @celery_app.task(
+    bind=True,
     name="backend.tasks.global_retrieval_tasks.async_add_video_to_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+    task_soft_time_limit=600,
+    task_time_limit=900,
 )
-def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
+def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict:
     """
     增量摄取：将单个视频的转录文本追加到知识库向量集合。
     - source_path 使用 transcript://kb/{collection}/{video_id}，
@@ -173,20 +190,36 @@ def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
             kbid, collection_name, video_id,
         )
         return {"kbid": kbid, "collection": collection_name, "video_id": video_id, "status": "COMPLETED"}
+    except Exception as exc:
+        logger.exception(
+            "async_add_video_to_vector_collection failed for kbid=%s video_id=%s", kbid, video_id
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_add_video_to_vector_collection: retries exhausted for kbid=%s video_id=%s",
+                kbid, video_id,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()
 
 
 @celery_app.task(
+    bind=True,
     name="backend.tasks.global_retrieval_tasks.async_remove_video_from_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+    task_soft_time_limit=300,
+    task_time_limit=600,
 )
-def async_remove_video_from_vector_collection(kbid: str, video_id: str) -> dict:
+def async_remove_video_from_vector_collection(self, kbid: str, video_id: str) -> dict:
     """
     增量删除：从知识库向量集合中精准删除指定视频的所有 chunk。
     - Chroma：双字段过滤 {collection, video_id}
     - BM25：按 source_path 前缀精准移除，重算 IDF 后保存
     无需重新摄取任何视频，Embedding 调用量 = 0。
+    删除操作天然幂等，重复调用安全。
     """
     from backend.db.session import SessionLocal
     from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -199,39 +232,67 @@ def async_remove_video_from_vector_collection(kbid: str, video_id: str) -> dict:
     finally:
         db.close()
 
-    chroma_deleted = _delete_video_chunks_from_collection(collection_name, video_id)
-    bm25_removed = _remove_bm25_entries_by_prefix(
-        f"transcript://kb/{collection_name}/{video_id}"
-    )
-    logger.info(
-        "async_remove_video_from_vector_collection: kbid=%s collection=%s video_id=%s "
-        "chroma_deleted=%d bm25_removed=%d",
-        kbid, collection_name, video_id, chroma_deleted, bm25_removed,
-    )
-    return {
-        "kbid": kbid, "collection": collection_name, "video_id": video_id,
-        "status": "REMOVED", "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed,
-    }
+    try:
+        chroma_deleted = _delete_video_chunks_from_collection(collection_name, video_id)
+        bm25_removed = _remove_bm25_entries_by_prefix(
+            f"transcript://kb/{collection_name}/{video_id}"
+        )
+        logger.info(
+            "async_remove_video_from_vector_collection: kbid=%s collection=%s video_id=%s "
+            "chroma_deleted=%d bm25_removed=%d",
+            kbid, collection_name, video_id, chroma_deleted, bm25_removed,
+        )
+        return {
+            "kbid": kbid, "collection": collection_name, "video_id": video_id,
+            "status": "REMOVED", "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed,
+        }
+    except Exception as exc:
+        logger.exception(
+            "async_remove_video_from_vector_collection failed for kbid=%s video_id=%s",
+            kbid, video_id,
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_remove_video_from_vector_collection: retries exhausted for kbid=%s video_id=%s",
+                kbid, video_id,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
 
 
 @celery_app.task(
+    bind=True,
     name="backend.tasks.global_retrieval_tasks.async_purge_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+    task_soft_time_limit=300,
+    task_time_limit=600,
 )
-def async_purge_vector_collection(collection_name: str) -> dict:
+def async_purge_vector_collection(self, collection_name: str) -> dict:
     """
     清理向量集合中属于 collection_name 的所有 chunk（KB 删除时调用）。
     collection_name 由调用方（kb_service）在 DB 删除前传入。
     同步清理 Chroma + BM25。
+    删除操作天然幂等，重复调用安全。
     """
-    chroma_deleted = _purge_chroma_collection(collection_name)
-    bm25_removed = _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
-    logger.info(
-        "async_purge_vector_collection: collection=%s chroma_deleted=%d bm25_removed=%d",
-        collection_name, chroma_deleted, bm25_removed,
-    )
-    return {"collection": collection_name, "status": "PURGED",
-            "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed}
+    try:
+        chroma_deleted = _purge_chroma_collection(collection_name)
+        bm25_removed = _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
+        logger.info(
+            "async_purge_vector_collection: collection=%s chroma_deleted=%d bm25_removed=%d",
+            collection_name, chroma_deleted, bm25_removed,
+        )
+        return {"collection": collection_name, "status": "PURGED",
+                "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed}
+    except Exception as exc:
+        logger.exception(
+            "async_purge_vector_collection failed for collection=%s", collection_name,
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_purge_vector_collection: retries exhausted for collection=%s", collection_name,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
 
 
 # ── 工具函数 ────────────────────────────────────────────────────────────────

@@ -3,23 +3,32 @@ from __future__ import annotations
 
 import logging
 
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(
+    bind=True,
     name="backend.tasks.vector_tasks.async_embed_transcript_chunks_background",
     acks_late=True,
     queue="low_priority",
+    max_retries=3,
+    default_retry_delay=30,
+    task_soft_time_limit=600,
+    task_time_limit=900,
 )
-def async_embed_transcript_chunks_background(video_id: str, trace_id: str = "") -> dict:
+def async_embed_transcript_chunks_background(self, video_id: str, trace_id: str = "") -> dict:
     """
     后台向量化任务：
     1. 读取 video_resources.full_transcript 和 transcript_segments
     2. 优先使用 segments（带时间戳）；无 segments 则降级为全文本
     3. 通过 IngestionPipeline 分块 + 嵌入 + 写入 Chroma + 构建 BM25 索引
     chunk metadata.collection = "video_{video_id}"（数据隔离键）
+
+    幂等性保护：通过 _is_collection_indexed 检查 Chroma 中是否已有该视频的向量数据，
+    若已存在则跳过摄取，防止重试时的重复写入。
     """
     from backend.db.session import SessionLocal
     from backend.repositories.video_resource_repository import VideoResourceRepository
@@ -82,6 +91,17 @@ def async_embed_transcript_chunks_background(video_id: str, trace_id: str = "") 
             "collection": collection,
             "use_segments": bool(segments),
         }
+    except Exception as exc:
+        logger.exception(
+            "async_embed_transcript_chunks_background failed for video_id=%s trace_id=%s",
+            video_id, trace_id,
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_embed_transcript_chunks_background: retries exhausted for video_id=%s trace_id=%s",
+                video_id, trace_id,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()
 

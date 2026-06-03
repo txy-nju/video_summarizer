@@ -22,7 +22,7 @@ class _FakeTaskSelf:
     def __init__(self) -> None:
         self.retry_called = False
 
-    def retry(self, *, exc: Exception):
+    def retry(self, *, exc: Exception, countdown: int = 0):
         self.retry_called = True
         raise RuntimeError("retry-called")
 
@@ -87,18 +87,17 @@ def test_async_transcribe_video_routes_status_through_service(monkeypatch, tmp_p
     assert service.completed_payload == ""
 
 
-def test_async_transcribe_video_failure_marks_failed_and_retries(monkeypatch) -> None:
+def test_async_transcribe_video_failure_retries_but_does_not_mark_failed_on_first_attempt(
+    monkeypatch,
+) -> None:
+    """FAILED status should NOT be set on the first failure — only on the last retry attempt."""
     task_self = _FakeTaskSelf()
-    main_service = _ServiceFail()
-    fail_service = _ServiceFail()
 
     calls = {"count": 0}
 
     def _fake_factory():
         calls["count"] += 1
-        if calls["count"] == 1:
-            return main_service, _FakeDb()
-        return fail_service, _FakeDb()
+        return _ServiceFail(), _FakeDb()
 
     monkeypatch.setattr("backend.tasks.transcribe_tasks._create_video_resource_service", _fake_factory)
     monkeypatch.setattr(async_transcribe_video, "retry", task_self.retry)
@@ -107,4 +106,40 @@ def test_async_transcribe_video_failure_marks_failed_and_retries(monkeypatch) ->
         async_transcribe_video.run("vid-fail")
 
     assert task_self.retry_called is True
-    assert fail_service.failed_called is True
+    # The factory is called once (main service), and FAILED should NOT be called
+    # because is_last_attempt is False on the first failure with max_retries=3
+    assert calls["count"] == 1  # only the main service was created; no fail_service
+
+
+def test_async_transcribe_video_failure_marks_failed_on_last_attempt(monkeypatch) -> None:
+    """FAILED status IS set on the terminal retry attempt.
+
+    We verify this by calling retry_or_fail with a BaseTask configured as exhausted.
+    The task-level integration is covered by test_base_task.py's retry_or_fail tests.
+    """
+    from backend.tasks.base_task import BaseTask
+
+    # Build a BaseTask at the exhaustion point and verify on_exhausted_retry fires
+    class _TestTask(BaseTask):
+        exhausted_exc: Exception | None = None
+
+        def on_exhausted_retry(self, exc: Exception) -> None:
+            self.exhausted_exc = exc
+
+    task = _TestTask()
+    task.name = "test_transcribe"
+    task.max_retries = 3
+
+    # Simulate 3 retries already done (exhausted)
+    class _FakeReq:
+        retries = 3
+        id = "task-001"
+        args = ("vid-fail",)
+
+    task.request_stack = type("_Stack", (), {"top": _FakeReq()})()
+
+    with pytest.raises(ValueError, match="terminal"):
+        task.retry_or_fail(ValueError("terminal"))
+
+    assert task.exhausted_exc is not None
+    assert isinstance(task.exhausted_exc, ValueError)

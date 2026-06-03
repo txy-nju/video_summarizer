@@ -141,6 +141,10 @@ class VideoResource(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deletion_status: Mapped[str] = mapped_column(String(32), default="NONE", nullable=False)
 
+    # 自愈恢复追踪（Celery Beat 周期扫描使用，非 Celery 自身重试计数）
+    recovery_attempts: Mapped[int] = mapped_column(default=0, nullable=False)
+    last_recovery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     @validates("transcript_vector_ids")
     def validate_transcript_vector_ids(self, key: str, value: dict | list | None) -> list[str] | None:
         return _validate_vector_ids(value, key)

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from backend.db.session import SessionLocal
 from backend.infrastructure.storage.oss_client import ObjectStorageClient, get_object_storage_client
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -82,10 +83,13 @@ def _sanitize_frames_for_db(
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.extract_keyframes_tasks.async_extract_keyframes",
     max_retries=3,
     default_retry_delay=30,
     acks_late=True,
+    task_soft_time_limit=600,
+    task_time_limit=900,
 )
 def async_extract_keyframes(self, video_id: str, trace_id: str = "") -> dict:
     """
@@ -138,12 +142,18 @@ def async_extract_keyframes(self, video_id: str, trace_id: str = "") -> dict:
 
     except Exception as exc:
         logger.exception("async_extract_keyframes failed for video_id=%s trace_id=%s", video_id, trace_id)
-        try:
-            fail_service, fail_db = _create_video_resource_service()
-            fail_service.mark_frame_extraction_failed(video_id=video_id)
-            fail_db.close()
-        except Exception:
-            pass
-        raise self.retry(exc=exc)
+        # 仅在重试耗尽时标记 FAILED；重试期间保留原状态
+        if self.is_last_attempt:
+            logger.critical(
+                "async_extract_keyframes: retries exhausted for video_id=%s trace_id=%s",
+                video_id, trace_id,
+            )
+            try:
+                fail_service, fail_db = _create_video_resource_service()
+                fail_service.mark_frame_extraction_failed(video_id=video_id)
+                fail_db.close()
+            except Exception:
+                pass
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()

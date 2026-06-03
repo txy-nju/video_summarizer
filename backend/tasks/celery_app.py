@@ -24,19 +24,10 @@ celery_app = Celery(
     "video_summarizer",
     broker=_settings.celery_broker_url,
     backend=_settings.celery_result_backend,
-    include=[
-        "backend.tasks.transcribe_tasks",
-        "backend.tasks.extract_keyframes_tasks",
-        "backend.tasks.video_summary_tasks",
-        "backend.tasks.vector_tasks",
-        "backend.tasks.global_retrieval_tasks",
-        "backend.tasks.video_cleanup_tasks",
-        "backend.tasks.upload_finalize_tasks",
-        "backend.tasks.workflow_runtime_tasks",
-        "backend.services.domain_event_listener",
-    ],
+    include=[],  # 任务在 conf 配置完成后手动导入，确保 task_cls 生效
 )
 
+# conf 必须在任务模块导入前配置，否则 task_cls 不生效
 celery_app.conf.update(
     task_serializer="json",
     accept_content=["json"],
@@ -49,7 +40,33 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     # 结果保留时长：24 小时
     result_expires=86400,
+    # 全局默认任务基类（指数退避 + 抖动 + 超时保护）
+    task_cls="backend.tasks.base_task:BaseTask",
+    # 全局超时保护（各任务可通过装饰器参数覆盖）
+    task_soft_time_limit=600,   # 10 分钟软超时（抛出 SoftTimeLimitExceeded）
+    task_time_limit=900,        # 15 分钟硬超时（强制终止）
 )
+
+# Celery Beat 周期调度
+celery_app.conf.beat_schedule = {
+    "scan-and-recover-stuck-videos": {
+        "task": "backend.tasks.recovery_tasks.async_scan_and_recover_stuck_videos",
+        "schedule": 300.0,  # 每 5 分钟执行一次
+        "options": {"queue": "celery"},
+    },
+}
+
+# ── 在 conf 配置完成后导入任务模块（task_cls 必须在此前设置） ──
+import backend.tasks.transcribe_tasks  # noqa: E402, F401
+import backend.tasks.extract_keyframes_tasks  # noqa: E402, F401
+import backend.tasks.video_summary_tasks  # noqa: E402, F401
+import backend.tasks.vector_tasks  # noqa: E402, F401
+import backend.tasks.global_retrieval_tasks  # noqa: E402, F401
+import backend.tasks.video_cleanup_tasks  # noqa: E402, F401
+import backend.tasks.upload_finalize_tasks  # noqa: E402, F401
+import backend.tasks.workflow_runtime_tasks  # noqa: E402, F401
+import backend.tasks.recovery_tasks  # noqa: E402, F401
+import backend.services.domain_event_listener  # noqa: E402, F401
 
 register_task_trace_hooks()
 
