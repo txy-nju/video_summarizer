@@ -107,10 +107,10 @@ def analyze_video(
 
     node_msg_map = {
         "chunk_planner_node": "📋 [Plan Checker] 正在以时间戳为锚点，将视频逻辑分割成多个 120 秒粒度的分片任务...",
+        "outline_bootstrap_node": "🧭 [大纲引导] 正在分析叙事主线、生成全局章节大纲...",
+        "data_preparation_node": "🖼️ [数据准备] 正在并发预加载关键帧图片数据...",
         "map_dispatch_node": "🗺️ [Dispatcher] 正在为微智能体群编排分片执行配方，准备发起并行实时处理...",
-        "chunk_audio_worker_node": "🎧 [Chunk Audio Send Worker] 图级 fan-out：正在处理单分片音频洞察...",
-        "chunk_vision_worker_node": "📸 [Chunk Vision Send Worker] 图级 fan-out：正在处理单分片视觉洞察...",
-        "chunk_subgraph_node": "⚡ [Chunk Subgraph] 正在处理单分片音视频串行分析（音频→视觉）...",
+        "chunk_multimodal_worker_node": "⚡ [多模态分析] 分片 worker 已启动，正在并行分析各分片的音视频内容...",
         "wave_gate_node": "🧱 [Wave Gate] 正在校验当前波次分片完成状态，准备进入下一波次或聚合...",
         "chunk_aggregator_node": "🧾 [Chunk Aggregator] 正在按时间线整合 n 个分片洞察，生成统一证据底稿...",
         "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
@@ -118,28 +118,20 @@ def analyze_video(
 
     def _emit_chunk_progress(
         total_chunks: int,
-        audio_done_ids: set[str],
-        vision_done_ids: set[str],
+        done_count: int,
         stage: str = "running",
     ) -> None:
         if not status_callback:
             return
 
         safe_total = max(0, total_chunks)
-        audio_done = len(audio_done_ids)
-        vision_done = len(vision_done_ids)
-        overall_total = safe_total * 2
-        overall_done = audio_done + vision_done
-        overall_percent = int((overall_done / overall_total) * 100) if overall_total > 0 else 0
+        overall_percent = int((done_count / safe_total) * 100) if safe_total > 0 else 0
 
         payload = {
             "type": "chunk_progress",
             "stage": stage,
             "total_chunks": safe_total,
-            "audio_done": audio_done,
-            "vision_done": vision_done,
-            "overall_done": overall_done,
-            "overall_total": overall_total,
+            "done_count": done_count,
             "overall_percent": overall_percent,
         }
         status_callback(f"[[PROGRESS]]{json.dumps(payload, ensure_ascii=False)}")
@@ -147,10 +139,9 @@ def analyze_video(
     current_state = initial_state.copy()
     previous_event_at = run_started_at
     node_event_counts: Dict[str, int] = {}
-    audio_done_ids: set[str] = set()
-    vision_done_ids: set[str] = set()
+    done_chunk_ids: set[str] = set()
     total_chunks = 0
-    last_progress_signature: tuple[int, int, int] = (-1, -1, -1)
+    last_done_count: int = -1
 
     with start_span(
         build_span_name("workflow", "analysis", "run"),
@@ -176,37 +167,22 @@ def analyze_video(
                 if isinstance(chunk_plan, list):
                     total_chunks = len(chunk_plan)
 
-                if node_name in {
-                    "chunk_audio_worker_node",
-                    "chunk_vision_worker_node",
-                    "chunk_subgraph_node",
-                }:
+                if node_name == "chunk_multimodal_worker_node":
                     updated_chunks = state_update.get("chunk_results", []) if isinstance(state_update, dict) else []
                     if isinstance(updated_chunks, list):
                         for chunk_item in updated_chunks:
-                            if not isinstance(chunk_item, dict):
-                                continue
-                            chunk_id = str(chunk_item.get("chunk_id", "")).strip()
-                            if not chunk_id:
-                                continue
-                            if isinstance(chunk_item.get("transcript_claims"), list) and chunk_item["transcript_claims"]:
-                                audio_done_ids.add(chunk_id)
-                            if isinstance(chunk_item.get("frame_references"), list) and chunk_item["frame_references"]:
-                                vision_done_ids.add(chunk_id)
-
-                    progress_signature = (
-                        total_chunks,
-                        len(audio_done_ids),
-                        len(vision_done_ids),
-                    )
-                    if progress_signature != last_progress_signature:
+                            if isinstance(chunk_item, dict):
+                                chunk_id = str(chunk_item.get("chunk_id", "")).strip()
+                                if chunk_id:
+                                    done_chunk_ids.add(chunk_id)
+                    done_count = len(done_chunk_ids)
+                    if done_count != last_done_count:
                         _emit_chunk_progress(
                             total_chunks,
-                            audio_done_ids,
-                            vision_done_ids,
+                            done_count,
                             stage="running",
                         )
-                        last_progress_signature = progress_signature
+                        last_done_count = done_count
 
                 if metrics_enabled:
                     chunk_results = current_state.get("chunk_results", [])
@@ -234,8 +210,7 @@ def analyze_video(
 
     _emit_chunk_progress(
         total_chunks,
-        audio_done_ids,
-        vision_done_ids,
+        len(done_chunk_ids),
         stage="finished",
     )
 

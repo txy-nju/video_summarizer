@@ -34,11 +34,6 @@ from backend.websocket.schemas import WSEventType, WSScope, WSStage
 
 logger = logging.getLogger(__name__)
 
-# 进度心跳间隔（秒）：在长时间 LLM 调用期间定期向 WebSocket 发送 keepalive，
-# 防止前端 180s 无消息超时断开。
-_HEARTBEAT_INTERVAL_SECONDS = 30.0
-
-
 class WorkflowOrchestrationService:
     """High-level workflow orchestration facade for backend integration.
 
@@ -71,29 +66,6 @@ class WorkflowOrchestrationService:
         self._task_status_service = task_status_service
         self._notification_service = notification_service
 
-    async def _heartbeat_loop(
-        self,
-        user_id: str,
-        task_id: str,
-        trace_id: str,
-        interval: float = _HEARTBEAT_INTERVAL_SECONDS,
-    ) -> None:
-        """周期性向 WebSocket 发送 keepalive 消息，防止前端 180s 无消息超时断开。"""
-        while True:
-            await asyncio.sleep(interval)
-            try:
-                self._progress_publisher.publish_progress(
-                    user_id=user_id,
-                    scope=WSScope.VIDEO_SUMMARY_TASK,
-                    scope_id=task_id,
-                    stage=WSStage.ANALYSIS,
-                    status="RUNNING",
-                    progress=0,
-                    message="任务正在进行中...",
-                    trace_id=trace_id,
-                )
-            except Exception:
-                logger.debug("heartbeat publish failed (non-critical)", exc_info=True)
 
     def _build_workflow_callback(
         self,
@@ -128,23 +100,35 @@ class WorkflowOrchestrationService:
                     json_str = message[len("[[PROGRESS]]") :]
                     progress_data = json.loads(json_str)
 
-                    stage_str = progress_data.get("stage", "running")
+                    total_chunks = progress_data.get("total_chunks", 0)
+                    done_count = progress_data.get("done_count", 0)
                     overall_percent = progress_data.get("overall_percent", 0)
-                    stage_map = {
-                        "running": WSStage.ANALYSIS,
-                        "finished": WSStage.ANALYSIS,
+                    chunk_stage = progress_data.get("stage", "running")
+
+                    # Forward simplified payload with chunk-level detail
+                    chunk_payload = {
+                        "total_chunks": total_chunks,
+                        "done_count": done_count,
+                        "overall_percent": overall_percent,
+                        "stage": chunk_stage,
                     }
-                    stage = stage_map.get(stage_str, WSStage.ANALYSIS)
+
+                    # Build readable Chinese message based on stage
+                    if chunk_stage == "running":
+                        msg_text = f"正在分析分片：{done_count}/{total_chunks} 完成"
+                    else:  # "finished"
+                        msg_text = f"分片分析全部完成：共 {total_chunks} 个分片"
 
                     self._progress_publisher.publish_progress(
                         user_id=user_id,
                         scope=WSScope.VIDEO_SUMMARY_TASK,
                         scope_id=task_id,
-                        stage=stage,
+                        stage=WSStage.ANALYSIS,
                         substage="chunk_processing",
                         status="RUNNING",
                         progress=overall_percent,
-                        message=f"Chunk processing: {progress_data.get('overall_done', 0)}/{progress_data.get('overall_total', 0)}",
+                        message=msg_text,
+                        payload=chunk_payload,
                         trace_id=trace_id,
                     )
                 except json.JSONDecodeError:
@@ -218,12 +202,9 @@ class WorkflowOrchestrationService:
             trace_id=trace_id,
         )
 
-        # Run workflow in executor with keepalive heartbeat
+        # Run workflow in executor
         loop = asyncio.get_event_loop()
         callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id)
-        heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(owner_id, task_id, trace_id)
-        )
 
         try:
             result = await loop.run_in_executor(
@@ -316,12 +297,6 @@ class WorkflowOrchestrationService:
                 )
 
             raise
-        finally:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
 
     async def start_finalization_workflow_async(
         self,
@@ -375,12 +350,9 @@ class WorkflowOrchestrationService:
             trace_id=trace_id,
         )
 
-        # Run workflow in executor with keepalive heartbeat
+        # Run workflow in executor
         loop = asyncio.get_event_loop()
         callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id)
-        heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(owner_id, task_id, trace_id)
-        )
 
         try:
             final_summary = await loop.run_in_executor(
@@ -458,12 +430,6 @@ class WorkflowOrchestrationService:
                 )
 
             raise
-        finally:
-            heartbeat_task.cancel()
-            try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
 
     async def start_time_travel_qa_async(
         self,

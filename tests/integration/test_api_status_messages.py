@@ -72,29 +72,28 @@ class TestApiStatusMessages(unittest.TestCase):
                 self.assertIn("120 秒", plan_checker_msgs[0])
                 self.assertIn("分片", plan_checker_msgs[0])
 
-    def test_status_callback_receives_micro_agent_messages(self):
-        """验证微智能体群 (chunk micro-agents) 的播报信息被正确传递"""
+    def test_status_callback_receives_multimodal_worker_messages(self):
+        """验证多模态 worker (chunk_multimodal_worker_node) 的播报信息被正确传递"""
         messages = []
-        
+
         def mock_callback(msg):
             messages.append(msg)
-        
+
         transcript = '{"segments": [{"id": 0, "start": 0, "end": 10, "text": "test"}]}'
         keyframes = [{"time": "00:00", "image": "base64_dummy"}]
-        
+
         with patch("core.workflow.api.build_video_summary_graph") as mock_graph:
             mock_app = MagicMock()
             mock_graph.return_value = mock_app
-            
-            # 模拟包含微智能体群节点的工作流输出
+
+            # 模拟包含多模态 worker 和聚合节点的工作流输出
             mock_app.stream.return_value = iter([
                 {"chunk_planner_node": {"chunk_plan": [{"chunk_id": "c1"}]}},
                 {"map_dispatch_node": {}},
-                {"chunk_audio_worker_node": {"chunk_results": [{"chunk_id": "c1", "audio_insights": "test"}]}} ,
-                {"chunk_vision_worker_node": {"chunk_results": [{"chunk_id": "c1", "vision_insights": "test"}]}} ,
+                {"chunk_multimodal_worker_node": {"chunk_results": [{"chunk_id": "c1", "chunk_insights_md": "test"}]}},
                 {"chunk_aggregator_node": {"chunk_results": [{"chunk_id": "c1", "chunk_summary": "test"}]}},
             ])
-            
+
             try:
                 analyze_video(
                     transcript=transcript,
@@ -103,17 +102,13 @@ class TestApiStatusMessages(unittest.TestCase):
                 )
             except Exception:
                 pass
-            
-            # 验证微智能体群的消息被传递
-            audio_msgs = [m for m in messages if "Chunk Audio Micro-Agent" in m or "🎧" in m
-]
-            vision_msgs = [m for m in messages if "Chunk Vision Micro-Agent" in m or "📸" in m
-]
-            synth_msgs = [m for m in messages if "Chunk Aggregator" in m or "🧾" in m]
-            
-            self.assertTrue(len(audio_msgs) > 0, "Audio Micro-Agent 消息应该被传递")
-            self.assertTrue(len(vision_msgs) > 0, "Vision Micro-Agent 消息应该被传递")
-            self.assertTrue(len(synth_msgs) > 0, "Chunk Aggregator 消息应该被传递")
+
+            # 验证多模态 worker 的消息被传递
+            worker_msgs = [m for m in messages if "多模态分析" in m or "⚡" in m]
+            agg_msgs = [m for m in messages if "Chunk Aggregator" in m or "🧾" in m]
+
+            self.assertTrue(len(worker_msgs) > 0, "多模态分析 worker 消息应该被传递")
+            self.assertTrue(len(agg_msgs) > 0, "Chunk Aggregator 消息应该被传递")
 
     def test_dispatcher_message_present(self):
         """验证分发器 (Dispatcher) 的播报信息"""
@@ -233,8 +228,8 @@ class TestApiStatusMessages(unittest.TestCase):
                 "Human Gate 节点消息应该被透传"
             )
 
-    def test_send_api_progress_event_contains_synthesis_dimension(self):
-        """验证 send_api 进度事件包含 synthesis_done 且总体分母为 3 倍 chunk 数"""
+    def test_send_api_progress_event_tracks_done_count(self):
+        """验证 send_api 进度事件使用 done_count 追踪分片完成数"""
         messages = []
 
         def mock_callback(msg):
@@ -248,20 +243,18 @@ class TestApiStatusMessages(unittest.TestCase):
             mock_graph.return_value = mock_app
 
             mock_app.stream.return_value = iter([
-                {"chunk_planner_node": {"chunk_plan": [{"chunk_id": "c1"}, {"chunk_id": "c2"}]}} ,
+                {"chunk_planner_node": {"chunk_plan": [{"chunk_id": "c1"}, {"chunk_id": "c2"}]}},
                 {
-                    "chunk_audio_worker_node": {
+                    "chunk_multimodal_worker_node": {
                         "chunk_results": [
-                            {"chunk_id": "c1", "transcript_claims": ["claim-a1"]},
-                            {"chunk_id": "c2", "transcript_claims": ["claim-a2"]},
+                            {"chunk_id": "c1", "chunk_insights_md": "insights1"},
                         ]
                     }
                 },
                 {
-                    "chunk_vision_worker_node": {
+                    "chunk_multimodal_worker_node": {
                         "chunk_results": [
-                            {"chunk_id": "c1", "frame_references": ["ref-v1"]},
-                            {"chunk_id": "c2", "frame_references": ["ref-v2"]},
+                            {"chunk_id": "c2", "chunk_insights_md": "insights2"},
                         ]
                     }
                 },
@@ -278,10 +271,9 @@ class TestApiStatusMessages(unittest.TestCase):
 
         payload = json.loads(progress_msgs[-1][len("[[PROGRESS]]"):])
         self.assertEqual(payload.get("type"), "chunk_progress")
-        self.assertEqual(payload.get("audio_done"), 2)
-        self.assertEqual(payload.get("vision_done"), 2)
-        self.assertEqual(payload.get("overall_total"), 4)
-        self.assertEqual(payload.get("overall_done"), 4)
+        self.assertEqual(payload.get("total_chunks"), 2)
+        self.assertEqual(payload.get("done_count"), 2)
+        self.assertGreaterEqual(payload.get("overall_percent"), 0)
 
 
 if __name__ == "__main__":
