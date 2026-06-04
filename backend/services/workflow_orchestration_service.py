@@ -67,6 +67,25 @@ class WorkflowOrchestrationService:
         self._notification_service = notification_service
 
 
+    def publish_task_accepted(self, user_id: str, task_id: str, trace_id: str = "") -> int:
+        """Publish a "task accepted" WS event via Redis Pub/Sub.
+
+        Called from the API route immediately after Celery task dispatch,
+        so the frontend receives its first progress event without waiting
+        for the Celery worker to start.
+
+        The message traverses the standard Redis Pub/Sub path:
+        API process → Redis PUBLISH → subscriber thread → WebSocket.
+        """
+        return self._progress_publisher.publish_status_update(
+            user_id=user_id,
+            scope=WSScope.VIDEO_SUMMARY_TASK,
+            scope_id=task_id,
+            status="DRAFT_GENERATING",
+            message="Phase-1 analysis started",
+            trace_id=trace_id,
+        )
+
     def _build_workflow_callback(
         self,
         user_id: str,
@@ -194,15 +213,8 @@ class WorkflowOrchestrationService:
         if not task_record:
             raise ValueError(f"Task {task_id} not found or permission denied")
 
-        # Emit status update event
-        self._progress_publisher.publish_status_update(
-            user_id=owner_id,
-            scope=WSScope.VIDEO_SUMMARY_TASK,
-            scope_id=task_id,
-            status="DRAFT_GENERATING",
-            message="Phase-1 analysis started",
-            trace_id=trace_id,
-        )
+        # Note: the initial "DRAFT_GENERATING" status_update is now published
+        # from the API route (publish_task_accepted), so we don't duplicate it here.
 
         # Run workflow in executor
         loop = asyncio.get_event_loop()

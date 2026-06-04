@@ -163,7 +163,7 @@ async def start_analysis_workflow(
 
     State transition: task.workflow_state = DRAFT_GENERATING (until analysis completes)
     """
-    _ = payload, workflow_service
+    _ = payload
 
     trace_id = str(getattr(request.state, "trace_id", ""))
     try:
@@ -183,6 +183,14 @@ async def start_analysis_workflow(
                 "Cannot restart phase-1 analysis. Please wait for finalization to complete.",
             ) from exc
         raise
+
+    # 仅在任务被真正分发（非幂等命中）时推送 WS 首事件
+    if response_data.get("workflow_state") == "DRAFT_GENERATING":
+        workflow_service.publish_task_accepted(
+            user_id=current_user.user_id,
+            task_id=task_id,
+            trace_id=trace_id,
+        )
 
     return StartAnalysisWorkflowResponse(
         data=response_data,
