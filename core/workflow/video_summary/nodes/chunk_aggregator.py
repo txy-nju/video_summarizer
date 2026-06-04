@@ -57,11 +57,6 @@ def _build_primary_path(
     解析 markdown 中的时间戳，将不同时间的观察块精确分配到对应的章节中。
     """
     lines: List[str] = []
-    lines.append("# 初稿审查")
-    lines.append("")
-    if user_prompt:
-        lines.append(f"- 初始指令: {user_prompt}")
-    lines.append("")
 
     chapter_chunk_map: Dict[str, List[Tuple[str, str]]] = {}
     for chapter in narrative_arc:
