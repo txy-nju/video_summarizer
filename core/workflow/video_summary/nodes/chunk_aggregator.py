@@ -57,12 +57,6 @@ def _build_primary_path(
     解析 markdown 中的时间戳，将不同时间的观察块精确分配到对应的章节中。
     """
     lines: List[str] = []
-    lines.append("# Chunk Aggregated Insights")
-    lines.append("")
-    if user_prompt:
-        lines.append(f"- user_focus: {user_prompt}")
-    lines.append(f"- total_chunks: {len(ordered_ids)}")
-    lines.append("")
 
     chapter_chunk_map: Dict[str, List[Tuple[str, str]]] = {}
     for chapter in narrative_arc:
@@ -187,13 +181,6 @@ def _build_fallback_path(
 ) -> Tuple[str, int]:
     """降级路径：narrative_arc 为空时，平铺各分片的 chunk_insights_md。"""
     lines: List[str] = []
-    lines.append("# Chunk Aggregated Insights")
-    lines.append("")
-    lines.append(f"- total_chunks: {len(ordered_ids)}")
-    if user_prompt:
-        lines.append(f"- user_focus: {user_prompt}")
-    lines.append("- mode: fallback (no narrative_arc)")
-    lines.append("")
 
     dropped_count = 0
     for chunk_id in ordered_ids:

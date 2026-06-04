@@ -21,7 +21,6 @@ class TestChunkAggregatorNode(unittest.TestCase):
         result = chunk_aggregator_node(state)  # type: ignore[arg-type]
         aggregated = result.get("aggregated_chunk_insights", "")
 
-        self.assertIn("# Chunk Aggregated Insights", aggregated)
         self.assertTrue(aggregated.find("## chunk-000") < aggregated.find("## chunk-001"))
         self.assertIn("S0", aggregated)
         self.assertIn("S1", aggregated)
@@ -39,7 +38,7 @@ class TestChunkAggregatorNode(unittest.TestCase):
 
         self.assertEqual(debug_info.get("aggregator_total_chunks"), 1)
         self.assertEqual(debug_info.get("aggregator_dropped_chunks"), 1)
-        self.assertIn("total_chunks: 1", aggregated)
+        self.assertEqual(aggregated, "")
 
     def test_truncates_when_content_too_long(self):
         # Phase G1 raised the default limit from 24000 to 100000
