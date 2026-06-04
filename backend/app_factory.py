@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
 
 from backend.api.routes.auth_routes import router as auth_router
 from backend.api.routes.attachment_upload import router as attachment_upload_router
@@ -29,6 +31,25 @@ def _build_system_router() -> APIRouter:
     @router.get("/health", tags=["system"])
     async def health_check() -> dict[str, str]:
         return {"status": "ok"}
+
+    # ── 本地开发文件流 ──
+    # Android 模拟器 / 非本地客户端无法访问 file:// 协议的 presigned_url，
+    # 因此提供一个 HTTP 流式传输端点。
+    @router.get("/api/v1/files/stream", tags=["system"])
+    async def stream_file(
+        object_key: str = Query(..., description="OSS object key of the file to stream"),
+    ) -> FileResponse:
+        from backend.infrastructure.storage.oss_client import get_object_storage_client
+
+        storage = get_object_storage_client()
+        file_path: Path = storage._local_root / storage._normalize_key(object_key)
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+        return FileResponse(
+            file_path,
+            media_type="application/octet-stream",
+            filename=file_path.name,
+        )
 
     return router
 
