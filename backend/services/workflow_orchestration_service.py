@@ -114,10 +114,12 @@ class WorkflowOrchestrationService:
                     }
 
                     # Build readable Chinese message based on stage
-                    if chunk_stage == "running":
-                        msg_text = f"正在分析分片：{done_count}/{total_chunks} 完成"
+                    if chunk_stage == "starting":
+                        msg_text = f"共 {total_chunks} 个分片，即将开始并行分析"
+                    elif chunk_stage == "running":
+                        msg_text = f"分片 {done_count}/{total_chunks} 分析完成"
                     else:  # "finished"
-                        msg_text = f"分片分析全部完成：共 {total_chunks} 个分片"
+                        msg_text = f"全部分片分析完成：共 {total_chunks} 个分片"
 
                     self._progress_publisher.publish_progress(
                         user_id=user_id,

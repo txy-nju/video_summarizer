@@ -10,6 +10,7 @@ from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from core.workflow.video_summary.graph import build_video_summary_graph, build_finalization_graph
+from core.workflow.video_summary.planner.chunk_planner import chunk_planner_node
 from core.workflow.checkpoint_factory import create_checkpointer
 from core.workflow.session import ensure_thread_id
 from core.workflow.time_travel import (
@@ -102,20 +103,6 @@ def analyze_video(
         "human_gate_reason": "",
     }
 
-    if status_callback:
-        status_callback("⚡ [引擎点火] 第一阶段启动：并行并发拆解多模态任务并生成待审批聚合稿...")
-
-    node_msg_map = {
-        "chunk_planner_node": "📋 [Plan Checker] 正在以时间戳为锚点，将视频逻辑分割成多个 120 秒粒度的分片任务...",
-        "outline_bootstrap_node": "🧭 [大纲引导] 正在分析叙事主线、生成全局章节大纲...",
-        "data_preparation_node": "🖼️ [数据准备] 正在并发预加载关键帧图片数据...",
-        "map_dispatch_node": "🗺️ [Dispatcher] 正在为微智能体群编排分片执行配方，准备发起并行实时处理...",
-        "chunk_multimodal_worker_node": "⚡ [多模态分析] 分片 worker 已启动，正在并行分析各分片的音视频内容...",
-        "wave_gate_node": "🧱 [Wave Gate] 正在校验当前波次分片完成状态，准备进入下一波次或聚合...",
-        "chunk_aggregator_node": "🧾 [Chunk Aggregator] 正在按时间线整合 n 个分片洞察，生成统一证据底稿...",
-        "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
-    }
-
     def _emit_chunk_progress(
         total_chunks: int,
         done_count: int,
@@ -135,6 +122,27 @@ def analyze_video(
             "overall_percent": overall_percent,
         }
         status_callback(f"[[PROGRESS]]{json.dumps(payload, ensure_ascii=False)}")
+
+    # 预执行分片规划，提前获取 total_chunks 用于事前进度通知
+    pre_plan = chunk_planner_node(initial_state)  # type: ignore[arg-type]
+    chunk_plan_pre = pre_plan.get("chunk_plan", [])
+    total_chunks_pre = len(chunk_plan_pre) if isinstance(chunk_plan_pre, list) else 0
+    initial_state.update(pre_plan)
+
+    if status_callback and total_chunks_pre > 0:
+        _emit_chunk_progress(total_chunks_pre, 0, stage="starting")
+
+    if status_callback:
+        status_callback("⚡ [引擎点火] 第一阶段启动：并行并发拆解多模态任务并生成待审批聚合稿...")
+
+    node_msg_map = {
+        "outline_bootstrap_node": "🧭 叙事大纲已生成",
+        "data_preparation_node": "🖼️ 关键帧图片数据已就绪",
+        "map_dispatch_node": "🗺️ 分片执行配方已编排，worker 开始并行处理",
+        "wave_gate_node": "🧱 当前波次分片已完成，正在准备聚合",
+        "chunk_aggregator_node": "🧾 分片洞察整合完成，已生成统一证据底稿",
+        "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
+    }
 
     current_state = initial_state.copy()
     previous_event_at = run_started_at
@@ -199,14 +207,21 @@ def analyze_video(
                     )
                 previous_event_at = event_now
 
-                if status_callback and node_name in node_msg_map:
-                    msg = node_msg_map[node_name]
-                    if node_name == "chunk_aggregator_node":
+                if status_callback:
+                    if node_name == "chunk_planner_node":
+                        chunk_plan = current_state.get("chunk_plan", [])
+                        num_chunks = len(chunk_plan) if isinstance(chunk_plan, list) else total_chunks
+                        status_callback(f"📋 分片规划完成，共 {num_chunks} 个分片，即将开始并行分析")
+                    elif node_name == "chunk_aggregator_node":
+                        msg = node_msg_map.get(node_name, "")
                         chunk_results = current_state.get("chunk_results", [])
                         if isinstance(chunk_results, list) and chunk_results:
                             num_chunks = len(chunk_results)
-                            msg = f"{msg}\n✅ [微智能体群汇聚] 已完成 {num_chunks} 个分片的并行深度分析，成果已交付全局融合层..."
-                    status_callback(msg)
+                            msg = f"{msg}\n✅ 已完成 {num_chunks} 个分片的并行深度分析，成果已交付全局融合层"
+                        if msg:
+                            status_callback(msg)
+                    elif node_name in node_msg_map:
+                        status_callback(node_msg_map[node_name])
 
     _emit_chunk_progress(
         total_chunks,
