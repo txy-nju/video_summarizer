@@ -79,9 +79,10 @@ def test_async_finalize_upload_writes_object_key_in_db(monkeypatch, tmp_path) ->
         "backend.tasks.upload_finalize_tasks._create_upload_service",
         lambda: fake_upload_service,
     )
+    _expected_video_id = video_id
     monkeypatch.setattr(
         "backend.tasks.upload_finalize_tasks._create_video_resource",
-        lambda *, owner_id, file_name: video_id,
+        lambda *, owner_id, file_name, video_id=None: video_id or _expected_video_id,
     )
     monkeypatch.setattr(
         "backend.infrastructure.storage.oss_client.get_object_storage_client",
@@ -89,7 +90,7 @@ def test_async_finalize_upload_writes_object_key_in_db(monkeypatch, tmp_path) ->
     )
     monkeypatch.setattr(
         "backend.tasks.upload_finalize_tasks._publish_video_uploaded_event",
-        lambda *, video_id, owner_id, oss_key: published.update({"oss_key": oss_key}),
+        lambda *, video_id, owner_id, oss_key, trace_id="": published.update({"oss_key": oss_key}),
     )
 
     class _FakeUploadRepo:

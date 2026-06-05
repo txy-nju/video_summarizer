@@ -48,6 +48,7 @@ class UploadRepository:
         total_size: int,
         chunk_size: int,
         ttl_seconds: int = _DEFAULT_SESSION_TTL_SECONDS,
+        video_id: str | None = None,
     ) -> UploadSessionState:
         """创建新的上传会话，写入 Redis。"""
         now = datetime.now(UTC)
@@ -63,6 +64,7 @@ class UploadRepository:
             state="created",
             expires_at=expires_at.isoformat(),
             created_at=now.isoformat(),
+            video_id=video_id,
         )
 
         self._save(state, ttl_seconds)
@@ -173,6 +175,7 @@ class UploadRepository:
             "state": state.state,
             "expires_at": state.expires_at,
             "created_at": state.created_at,
+            "video_id": state.video_id or "",
         }
         self._redis.hset(key, mapping=payload)
         if ttl_seconds is None:
@@ -195,6 +198,7 @@ class UploadRepository:
         chunks_raw = _b("uploaded_chunks")
         chunks = set(json.loads(chunks_raw)) if chunks_raw else set()
 
+        video_id_raw = _b("video_id")
         return UploadSessionState(
             upload_id=_b("upload_id"),
             owner_id=_b("owner_id"),
@@ -205,4 +209,5 @@ class UploadRepository:
             state=_b("state") or "created",
             expires_at=_b("expires_at"),
             created_at=_b("created_at"),
+            video_id=video_id_raw if video_id_raw else None,
         )

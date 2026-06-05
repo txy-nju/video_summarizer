@@ -69,6 +69,7 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
             video_id = _create_video_resource(
                 owner_id=owner_id,
                 file_name=file_name,
+                video_id=result.get("video_id"),
             )
             if video_id is None:
                 logger.error("async_finalize_upload: failed to create video_resource for upload_id=%s", upload_id)
@@ -133,8 +134,15 @@ def _create_video_resource(
     *,
     owner_id: str,
     file_name: str,
+    video_id: str | None = None,
 ) -> str | None:
-    """创建 VideoResource 记录（系统内部操作）。"""
+    """创建或复用 VideoResource 记录（系统内部操作）。
+
+    优先路径：若提供了显式 video_id，通过 video_id + owner_id 精确查找
+             目标记录，oss_key 为空时直接复用。
+    后备路径：video_id 未提供、记录不存在或已被占用时，回退到
+             (owner_id, file_name, 空 oss_key) 的文件名模糊匹配。
+    """
     from backend.db.session import SessionLocal
     from backend.models.database import VideoResource
     from backend.schemas.video_resource import VideoResourceCreateRequest
@@ -143,7 +151,34 @@ def _create_video_resource(
 
     db = SessionLocal()
     try:
-        # 1. 优先查找是否存在由前端预注册、但尚未关联文件的同名记录
+        # ── 优先路径：显式 video_id → 精确查找 ──
+        if video_id:
+            row = (
+                db.query(VideoResource)
+                .filter(
+                    VideoResource.video_id == video_id,
+                    VideoResource.owner_id == owner_id,
+                )
+                .one_or_none()
+            )
+            if row is not None and _oss_key_is_empty(row.oss_key):
+                logger.info(
+                    "Reusing explicitly-provided VideoResource: video_id=%s, file_name=%s",
+                    video_id, file_name,
+                )
+                return str(row.video_id)
+            if row is not None and not _oss_key_is_empty(row.oss_key):
+                logger.warning(
+                    "Explicit video_id=%s already has oss_key set, falling back to file_name match",
+                    video_id,
+                )
+            else:
+                logger.warning(
+                    "Explicit video_id=%s not found for owner_id=%s, falling back to file_name match",
+                    video_id, owner_id,
+                )
+
+        # ── 后备路径（向后兼容）：文件名模糊匹配 ──
         row = (
             db.query(VideoResource)
             .filter(
@@ -155,7 +190,7 @@ def _create_video_resource(
             .first()
         )
         if row is not None:
-            logger.info("Found pre-registered VideoResource: video_id=%s, reusing it.", row.video_id)
+            logger.info("Found pre-registered VideoResource by file_name: video_id=%s, reusing it.", row.video_id)
             return str(row.video_id)
 
         # 2. 如果没有预注册的同名记录，才新建一条记录
@@ -169,6 +204,10 @@ def _create_video_resource(
         return view.video_id
     finally:
         db.close()
+
+
+def _oss_key_is_empty(oss_key: str | None) -> bool:
+    return not oss_key or oss_key.strip() == ""
 
 
 def _set_video_resource_oss_key(*, video_id: str, oss_key: str) -> None:
