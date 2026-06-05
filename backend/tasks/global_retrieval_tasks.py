@@ -97,6 +97,13 @@ def async_rebuild_vector_collection(self, kbid: str) -> dict:
             "async_rebuild_vector_collection: kbid=%s collection=%s ingested=%d skipped=%d",
             kbid, collection_name, ingested, skipped,
         )
+
+        # 重建完成后验证
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        _settings = build_rag_settings()
+        _chroma_path = getattr(_settings.vector_store, "persist_path", "N/A")
+        _verify_kb_collection(collection_name, _chroma_path)
+
         return {
             "kbid": kbid,
             "collection": collection_name,
@@ -170,6 +177,10 @@ def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict
             "owner_id": str(getattr(video, "owner_id", "")),
             "doc_type": "transcript",
         }
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        _settings = build_rag_settings()
+        _chroma_path = getattr(_settings.vector_store, "persist_path", "N/A")
+
         segments = getattr(video, "transcript_segments", None) or []
         from backend.tasks.vector_tasks import _run_rag_ingestion_with_segments, _run_rag_ingestion
         if segments:
@@ -185,9 +196,13 @@ def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict
                 metadata=base_metadata,
             )
 
+        # 摄取后立即验证
+        _verify_kb_ingestion(collection_name, video_id, _chroma_path)
+
         logger.info(
-            "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s ingested",
-            kbid, collection_name, video_id,
+            "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s "
+            "ingested chroma_path=%s",
+            kbid, collection_name, video_id, _chroma_path,
         )
         return {"kbid": kbid, "collection": collection_name, "video_id": video_id, "status": "COMPLETED"}
     except Exception as exc:
@@ -345,6 +360,86 @@ def _is_video_indexed_in_collection(collection_name: str, video_id: str) -> bool
             collection_name, video_id,
         )
         return False
+
+
+def _verify_kb_ingestion(collection_name: str, video_id: str, chroma_path: str) -> None:
+    """验证 KB 级别单视频摄取后向量数据是否已成功写入 Chroma。
+
+    摄取完成后立即查询 Chroma，用 {collection, video_id} 双字段过滤。
+    """
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        settings = build_rag_settings()
+        actual_path = getattr(settings.vector_store, "persist_path", "N/A")
+        store = ChromaStore.from_settings(settings.vector_store)
+
+        results = store.get_by_metadata(
+            {"collection": collection_name, "video_id": video_id}, limit=5
+        )
+        total_stats = store.get_collection_stats()
+
+        if results:
+            sample_meta = results[0].metadata or {}
+            logger.info(
+                "_verify_kb_ingestion: OK collection=%s video_id=%s "
+                "found_chunks=%d total_chroma_chunks=%s chroma_path=%s "
+                "sample_chunk_id=%s sample_meta_keys=%s",
+                collection_name, video_id, len(results),
+                total_stats.get("chunk_count", -1), actual_path,
+                results[0].id, list(sample_meta.keys()),
+            )
+        else:
+            logger.error(
+                "_verify_kb_ingestion: FAILED collection=%s video_id=%s "
+                "found_chunks=0 total_chroma_chunks=%s chroma_path=%s "
+                "→ Vectors may NOT be persisted! Check Celery worker vs "
+                "web server chroma_path consistency.",
+                collection_name, video_id,
+                total_stats.get("chunk_count", -1), actual_path,
+            )
+    except Exception:
+        logger.exception(
+            "_verify_kb_ingestion: verification query failed collection=%s video_id=%s "
+            "chroma_path=%s",
+            collection_name, video_id, chroma_path,
+        )
+
+
+def _verify_kb_collection(collection_name: str, chroma_path: str) -> None:
+    """验证 KB 级别 collection 中是否有向量数据。
+
+    用 collection 单字段过滤，确认至少有 1 条记录。
+    """
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        settings = build_rag_settings()
+        actual_path = getattr(settings.vector_store, "persist_path", "N/A")
+        store = ChromaStore.from_settings(settings.vector_store)
+
+        results = store.get_by_metadata({"collection": collection_name}, limit=5)
+        total_stats = store.get_collection_stats()
+
+        if results:
+            video_ids = list({r.metadata.get("video_id", "?") for r in results})
+            logger.info(
+                "_verify_kb_collection: OK collection=%s found_chunks=%d "
+                "total_chroma_chunks=%s chroma_path=%s video_ids=%s",
+                collection_name, len(results),
+                total_stats.get("chunk_count", -1), actual_path, video_ids,
+            )
+        else:
+            logger.error(
+                "_verify_kb_collection: FAILED collection=%s found_chunks=0 "
+                "total_chroma_chunks=%s chroma_path=%s → Collection may be empty!",
+                collection_name, total_stats.get("chunk_count", -1), actual_path,
+            )
+    except Exception:
+        logger.exception(
+            "_verify_kb_collection: verification query failed collection=%s chroma_path=%s",
+            collection_name, chroma_path,
+        )
 
 
 def _remove_bm25_entries_by_prefix(source_path_prefix: str) -> int:

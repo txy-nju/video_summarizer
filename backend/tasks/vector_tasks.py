@@ -67,6 +67,10 @@ def async_embed_transcript_chunks_background(self, video_id: str, trace_id: str 
             "doc_type": "transcript",
         }
 
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        _settings = build_rag_settings()
+        _chroma_path = getattr(_settings.vector_store, "persist_path", "N/A")
+
         segments = video.transcript_segments or []
         if segments:
             _run_rag_ingestion_with_segments(
@@ -82,8 +86,9 @@ def async_embed_transcript_chunks_background(self, video_id: str, trace_id: str 
             )
 
         logger.info(
-            "async_embed_transcript_chunks_background: video_id=%s collection=%s segments=%d ingested",
-            video_id, collection, len(segments),
+            "async_embed_transcript_chunks_background: video_id=%s collection=%s segments=%d "
+            "ingested chroma_path=%s",
+            video_id, collection, len(segments), _chroma_path,
         )
         return {
             "video_id": video_id,
@@ -118,14 +123,29 @@ def _run_rag_ingestion_with_segments(
     from modular_rag.ingestion.pipeline import IngestionPipeline
     from modular_rag.libs.loader.transcript_text_loader import TranscriptTextLoader
 
+    settings = build_rag_settings()
+    chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
+    video_id = base_metadata.get("video_id", "unknown")
+
     loader = TranscriptTextLoader()
     docs = loader.load_segments(segments=segments, base_metadata=base_metadata)
     if not docs:
+        logger.warning(
+            "_run_rag_ingestion_with_segments: no docs from segments, collection=%s video_id=%s",
+            collection, video_id,
+        )
         return
 
-    settings = build_rag_settings()
+    logger.info(
+        "_run_rag_ingestion_with_segments: starting collection=%s video_id=%s "
+        "segments=%d docs=%d chroma_path=%s",
+        collection, video_id, len(segments), len(docs), chroma_path,
+    )
+
     pipeline = IngestionPipeline(settings=settings, loader=loader)
     pipeline.run_docs(docs=docs, collection=collection)
+
+    _verify_ingestion(collection, video_id, chroma_path)
 
 
 def _run_rag_ingestion(text: str, collection: str, metadata: dict) -> None:
@@ -136,14 +156,29 @@ def _run_rag_ingestion(text: str, collection: str, metadata: dict) -> None:
     from modular_rag.ingestion.pipeline import IngestionPipeline
     from modular_rag.libs.loader.transcript_text_loader import TranscriptTextLoader
 
+    settings = build_rag_settings()
+    chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
+    video_id = metadata.get("video_id", "unknown")
+
     loader = TranscriptTextLoader()
     docs = loader.load_text(text, metadata=metadata)
     if not docs:
+        logger.warning(
+            "_run_rag_ingestion: no docs from text, collection=%s video_id=%s",
+            collection, video_id,
+        )
         return
 
-    settings = build_rag_settings()
+    logger.info(
+        "_run_rag_ingestion: starting collection=%s video_id=%s "
+        "text_len=%d docs=%d chroma_path=%s",
+        collection, video_id, len(text), len(docs), chroma_path,
+    )
+
     pipeline = IngestionPipeline(settings=settings, loader=loader)
     pipeline.run_docs(docs=docs, collection=collection)
+
+    _verify_ingestion(collection, video_id, chroma_path)
 
 
 def _is_collection_indexed(collection: str) -> bool:
@@ -160,4 +195,45 @@ def _is_collection_indexed(collection: str) -> bool:
     except Exception:
         logger.exception("_is_collection_indexed: check failed for collection=%s, will re-ingest", collection)
         return False
+
+
+def _verify_ingestion(collection: str, video_id: str, chroma_path: str) -> None:
+    """验证向量数据是否已成功写入 Chroma。
+
+    摄取完成后立即查询 Chroma，确认对应 collection + video_id 的数据存在。
+    若查询结果为空，输出详细诊断信息帮助定位问题。
+    """
+    try:
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        settings = build_rag_settings()
+        actual_path = getattr(settings.vector_store, "persist_path", "N/A")
+        store = ChromaStore.from_settings(settings.vector_store)
+
+        # 用 collection 过滤查询（与检索路径完全一致的过滤条件）
+        results = store.get_by_metadata({"collection": collection}, limit=5)
+        total_count = store.get_collection_stats().get("chunk_count", -1)
+
+        if results:
+            sample_meta = results[0].metadata or {}
+            logger.info(
+                "_verify_ingestion: OK collection=%s video_id=%s "
+                "found_chunks=%d total_chroma_chunks=%s chroma_path=%s "
+                "sample_chunk_id=%s sample_meta_keys=%s",
+                collection, video_id, len(results), total_count, actual_path,
+                results[0].id, list(sample_meta.keys()),
+            )
+        else:
+            logger.error(
+                "_verify_ingestion: FAILED collection=%s video_id=%s "
+                "found_chunks=0 total_chroma_chunks=%s chroma_path=%s "
+                "→ Vectors may NOT be persisted! Check if Celery worker "
+                "and web server share the same chroma_path.",
+                collection, video_id, total_count, actual_path,
+            )
+    except Exception:
+        logger.exception(
+            "_verify_ingestion: verification query failed collection=%s video_id=%s chroma_path=%s",
+            collection, video_id, chroma_path,
+        )
 

@@ -127,10 +127,50 @@ class RagAgentService:
             filters={"collection": collection},
         )
 
+        result_count = len(results)
         logger.info(
             "RAG retrieval done: collection=%s top_k=%s result_count=%s",
-            collection, top_k, len(results),
+            collection, top_k, result_count,
         )
+
+        # 零结果诊断：直接查询 Chroma 确认该 collection 下是否有数据
+        if result_count == 0:
+            logger.warning(
+                "RAG retrieval ZERO results: collection=%s top_k=%s "
+                "chroma_path=%s → Running direct Chroma probe...",
+                collection, top_k,
+                getattr(settings.vector_store, "persist_path", "N/A"),
+            )
+            try:
+                from modular_rag.libs.vector_store.chroma_store import ChromaStore
+                store = ChromaStore.from_settings(settings.vector_store)
+                probe_results = store.get_by_metadata({"collection": collection}, limit=5)
+                total_stats = store.get_collection_stats()
+                if probe_results:
+                    sample_meta = probe_results[0].metadata or {}
+                    logger.warning(
+                        "RAG ZERO-RESULT DIAG: collection=%s chroma_has_data=YES "
+                        "probe_count=%d total_chunks=%s sample_meta_keys=%s "
+                        "→ Data EXISTS but retrieval filter didn't match! "
+                        "Check filter normalization.",
+                        collection, len(probe_results),
+                        total_stats.get("chunk_count", -1),
+                        list(sample_meta.keys()),
+                    )
+                else:
+                    logger.error(
+                        "RAG ZERO-RESULT DIAG: collection=%s chroma_has_data=NO "
+                        "probe_count=0 total_chunks=%s chroma_path=%s "
+                        "→ No data in Chroma for this collection! "
+                        "Vectors were never written or written to a different path.",
+                        collection, total_stats.get("chunk_count", -1),
+                        getattr(settings.vector_store, "persist_path", "N/A"),
+                    )
+            except Exception:
+                logger.exception(
+                    "RAG ZERO-RESULT DIAG: Chroma probe failed for collection=%s",
+                    collection,
+                )
 
         fallback_reason: str | None = None
         if rerank and results:
