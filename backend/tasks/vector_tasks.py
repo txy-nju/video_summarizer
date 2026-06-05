@@ -96,7 +96,7 @@ def async_embed_transcript_chunks_background(self, video_id: str, trace_id: str 
             "async_embed_transcript_chunks_background failed for video_id=%s trace_id=%s",
             video_id, trace_id,
         )
-        if self.is_last_attempt:
+        if self.request.retries >= self.max_retries:
             logger.critical(
                 "async_embed_transcript_chunks_background: retries exhausted for video_id=%s trace_id=%s",
                 video_id, trace_id,

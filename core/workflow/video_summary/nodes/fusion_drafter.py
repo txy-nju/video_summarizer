@@ -44,7 +44,7 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
     # 2. 构造 System Prompt（聚合输入 -> 最终成文）
     system_prompt = (
         "你是一个顶级的视频内容编辑与深度报告撰写专家。\n"
-        "你的输入是按时间片聚合后的多模态证据（Chunk Aggregated Insights）。"
+        "你的输入是按时间片聚合后的多模态证据。"
         "你的任务是基于这些证据生成一份高质量、连贯且逻辑自洽的视频总结报告。\n\n"
         "【架构级约束指令】：\n"
         "1. 🔗 证据优先：仅允许使用输入证据中的信息，不得补造事实。\n"
