@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, insert, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.orm import Session
 
-from backend.models.database import KnowledgeBase, VideoResource, kb_video_relation_table
+from backend.models.database import KnowledgeBase, VideoResource, VideoSummaryTask, kb_video_relation_table
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,7 +100,7 @@ class KnowledgeBaseRepository:
         self._session.refresh(row)
         return self._to_record(row)
 
-    def delete_by_owner_and_id(self, owner_id: str, kbid: str) -> bool:
+    def delete_by_owner_and_id(self, owner_id: str, kbid: str) -> dict[str, int] | bool:
         row = (
             self._session.query(KnowledgeBase)
             .filter(KnowledgeBase.owner_id == owner_id, KnowledgeBase.kbid == kbid)
@@ -108,24 +108,48 @@ class KnowledgeBaseRepository:
         )
         if row is None:
             return False
-            
-        from backend.models.database import GlobalChatSession, GlobalQARecord, VideoSummaryTask, VideoQARecord
-        
+
+        from backend.models.database import GlobalChatSession, GlobalQARecord, VideoQARecord
+
         # 1. Cascade delete global chats and their QA records
         chat_ids = [c.chat_id for c in self._session.query(GlobalChatSession.chat_id).filter(GlobalChatSession.kbid == kbid).all()]
         if chat_ids:
             self._session.query(GlobalQARecord).filter(GlobalQARecord.chat_id.in_(chat_ids)).delete(synchronize_session=False)
             self._session.query(GlobalChatSession).filter(GlobalChatSession.kbid == kbid).delete(synchronize_session=False)
-            
-        # 2. Cascade delete tasks and their QA records
+
+        # 2. Collect video task counts BEFORE cascade delete (for ref counting)
+        video_counts: dict[str, int] = {}
+        count_rows = (
+            self._session.query(
+                VideoSummaryTask.video_id,
+                func.count(VideoSummaryTask.task_id),
+            )
+            .filter(VideoSummaryTask.kbid == kbid)
+            .group_by(VideoSummaryTask.video_id)
+            .all()
+        )
+        video_counts = {str(row[0]): int(row[1]) for row in count_rows}
+
+        # 3. Cascade delete tasks and their QA records
         task_ids = [t.task_id for t in self._session.query(VideoSummaryTask.task_id).filter(VideoSummaryTask.kbid == kbid).all()]
         if task_ids:
             self._session.query(VideoQARecord).filter(VideoQARecord.task_id.in_(task_ids)).delete(synchronize_session=False)
             self._session.query(VideoSummaryTask).filter(VideoSummaryTask.kbid == kbid).delete(synchronize_session=False)
 
         self._session.delete(row)
+
+        # 4. Bulk-decrement ref counts for affected videos
+        if video_counts:
+            for video_id, cnt in video_counts.items():
+                self._session.query(VideoResource).filter(
+                    VideoResource.video_id == video_id,
+                ).update(
+                    {VideoResource.task_ref_count: VideoResource.task_ref_count - cnt},
+                    synchronize_session=False,
+                )
+
         self._session.commit()
-        return True
+        return video_counts
 
     @staticmethod
     def _to_record(entity: KnowledgeBase) -> KnowledgeBaseRecord:

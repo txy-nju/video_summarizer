@@ -58,6 +58,14 @@ class VideoSummaryTaskService:
             video_id=payload.video_id,
             user_initial_preference=payload.user_initial_preference,
         )
+        # Increment reference count on the video
+        try:
+            self._video_repository.increment_ref_count(payload.video_id)
+        except Exception:
+            logger.exception(
+                "Failed to increment ref_count for video_id=%s after task creation",
+                payload.video_id,
+            )
         return self._to_view(record)
 
     def list_video_summary_tasks(self, *, owner_id: str, page: int, page_size: int) -> tuple[list[VideoSummaryTaskView], dict]:
@@ -100,8 +108,44 @@ class VideoSummaryTaskService:
             return None
         return self._to_view(record)
 
+    def list_tasks_by_video_id(self, *, owner_id: str, video_id: str) -> list[VideoSummaryTaskView]:
+        """List all summary tasks that reference a specific video."""
+        records = self._repository.list_by_video_id(owner_id, video_id)
+        return [self._to_view(record) for record in records]
+
     def delete_video_summary_task(self, *, owner_id: str, task_id: str) -> bool:
-        return self._repository.delete_by_owner_and_id(owner_id, task_id)
+        # Collect task info before deletion (for ref counting + GC)
+        task = self._repository.get_by_owner_and_id(owner_id, task_id)
+        if task is None:
+            return False
+
+        video_id = task.video_id
+        # Collect linked KB ids before deletion for GC vector cleanup
+        linked_kbids: list[str] = []
+        try:
+            linked_kbids = self._video_repository.get_linked_kb_ids_for_video(video_id)
+        except Exception:
+            logger.exception(
+                "Failed to collect linked_kbids for video_id=%s before task deletion",
+                video_id,
+            )
+
+        deleted = self._repository.delete_by_owner_and_id(owner_id, task_id)
+        if not deleted:
+            return False
+
+        # Decrement ref count and check GC eligibility
+        try:
+            new_count = self._video_repository.decrement_ref_count(video_id)
+            if new_count == 0:
+                self._trigger_garbage_collection(video_id=video_id, linked_kbids=linked_kbids)
+        except Exception:
+            logger.exception(
+                "Failed to decrement ref_count / dispatch GC for video_id=%s",
+                video_id,
+            )
+
+        return True
 
     def transition_workflow_state(
         self,
@@ -354,6 +398,21 @@ class VideoSummaryTaskService:
             "accepted_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "message": "Phase-2 finalization workflow dispatched",
         }
+
+    def _trigger_garbage_collection(self, *, video_id: str, linked_kbids: list[str]) -> None:
+        """Dispatch async GC when a video's task_ref_count drops to zero."""
+        try:
+            from backend.tasks.video_cleanup_tasks import async_garbage_collect_video
+
+            async_garbage_collect_video.delay(video_id, linked_kbids)
+            logger.info(
+                "Dispatched GC for video_id=%s (ref_count=0, kbids=%s)",
+                video_id, linked_kbids,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to dispatch GC for video_id=%s", video_id,
+            )
 
     def _to_view(self, record: VideoSummaryTaskRecord) -> VideoSummaryTaskView:
         payload = asdict(record)

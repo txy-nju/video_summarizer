@@ -25,6 +25,8 @@ class VideoResourceRecord:
     frame_extraction_status: str
     keyframes_oss_prefix: str | None
     extract_completed_at: datetime | None
+    file_hash: str | None
+    task_ref_count: int
     is_deleted: bool
     deleted_at: datetime | None
     deletion_status: str
@@ -230,13 +232,111 @@ class VideoResourceRepository:
         self._session.commit()
 
     def physical_delete(self, video_id: str) -> None:
-        """Physical delete after all external resources are cleaned up."""
+        """Physical delete after all external resources are cleaned up.
+
+        Guard: only proceed if no VideoSummaryTask rows still reference this video.
+        """
+        from backend.models.database import VideoSummaryTask
+
+        task_count = (
+            self._session.query(VideoSummaryTask)
+            .filter(VideoSummaryTask.video_id == video_id)
+            .count()
+        )
+        if task_count > 0:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "physical_delete aborted for video_id=%s: %d tasks still reference it",
+                video_id, task_count,
+            )
+            return
+
         row = self._session.query(VideoResource).filter(
             VideoResource.video_id == video_id,
         ).one_or_none()
         if row is not None:
             self._session.delete(row)
             self._session.commit()
+
+    # -------------------------------------------------------------------------
+    # Hash-based dedup methods
+    # -------------------------------------------------------------------------
+
+    def get_by_owner_and_hash(self, owner_id: str, file_hash: str) -> VideoResourceRecord | None:
+        """Find a non-deleted video by owner + file hash (dedup lookup)."""
+        query = self._session.query(VideoResource).filter(
+            VideoResource.owner_id == owner_id,
+            VideoResource.file_hash == file_hash,
+        )
+        if hasattr(VideoResource, "is_deleted"):
+            query = query.filter(VideoResource.is_deleted.is_(False))
+
+        row = query.one_or_none()
+        if row is None:
+            return None
+        return self._to_record(row)
+
+    def set_file_hash(self, video_id: str, file_hash: str) -> None:
+        """Write SHA256 hash on a VideoResource record (system-only)."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is not None:
+            row.file_hash = file_hash
+            self._session.commit()
+
+    # -------------------------------------------------------------------------
+    # Reference counting
+    # -------------------------------------------------------------------------
+
+    def increment_ref_count(self, video_id: str) -> int:
+        """Atomically increment task_ref_count. Returns new value."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return 0
+        row.task_ref_count = (row.task_ref_count or 0) + 1
+        self._session.commit()
+        return row.task_ref_count
+
+    def decrement_ref_count(self, video_id: str) -> int:
+        """Atomically decrement task_ref_count (floor 0). Returns new value."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return 0
+        if row.task_ref_count is not None and row.task_ref_count > 0:
+            row.task_ref_count -= 1
+        self._session.commit()
+        self._session.refresh(row)
+        return row.task_ref_count or 0
+
+    def decrement_ref_count_bulk(self, video_id_counts: dict[str, int]) -> None:
+        """Bulk-decrement ref counts (used during KB cascade deletion).
+
+        Args:
+            video_id_counts: dict mapping video_id -> number of tasks being deleted.
+        """
+        for video_id, count in video_id_counts.items():
+            self._session.query(VideoResource).filter(
+                VideoResource.video_id == video_id,
+            ).update(
+                {VideoResource.task_ref_count: VideoResource.task_ref_count - count},
+                synchronize_session=False,
+            )
+        self._session.commit()
+
+    def get_ref_count(self, video_id: str) -> int:
+        """Read current task_ref_count for a video."""
+        row = self._session.query(VideoResource).filter(
+            VideoResource.video_id == video_id,
+        ).one_or_none()
+        if row is None:
+            return 0
+        return row.task_ref_count or 0
 
     @staticmethod
     def _to_record(entity: VideoResource) -> VideoResourceRecord:
@@ -255,6 +355,8 @@ class VideoResourceRepository:
             frame_extraction_status=str(entity.frame_extraction_status.value if hasattr(entity.frame_extraction_status, "value") else entity.frame_extraction_status),
             keyframes_oss_prefix=entity.keyframes_oss_prefix,
             extract_completed_at=entity.extract_completed_at,
+            file_hash=getattr(entity, "file_hash", None),
+            task_ref_count=int(getattr(entity, "task_ref_count", 0) or 0),
             is_deleted=bool(getattr(entity, "is_deleted", False)),
             deleted_at=getattr(entity, "deleted_at", None),
             deletion_status=str(getattr(entity, "deletion_status", "NONE")),

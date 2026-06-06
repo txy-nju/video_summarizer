@@ -60,6 +60,22 @@ class VideoSummaryTaskRepository:
         ).order_by(VideoSummaryTask.created_at.desc()).all()
         return [self._to_record(row, owner_id=owner_id) for row in rows]
 
+    def list_by_video_id(self, owner_id: str, video_id: str) -> list[VideoSummaryTaskRecord]:
+        """List all tasks that reference a specific video (owner-scoped)."""
+        rows = (
+            self._session.query(VideoSummaryTask)
+            .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
+            .join(VideoResource, VideoSummaryTask.video_id == VideoResource.video_id)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                VideoResource.owner_id == owner_id,
+                VideoSummaryTask.video_id == video_id,
+            )
+            .order_by(VideoSummaryTask.created_at.desc())
+            .all()
+        )
+        return [self._to_record(row, owner_id=owner_id) for row in rows]
+
     def get_by_owner_and_id(self, owner_id: str, task_id: str) -> VideoSummaryTaskRecord | None:
         row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
         if row is None:

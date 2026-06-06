@@ -44,6 +44,8 @@ class VideoResourceView(BaseModel):
     frame_extraction_status: VideoExtractStatus = "UPLOADED"
     keyframes_oss_prefix: str | None = None
     extract_completed_at: datetime | None = None
+    file_hash: str | None = None
+    task_ref_count: int = 0
     created_at: datetime
 
 

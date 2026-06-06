@@ -67,6 +67,51 @@ def _cleanup_video_from_kb_vectors(video_id: str, linked_kbids: list[str]) -> No
         )
 
 
+def _cleanup_per_video_vectors(video_id: str) -> None:
+    """删除 per-video Chroma physical collection + BM25 索引目录。
+
+    Shared by async_cascade_delete_video and async_garbage_collect_video.
+    幂等：重复调用不产生额外副作用。
+    """
+    try:
+        from pathlib import Path
+        from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+
+        collection = f"video_{video_id}"
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+
+        # 删除 Chroma physical collection
+        store = ChromaStore.from_settings(settings.vector_store)
+        try:
+            store._client.delete_collection(name=collection)
+            logger.info(
+                "_cleanup_per_video_vectors: deleted Chroma collection=%s for video_id=%s",
+                collection, video_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "_cleanup_per_video_vectors: failed to delete Chroma collection=%s for video_id=%s: %s",
+                collection, video_id, exc,
+            )
+
+        # 删除 BM25 索引目录
+        import shutil
+        bm25_dir_path = Path(bm25_dir)
+        if bm25_dir_path.exists():
+            shutil.rmtree(bm25_dir_path)
+            logger.info(
+                "_cleanup_per_video_vectors: deleted BM25 index dir=%s for video_id=%s",
+                bm25_dir, video_id,
+            )
+    except Exception as exc:
+        logger.warning(
+            "_cleanup_per_video_vectors: error for video_id=%s: %s",
+            video_id, exc,
+        )
+
+
 def _create_video_resource_service():
     """工厂：为每次任务调用创建独立 DB session + service 实例。"""
     from backend.db.session import SessionLocal
@@ -118,43 +163,7 @@ def async_cascade_delete_video(self, video_id: str, linked_kbids: list[str] | No
             _cleanup_video_from_kb_vectors(video_id, linked_kbids)
 
         # 3. 向量库清理：删除 per-video Chroma physical collection + BM25 索引目录
-        try:
-            from pathlib import Path
-            from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
-            from modular_rag.libs.vector_store.chroma_store import ChromaStore
-
-            collection = f"video_{video_id}"
-            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
-            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
-
-            # 删除 Chroma physical collection
-            store = ChromaStore.from_settings(settings.vector_store)
-            try:
-                store._client.delete_collection(name=collection)
-                logger.info(
-                    "async_cascade_delete_video: deleted Chroma collection=%s for video_id=%s",
-                    collection, video_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "async_cascade_delete_video: failed to delete Chroma collection=%s for video_id=%s: %s",
-                    collection, video_id, exc,
-                )
-
-            # 删除 BM25 索引目录
-            import shutil
-            bm25_dir_path = Path(bm25_dir)
-            if bm25_dir_path.exists():
-                shutil.rmtree(bm25_dir_path)
-                logger.info(
-                    "async_cascade_delete_video: deleted BM25 index dir=%s for video_id=%s",
-                    bm25_dir, video_id,
-                )
-        except Exception as exc:
-            logger.warning(
-                "async_cascade_delete_video: vector cleanup error for video_id=%s: %s",
-                video_id, exc,
-            )
+        _cleanup_per_video_vectors(video_id)
 
         # 4. 数据库物理删除
         service.purge_video(video_id=video_id)
@@ -168,6 +177,96 @@ def async_cascade_delete_video(self, video_id: str, linked_kbids: list[str] | No
         if self.is_last_attempt:
             logger.critical(
                 "async_cascade_delete_video: retries exhausted for video_id=%s", video_id,
+            )
+            try:
+                fail_service, fail_db = _create_video_resource_service()
+                fail_service.mark_deletion_failed(video_id=video_id)
+                fail_db.close()
+            except Exception:
+                pass
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
+    finally:
+        db.close()
+
+
+@celery_app.task(
+    bind=True,
+    name="backend.tasks.video_cleanup_tasks.async_garbage_collect_video",
+    max_retries=3,
+    default_retry_delay=60,
+    acks_late=True,
+    task_soft_time_limit=300,
+    task_time_limit=600,
+)
+def async_garbage_collect_video(self, video_id: str, linked_kbids: list[str] | None = None) -> dict:
+    """
+    Garbage-collect a video when its task_ref_count drops to zero.
+
+    Triggered automatically by:
+    - VideoSummaryTaskService.delete_video_summary_task (single task deletion)
+    - KnowledgeBaseService.delete_knowledge_base (KB cascade deletion)
+
+    Guards:
+    - Re-reads ref_count; aborts if > 0 (race: new task created during dispatch delay).
+    - Checks deletion_status; aborts if already in manual deletion flow.
+
+    幂等：重复调用不产生额外副作用。
+    """
+    service, db = _create_video_resource_service()
+    try:
+        video = service.get_video_resource_for_system(video_id=video_id)
+        if video is None:
+            logger.info("async_garbage_collect_video: video_id=%s already gone", video_id)
+            return {"video_id": video_id, "status": "NOT_FOUND"}
+
+        # Guard 1: ref_count must be zero
+        ref_count = video.task_ref_count or 0
+        if ref_count > 0:
+            logger.info(
+                "async_garbage_collect_video: video_id=%s ref_count=%d > 0, aborting",
+                video_id, ref_count,
+            )
+            return {"video_id": video_id, "status": "ABORTED_REF_COUNT_NONZERO", "ref_count": ref_count}
+
+        # Guard 2: don't interfere with manual deletion flow
+        deletion_status = getattr(video, "deletion_status", "NONE") or "NONE"
+        if deletion_status not in ("NONE", ""):
+            logger.info(
+                "async_garbage_collect_video: video_id=%s already in deletion flow (%s), aborting",
+                video_id, deletion_status,
+            )
+            return {"video_id": video_id, "status": "ABORTED_DELETION_IN_PROGRESS"}
+
+        # Mark as DELETING
+        service.mark_deletion_in_progress(video_id=video_id)
+
+        # 1. Local storage cleanup
+        storage_client = get_object_storage_client()
+        if video.oss_key:
+            storage_client.delete_object(video.oss_key)
+        keyframes_oss_prefix = getattr(video, "keyframes_oss_prefix", None)
+        if keyframes_oss_prefix:
+            storage_client.delete_prefix(keyframes_oss_prefix)
+
+        # 2. Per-KB vector cleanup
+        kbids = linked_kbids or []
+        if kbids:
+            _cleanup_video_from_kb_vectors(video_id, kbids)
+
+        # 3. Per-video Chroma + BM25 cleanup
+        _cleanup_per_video_vectors(video_id)
+
+        # 4. Database physical delete
+        service.purge_video(video_id=video_id)
+
+        logger.info("async_garbage_collect_video: video_id=%s garbage collected", video_id)
+        return {"video_id": video_id, "status": "COLLECTED"}
+
+    except Exception as exc:
+        logger.exception("async_garbage_collect_video failed for video_id=%s", video_id)
+        if self.is_last_attempt:
+            logger.critical(
+                "async_garbage_collect_video: retries exhausted for video_id=%s", video_id,
             )
             try:
                 fail_service, fail_db = _create_video_resource_service()

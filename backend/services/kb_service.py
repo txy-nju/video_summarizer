@@ -76,14 +76,40 @@ class KnowledgeBaseService:
         record = self._repository.get_by_owner_and_id(owner_id, kbid)
         collection_name = (record.vector_collection_name or f"kb_{kbid}") if record else None
         # Cascade delete of kb_video_relations is handled by database ON DELETE CASCADE
-        deleted = self._repository.delete_by_owner_and_id(owner_id, kbid)
-        if deleted and collection_name:
+        result = self._repository.delete_by_owner_and_id(owner_id, kbid)
+        if not result:
+            return False
+
+        # Dispatch async vector purge
+        if collection_name:
             from backend.tasks.global_retrieval_tasks import async_purge_vector_collection
             async_purge_vector_collection.apply_async(
                 args=[collection_name, kbid],
                 queue="low_priority",
             )
-        return deleted
+
+        # Check for GC-eligible videos (those whose ref_count dropped to 0)
+        video_counts: dict[str, int] = result if isinstance(result, dict) else {}
+        if video_counts:
+            from backend.tasks.video_cleanup_tasks import async_garbage_collect_video
+            import logging
+            _logger = logging.getLogger(__name__)
+            for video_id, cnt in video_counts.items():
+                try:
+                    new_count = self._video_repository.get_ref_count(video_id)
+                    if new_count <= 0:
+                        linked_kbids = self._video_repository.get_linked_kb_ids_for_video(video_id)
+                        async_garbage_collect_video.delay(video_id, linked_kbids)
+                        _logger.info(
+                            "KB cascade: dispatched GC for video_id=%s (ref_count=%d, kbids=%s)",
+                            video_id, new_count, linked_kbids,
+                        )
+                except Exception:
+                    _logger.exception(
+                        "KB cascade: failed to check GC for video_id=%s", video_id,
+                    )
+
+        return True
 
     def add_video_to_knowledge_base(self, *, owner_id: str, kbid: str, video_id: str) -> bool:
         kb = self._repository.get_by_owner_and_id(owner_id, kbid)

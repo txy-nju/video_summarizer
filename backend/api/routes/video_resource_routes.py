@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
-from backend.dependencies import get_video_resource_service
+from backend.dependencies import get_video_resource_service, get_video_summary_task_service
 from backend.schemas.common import MetaInfo, PaginationInfo
 from backend.schemas.video_resource import (
     VideoResourceCreateRequest,
@@ -15,7 +15,9 @@ from backend.schemas.video_resource import (
     VideoResourceResponse,
     VideoResourceUpdateRequest,
 )
+from backend.schemas.video_summary_task import VideoSummaryTaskListResponse
 from backend.services.video_resource_service import VideoResourceService
+from backend.services.video_summary_task_service import VideoSummaryTaskService
 
 
 router = APIRouter(prefix="/api/v1/videos", tags=["video-resources"])
@@ -95,6 +97,42 @@ async def update_video_resource(
     if video is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
     return VideoResourceResponse(data=video, meta=_build_meta(request))
+
+
+@router.get("/{video_id}/tasks", response_model=VideoSummaryTaskListResponse)
+async def list_tasks_by_video(
+    video_id: str,
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    current_user: UserView = Depends(get_current_user),
+    video_service: VideoResourceService = Depends(get_video_resource_service),
+    task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
+):
+    """查询指定视频关联的所有摘要任务。"""
+    video = video_service.get_video_resource(owner_id=current_user.user_id, video_id=video_id)
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
+
+    from backend.api.pagination import build_pagination, normalize_page_size
+
+    tasks = task_service.list_tasks_by_video_id(owner_id=current_user.user_id, video_id=video_id)
+    normalized_page_size = normalize_page_size(page_size)
+    start_index = max(page - 1, 0) * normalized_page_size
+    end_index = start_index + normalized_page_size
+    page_items = tasks[start_index:end_index]
+
+    pagination = build_pagination(
+        page=page,
+        page_size=normalized_page_size,
+        total=len(tasks),
+        next_cursor=None,
+    )
+    return VideoSummaryTaskListResponse(
+        data=page_items,
+        pagination=PaginationInfo.model_validate(pagination),
+        meta=_build_meta(request),
+    )
 
 
 @router.delete("/{video_id}", response_model=VideoResourceDeleteResponse, status_code=status.HTTP_202_ACCEPTED)

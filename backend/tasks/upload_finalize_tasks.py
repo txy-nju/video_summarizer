@@ -65,6 +65,27 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
             file_name = result.get("file_name", "")
             merged_path = result.get("merged_path", "")
 
+            # Step 0: Compute SHA256 hash of merged file for dedup
+            file_hash = _compute_sha256(merged_path)
+
+            # Step 0.5: Dedup check — reuse existing video if same hash exists
+            existing_video_id = _find_existing_by_hash(owner_id=owner_id, file_hash=file_hash)
+            if existing_video_id is not None:
+                logger.info(
+                    "Hash dedup: reusing existing video_id=%s for hash=%s, skipping file storage",
+                    existing_video_id, file_hash[:16],
+                )
+                _ensure_file_hash(existing_video_id, file_hash)
+                _cleanup_upload_session(upload_id)
+                existing_oss_key = _get_existing_oss_key(existing_video_id)
+                return {
+                    "upload_id": upload_id,
+                    "video_id": existing_video_id,
+                    "status": "DEDUP_REUSED",
+                    "oss_key": existing_oss_key,
+                    "trace_id": trace_id,
+                }
+
             # Step 1: 创建或复用 VideoResource 记录（幂等）
             video_id = _create_video_resource(
                 owner_id=owner_id,
@@ -75,7 +96,10 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
                 logger.error("async_finalize_upload: failed to create video_resource for upload_id=%s", upload_id)
                 return {"upload_id": upload_id, "status": "FAILED", "error": "Failed to create video_resource"}
 
-            # Step 2: 上传合并文件到对象存储（覆盖写，幂等）
+            # Step 1.5: Write file_hash on the record
+            _set_video_resource_file_hash(video_id, file_hash)
+
+            # Step 2: 上传合并文件到本地存储（覆盖写，幂等）
             object_key = _build_video_object_key(
                 owner_id=owner_id, video_id=video_id, file_name=file_name, merged_path=merged_path
             )
@@ -86,14 +110,7 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
             _set_video_resource_oss_key(video_id=video_id, oss_key=stored_key)
 
             # Step 3: 清理分片文件
-            from backend.repositories.upload_repository import UploadRepository
-            import redis as redis_lib
-
-            import os
-            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
-            redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
-            UploadRepository(redis_client).cleanup_chunks(upload_id)
-            UploadRepository(redis_client).update_state(upload_id, "done")
+            _cleanup_upload_session(upload_id)
 
             # Step 4: 发布 VideoUploadedEvent
             _publish_video_uploaded_event(
@@ -101,8 +118,8 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
             )
 
             logger.info(
-                "async_finalize_upload completed: upload_id=%s, video_id=%s, oss_key=%s, trace_id=%s",
-                upload_id, video_id, stored_key, trace_id,
+                "async_finalize_upload completed: upload_id=%s, video_id=%s, oss_key=%s, trace_id=%s, hash=%s",
+                upload_id, video_id, stored_key, trace_id, file_hash[:16],
             )
             return {
                 "upload_id": upload_id,
@@ -224,6 +241,95 @@ def _set_video_resource_oss_key(*, video_id: str, oss_key: str) -> None:
         db.commit()
     finally:
         db.close()
+
+
+# ── Hash Dedup Helpers ──────────────────────────────────────────────────────────
+
+
+def _compute_sha256(file_path: str) -> str:
+    """Compute SHA-256 hex digest of a file (streaming, handles large files)."""
+    import hashlib
+    sha = hashlib.sha256()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def _find_existing_by_hash(*, owner_id: str, file_hash: str) -> str | None:
+    """Find a non-deleted video with the same hash for the same owner."""
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(VideoResource)
+            .filter(
+                VideoResource.owner_id == owner_id,
+                VideoResource.file_hash == file_hash,
+                VideoResource.is_deleted.is_(False),
+            )
+            .first()
+        )
+        return str(row.video_id) if row else None
+    finally:
+        db.close()
+
+
+def _set_video_resource_file_hash(video_id: str, file_hash: str) -> None:
+    """Write SHA256 hash on a VideoResource record."""
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
+
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row is not None:
+            row.file_hash = file_hash
+            db.commit()
+    finally:
+        db.close()
+
+
+def _ensure_file_hash(video_id: str, file_hash: str) -> None:
+    """Write file_hash only if currently NULL (belt-and-suspenders for dedup path)."""
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
+
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row is not None and not row.file_hash:
+            row.file_hash = file_hash
+            db.commit()
+    finally:
+        db.close()
+
+
+def _get_existing_oss_key(video_id: str) -> str:
+    """Read oss_key from an existing VideoResource record."""
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
+
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        return row.oss_key if row else ""
+    finally:
+        db.close()
+
+
+def _cleanup_upload_session(upload_id: str) -> None:
+    """Clean up Redis upload session chunks and mark as done."""
+    from backend.repositories.upload_repository import UploadRepository
+    import redis as redis_lib
+    import os
+
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
+    redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
+    UploadRepository(redis_client).cleanup_chunks(upload_id)
+    UploadRepository(redis_client).update_state(upload_id, "done")
 
 
 def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str, trace_id: str = "") -> None:

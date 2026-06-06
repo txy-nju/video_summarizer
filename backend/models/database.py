@@ -119,6 +119,7 @@ class VideoResource(Base):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     oss_key: Mapped[str | None] = mapped_column(String(512))
     duration: Mapped[int | None] = mapped_column()
+    file_hash: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
 
     full_transcript: Mapped[str | None] = mapped_column(Text)
     transcript_segments: Mapped[list | None] = mapped_column(JSONB, nullable=True)
@@ -145,6 +146,9 @@ class VideoResource(Base):
     # 自愈恢复追踪（Celery Beat 周期扫描使用，非 Celery 自身重试计数）
     recovery_attempts: Mapped[int] = mapped_column(default=0, nullable=False)
     last_recovery_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Hash-based dedup & reference counting
+    task_ref_count: Mapped[int] = mapped_column(default=0, nullable=False)
 
     @validates("transcript_vector_ids")
     def validate_transcript_vector_ids(self, key: str, value: dict | list | None) -> list[str] | None:
