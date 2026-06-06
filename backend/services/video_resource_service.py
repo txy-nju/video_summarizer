@@ -13,10 +13,10 @@ from backend.schemas.video_resource import KeyFrameItem, VideoResourceCreateRequ
 logger = logging.getLogger(__name__)
 
 
-def _dispatch_async_cascade_delete(video_id: str) -> None:
+def _dispatch_async_cascade_delete(video_id: str, linked_kbids: list[str] | None = None) -> None:
     from backend.tasks.video_cleanup_tasks import async_cascade_delete_video
 
-    async_cascade_delete_video.delay(video_id)
+    async_cascade_delete_video.delay(video_id, linked_kbids or [])
 
 
 def _dispatch_async_process_video(video_id: str, trace_id: str = "") -> None:
@@ -78,13 +78,15 @@ class VideoResourceService:
         return self._to_view(record)
 
     def delete_video_resource(self, *, owner_id: str, video_id: str) -> bool:
+        # 在断开 KB 关联前收集关联知识库列表，供异步任务清理 per-KB 向量
+        linked_kbids = self._repository.get_linked_kb_ids_for_video(video_id)
         deleted = self._repository.delete_by_owner_and_id(owner_id, video_id)
         if not deleted:
             return False
 
         # API 线程只做软删除受理；跨存储清理由异步任务执行。
         try:
-            _dispatch_async_cascade_delete(video_id)
+            _dispatch_async_cascade_delete(video_id, linked_kbids)
         except Exception as exc:
             logger.warning(
                 "Failed to dispatch async_cascade_delete_video for video_id=%s: %s",
