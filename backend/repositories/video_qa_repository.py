@@ -20,6 +20,7 @@ class VideoQARecordData:
     question_content: str
     answer_content: str | None
     attachments: str  # JSON 格式存储
+    cited_sources: str  # JSON 格式存储
     question_time: datetime
 
 
@@ -51,6 +52,7 @@ class VideoQARepository:
             question_content=question_content,
             answer_content=None,
             attachments=attachments,
+            cited_sources=[],
         )
         self._session.add(entity)
         self._session.commit()
@@ -81,7 +83,8 @@ class VideoQARepository:
         return self._to_record(row, owner_id=owner_id)
 
     def update_answer_by_owner_task_and_qa_id(
-        self, owner_id: str, task_id: str, qa_id: str, answer_content: str
+        self, owner_id: str, task_id: str, qa_id: str, answer_content: str,
+        cited_sources: list[dict] | None = None,
     ) -> VideoQARecordData | None:
         """更新问答的回答内容（重新生成场景）"""
         row = (
@@ -93,6 +96,8 @@ class VideoQARepository:
             return None
 
         row.answer_content = answer_content
+        if cited_sources is not None:
+            row.cited_sources = cited_sources
         self._session.commit()
         self._session.refresh(row)
         return self._to_record(row, owner_id=owner_id)
@@ -146,6 +151,7 @@ class VideoQARepository:
     def _to_record(entity: VideoQARecord, *, owner_id: str) -> VideoQARecordData:
         question_time = getattr(entity, "question_time", None) or datetime.now(UTC)
         attachments = entity.attachments or []
+        cited_sources = getattr(entity, "cited_sources", None) or []
         return VideoQARecordData(
             qa_id=str(entity.qa_id),
             task_id=str(entity.task_id),
@@ -155,5 +161,6 @@ class VideoQARepository:
             question_content=entity.question_content,
             answer_content=entity.answer_content,
             attachments=json.dumps(attachments),
+            cited_sources=json.dumps(cited_sources),
             question_time=question_time,
         )

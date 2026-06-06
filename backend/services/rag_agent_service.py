@@ -37,12 +37,18 @@ class RagAgentService:
         task_id: str,
         question_content: str,
         attachments: list[dict],
-    ) -> Iterator[str]:
-        """真实 LLM token 流：先检索再流式生成，token 到达即 yield。"""
+    ) -> tuple[list[dict], Iterator[str]]:
+        """返回 (cited_sources, token_gen)。
+
+        cited_sources 在检索完成后立即可用；token_gen 是真实 LLM token 流。
+        视频 QA 的 cited_sources 不包含 task_id（QA 本身归属于该任务会话）。
+        """
         collection = self._resolve_video_collection(task_id)
         context = self._build_retrieval_context(question_content, collection, top_k=5, rerank=True)
         context.frames.extend(self._download_attachment_frames(attachments))
-        yield from self._stream_from_context(question_content, context)
+        # 视频 QA：移除 task_id（QA 本身归属于该任务会话，无需冗余标注）
+        video_cited = [{k: v for k, v in s.items() if k != "task_id"} for s in context.cited_sources]
+        return video_cited, self._stream_from_context(question_content, context)
 
     # ── 全局 KB QA ─────────────────────────────────────────────────
 
@@ -63,6 +69,8 @@ class RagAgentService:
             top_k=int(cfg.get("top_k", 6)),
             rerank=bool(cfg.get("rerank", True)),
             extra_frames=self._download_attachment_frames(attachments),
+            is_kb=True,
+            kbid=kbid,
         )
 
     def stream_global_question(
@@ -84,14 +92,16 @@ class RagAgentService:
             question_content, collection,
             top_k=int(cfg.get("top_k", 6)),
             rerank=bool(cfg.get("rerank", True)),
+            is_kb=True,
+            kbid=kbid,
         )
         context.frames.extend(self._download_attachment_frames(attachments))
         return context.cited_sources, self._stream_from_context(question_content, context)
 
     # ── 核心非流式路径（answer_global_question 使用）─────────────────
 
-    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool, extra_frames: list[dict] | None = None) -> RagAgentAnswer:
-        context = self._build_retrieval_context(question, collection, top_k, rerank)
+    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool, extra_frames: list[dict] | None = None, is_kb: bool = False, kbid: str = "") -> RagAgentAnswer:
+        context = self._build_retrieval_context(question, collection, top_k, rerank, is_kb=is_kb, kbid=kbid)
         if extra_frames:
             context.frames.extend(extra_frames)
         answer_text = "".join(self._stream_from_context(question, context))
@@ -105,13 +115,26 @@ class RagAgentService:
         collection: str,
         top_k: int,
         rerank: bool,
+        is_kb: bool = False,
+        kbid: str = "",
     ) -> _RagContext:
         from modular_rag.core.query_engine.hybrid_search import HybridSearch
         from modular_rag.core.query_engine.reranker import Reranker
-        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
         from backend.infrastructure.keyframe_lookup import KeyframeLookup, load_keyframes_for_video
+        from pathlib import Path
 
-        settings = build_rag_settings()
+        if is_kb and kbid:
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+            filters = None  # 物理隔离：collection 即 Chroma physical collection，无需 metadata filter
+        else:
+            # 视频 QA 也使用 per-video 物理 Chroma collection + BM25 隔离
+            # collection 格式为 "video_{video_id}"，直接作为 Chroma physical collection 名
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+            filters = None  # 物理隔离，无需 metadata filter
+
         hybrid = HybridSearch(settings=settings)
 
         logger.info(
@@ -124,7 +147,7 @@ class RagAgentService:
         results = hybrid.search(
             query=question,
             top_k=top_k,
-            filters={"collection": collection},
+            filters=filters,
         )
 
         result_count = len(results)
@@ -209,11 +232,16 @@ class RagAgentService:
             meta = r.metadata or {}
             cited.append({
                 "video_id": str(meta.get("video_id", "")),
-                "task_id": meta.get("video_id"),
+                "task_id": None,   # 将在下面通过 DB 查询填充（KB 路径）
+                "video_name": None, # 将在下面通过 DB 查询填充（KB 路径）
                 "time_range": str(meta.get("time_range", "")),
                 "quote": r.text[:200],
                 "score": min(max(float(r.score), 0.0), 1.0),
             })
+
+        # ── KB 路径：通过 (kbid, video_id) 查询真实 task_id 和 video_name ───
+        if is_kb and kbid and cited:
+            _resolve_task_ids_from_db(cited, kbid)
 
         return _RagContext(
             results=results,
@@ -323,3 +351,48 @@ class RagAgentService:
             return kb.vector_collection_name if kb and kb.vector_collection_name else f"kb_{kbid}"
         finally:
             db.close()
+
+
+def _resolve_task_ids_from_db(cited: list[dict], kbid: str) -> None:
+    """通过 (kbid, video_id) 批量查询 VideoSummaryTask + VideoResource 获取
+    真实 task_id 和 video_name，回填到 cited_sources 中。
+
+    在 KB 检索路径中，向量元数据仅含 video_id，不含 task_id 或可读文件名。
+    此函数通过数据库反向查询找到对应信息。同一 video_id 只查询一次（批量去重）。
+    """
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoSummaryTask, VideoResource
+
+    unique_video_ids = list({item["video_id"] for item in cited if item.get("video_id")})
+    if not unique_video_ids:
+        return
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(
+                VideoSummaryTask.task_id,
+                VideoSummaryTask.video_id,
+                VideoResource.file_name,
+            )
+            .join(VideoResource, VideoSummaryTask.video_id == VideoResource.video_id)
+            .filter(
+                VideoSummaryTask.kbid == kbid,
+                VideoSummaryTask.video_id.in_(unique_video_ids),
+            )
+            .all()
+        )
+        # video_id → (task_id, video_name) 映射（同一 (kbid, video_id) 取第一个）
+        info_map: dict[str, tuple[str | None, str | None]] = {}
+        for task_id, video_id, file_name in rows:
+            if video_id not in info_map:
+                info_map[video_id] = (str(task_id), file_name)
+
+        for item in cited:
+            vid = item.get("video_id", "")
+            info = info_map.get(vid)
+            if info:
+                item["task_id"] = info[0]
+                item["video_name"] = info[1]
+    finally:
+        db.close()

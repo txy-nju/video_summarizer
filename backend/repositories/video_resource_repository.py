@@ -143,6 +143,16 @@ class VideoResourceRepository:
     # These bypass owner check and are for background workers only.
     # -------------------------------------------------------------------------
 
+    def get_linked_kb_ids_for_video(self, video_id: str) -> list[str]:
+        """查询视频关联的所有知识库 ID（用于删除前收集，以便异步清理 per-KB 向量）。
+
+        调用方必须在 delete_by_owner_and_id 之前调用，因为软删除会清空关联关系。
+        """
+        rows = self._session.query(kb_video_relation_table.c.kbid).filter(
+            kb_video_relation_table.c.video_id == video_id
+        ).all()
+        return [row[0] for row in rows]
+
     def get_by_id_system(self, video_id: str) -> VideoResourceRecord | None:
         """Bypass owner check; for background worker use only."""
         row = self._session.query(VideoResource).filter(

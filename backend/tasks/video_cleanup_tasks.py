@@ -20,6 +20,53 @@ from backend.tasks.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+def _cleanup_video_from_kb_vectors(video_id: str, linked_kbids: list[str]) -> None:
+    """从各知识库的 Chroma/BM25 中清理指定视频的残留 chunk。
+
+    幂等：重复调用不产生额外副作用。
+    """
+    try:
+        from backend.db.session import SessionLocal
+        from backend.repositories.kb_repository import KnowledgeBaseRepository
+        from backend.tasks.global_retrieval_tasks import (
+            _delete_video_chunks_from_collection,
+            _remove_bm25_entries_by_prefix,
+        )
+
+        db = SessionLocal()
+        try:
+            kb_repo = KnowledgeBaseRepository(db_session=db)
+            for kbid in linked_kbids:
+                try:
+                    kb = kb_repo.get_by_id_system(kbid)
+                    if kb is None:
+                        continue
+                    collection_name = kb.vector_collection_name or f"kb_{kbid}"
+                    chroma_del = _delete_video_chunks_from_collection(
+                        collection_name, video_id, kbid=kbid
+                    )
+                    bm25_del = _remove_bm25_entries_by_prefix(
+                        f"transcript://kb/{collection_name}/{video_id}", kbid=kbid
+                    )
+                    logger.info(
+                        "_cleanup_video_from_kb_vectors: kbid=%s collection=%s "
+                        "video_id=%s chroma_deleted=%d bm25_removed=%d",
+                        kbid, collection_name, video_id, chroma_del, bm25_del,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "_cleanup_video_from_kb_vectors: failed for kbid=%s video_id=%s: %s",
+                        kbid, video_id, exc,
+                    )
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning(
+            "_cleanup_video_from_kb_vectors: init error for video_id=%s: %s",
+            video_id, exc,
+        )
+
+
 def _create_video_resource_service():
     """工厂：为每次任务调用创建独立 DB session + service 实例。"""
     from backend.db.session import SessionLocal
@@ -40,11 +87,13 @@ def _create_video_resource_service():
     task_soft_time_limit=300,
     task_time_limit=600,
 )
-def async_cascade_delete_video(self, video_id: str) -> dict:
+def async_cascade_delete_video(self, video_id: str, linked_kbids: list[str] | None = None) -> dict:
     """
     异步级联清理视频跨存储资源，推进删除状态机。
     幂等：重复调用不产生额外副作用。
     仅由软删除接口触发（通过 VideoResourceService），禁止在请求线程内直接调用。
+
+    linked_kbids: 视频删除前关联的知识库 ID 列表，用于清理 per-KB Chroma/BM25 中的残留 chunk。
     """
     service, db = _create_video_resource_service()
     try:
@@ -65,16 +114,50 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
         if keyframes_oss_prefix:
             storage_client.delete_prefix(keyframes_oss_prefix)
 
-        # 2. 向量库清理（占位实现；步骤 7 后接入）
-        if video.transcript_vector_ids:
-            logger.info(
-                "async_cascade_delete_video: vector cleanup placeholder for video_id=%s, vector_ids=%s",
-                video_id,
-                video.transcript_vector_ids,
-            )
-            # TODO: vector_store.delete_vectors(video.transcript_vector_ids)
+        # 2. Per-KB 向量清理：从各知识库的 Chroma/BM25 中删除该视频的残留 chunk
+        if linked_kbids:
+            _cleanup_video_from_kb_vectors(video_id, linked_kbids)
 
-        # 3. 数据库物理删除
+        # 3. 向量库清理：删除 per-video Chroma physical collection + BM25 索引目录
+        try:
+            from pathlib import Path
+            from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
+            from modular_rag.libs.vector_store.chroma_store import ChromaStore
+
+            collection = f"video_{video_id}"
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+
+            # 删除 Chroma physical collection
+            store = ChromaStore.from_settings(settings.vector_store)
+            try:
+                store._client.delete_collection(name=collection)
+                logger.info(
+                    "async_cascade_delete_video: deleted Chroma collection=%s for video_id=%s",
+                    collection, video_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "async_cascade_delete_video: failed to delete Chroma collection=%s for video_id=%s: %s",
+                    collection, video_id, exc,
+                )
+
+            # 删除 BM25 索引目录
+            import shutil
+            bm25_dir_path = Path(bm25_dir)
+            if bm25_dir_path.exists():
+                shutil.rmtree(bm25_dir_path)
+                logger.info(
+                    "async_cascade_delete_video: deleted BM25 index dir=%s for video_id=%s",
+                    bm25_dir, video_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "async_cascade_delete_video: vector cleanup error for video_id=%s: %s",
+                video_id, exc,
+            )
+
+        # 4. 数据库物理删除
         service.purge_video(video_id=video_id)
 
         logger.info("async_cascade_delete_video: video_id=%s purged", video_id)

@@ -116,15 +116,25 @@ def _run_rag_ingestion_with_segments(
     segments: list[dict],
     collection: str,
     base_metadata: dict,
+    kbid: str = "",
 ) -> None:
     """基于 Whisper segments 进行时间戳感知摄取。
     每个 segment 生成独立 Document，metadata 携带 start_s/end_s/time_range。
+
+    kbid 不为空时使用 per-KB 的 Chroma 物理 collection 和 BM25 索引；
+    kbid 为空时使用 per-video 物理 collection 和 BM25 索引（视频 QA 路径）。
     """
-    from backend.infrastructure.rag_settings_factory import build_rag_settings
+    from pathlib import Path
+    from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
     from modular_rag.ingestion.pipeline import IngestionPipeline
     from modular_rag.libs.loader.transcript_text_loader import TranscriptTextLoader
 
-    settings = build_rag_settings()
+    if kbid:
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+    else:
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
     chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
     video_id = base_metadata.get("video_id", "unknown")
 
@@ -146,18 +156,27 @@ def _run_rag_ingestion_with_segments(
     pipeline = IngestionPipeline(settings=settings, loader=loader)
     pipeline.run_docs(docs=docs, collection=collection)
 
-    _verify_ingestion(collection, video_id, chroma_path)
+    _verify_ingestion(collection, video_id, chroma_path, kbid=kbid)
 
 
-def _run_rag_ingestion(text: str, collection: str, metadata: dict) -> None:
+def _run_rag_ingestion(text: str, collection: str, metadata: dict, kbid: str = "") -> None:
     """全文本摄取（无时间戳），用于 segments 缺失时的降级路径。
     同样被 global_retrieval_tasks.py 复用。
+
+    kbid 不为空时使用 per-KB 的 Chroma 物理 collection 和 BM25 索引；
+    kbid 为空时使用 per-video 物理 collection 和 BM25 索引（视频 QA 路径）。
     """
-    from backend.infrastructure.rag_settings_factory import build_rag_settings
+    from pathlib import Path
+    from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
     from modular_rag.ingestion.pipeline import IngestionPipeline
     from modular_rag.libs.loader.transcript_text_loader import TranscriptTextLoader
 
-    settings = build_rag_settings()
+    if kbid:
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+    else:
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
     chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
     video_id = metadata.get("video_id", "unknown")
 
@@ -179,58 +198,77 @@ def _run_rag_ingestion(text: str, collection: str, metadata: dict) -> None:
     pipeline = IngestionPipeline(settings=settings, loader=loader)
     pipeline.run_docs(docs=docs, collection=collection)
 
-    _verify_ingestion(collection, video_id, chroma_path)
+    _verify_ingestion(collection, video_id, chroma_path, kbid=kbid)
 
 
-def _is_collection_indexed(collection: str) -> bool:
-    """检查 Chroma 中是否已存在属于该逻辑 collection 的向量数据。
-    用 limit=1 仅探测首条记录，避免加载全量数据，开销极低。
+def _is_collection_indexed(collection: str, kbid: str = "") -> bool:
+    """检查 Chroma 中是否已存在该 collection 的向量数据。
+
+    视频 QA（kbid 为空）：直接检查 per-video 物理 Chroma collection 的 chunk 数。
+    KB QA（kbid 非空）：检查 per-KB 物理 Chroma collection 的 chunk 数。
     """
     try:
-        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        from pathlib import Path
+        from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
         from modular_rag.libs.vector_store.chroma_store import ChromaStore
-        settings = build_rag_settings()
+
+        if kbid:
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+        else:
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
         store = ChromaStore.from_settings(settings.vector_store)
-        results = store.get_by_metadata({"collection": collection}, limit=1)
-        return len(results) > 0
+        return store._collection.count() > 0
     except Exception:
         logger.exception("_is_collection_indexed: check failed for collection=%s, will re-ingest", collection)
         return False
 
 
-def _verify_ingestion(collection: str, video_id: str, chroma_path: str) -> None:
+def _verify_ingestion(collection: str, video_id: str, chroma_path: str, kbid: str = "") -> None:
     """验证向量数据是否已成功写入 Chroma。
 
-    摄取完成后立即查询 Chroma，确认对应 collection + video_id 的数据存在。
+    摄取完成后立即查询 Chroma，确认对应 collection 的数据存在。
+    视频 QA（kbid 为空）：检查 per-video 物理 Chroma collection。
+    KB QA（kbid 非空）：检查 per-KB 物理 Chroma collection。
     若查询结果为空，输出详细诊断信息帮助定位问题。
     """
     try:
-        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        from pathlib import Path
+        from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
         from modular_rag.libs.vector_store.chroma_store import ChromaStore
-        settings = build_rag_settings()
+
+        if kbid:
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+        else:
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
         actual_path = getattr(settings.vector_store, "persist_path", "N/A")
         store = ChromaStore.from_settings(settings.vector_store)
 
-        # 用 collection 过滤查询（与检索路径完全一致的过滤条件）
-        results = store.get_by_metadata({"collection": collection}, limit=5)
-        total_count = store.get_collection_stats().get("chunk_count", -1)
+        # 物理隔离下无需 metadata filter，直接 count + get
+        total = store._collection.count()
+        results_payload = store._collection.get(limit=5, include=["metadatas", "documents"])
+        result_ids = results_payload.get("ids", [])
+        metadatas = results_payload.get("metadatas", [])
 
-        if results:
-            sample_meta = results[0].metadata or {}
+        if result_ids:
+            sample_meta = metadatas[0] if metadatas else {}
             logger.info(
                 "_verify_ingestion: OK collection=%s video_id=%s "
-                "found_chunks=%d total_chroma_chunks=%s chroma_path=%s "
+                "found_chunks=%d total_chunks=%s chroma_path=%s "
                 "sample_chunk_id=%s sample_meta_keys=%s",
-                collection, video_id, len(results), total_count, actual_path,
-                results[0].id, list(sample_meta.keys()),
+                collection, video_id, len(result_ids), total, actual_path,
+                result_ids[0], list(sample_meta.keys()) if sample_meta else [],
             )
         else:
             logger.error(
                 "_verify_ingestion: FAILED collection=%s video_id=%s "
-                "found_chunks=0 total_chroma_chunks=%s chroma_path=%s "
+                "found_chunks=0 total_chunks=%s chroma_path=%s "
                 "→ Vectors may NOT be persisted! Check if Celery worker "
                 "and web server share the same chroma_path.",
-                collection, video_id, total_count, actual_path,
+                collection, video_id, total, actual_path,
             )
     except Exception:
         logger.exception(

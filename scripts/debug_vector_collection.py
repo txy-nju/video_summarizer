@@ -49,12 +49,18 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-def _build_chroma_store():
-    """按项目配置创建 ChromaStore 实例。"""
+def _build_chroma_store(collection: str = "default"):
+    """按项目配置创建 ChromaStore 实例。
+
+    collection: Chroma 物理 collection 名称。
+                KB QA 使用 kb_{kbid} 或 vector_collection_name，
+                视频 QA 使用 "default"。
+    """
     from backend.infrastructure.rag_settings_factory import build_rag_settings
     from modular_rag.libs.vector_store.chroma_store import ChromaStore
+    from modular_rag.libs.vector_store.base_vector_store import VectorStoreQueryResult
 
-    settings = build_rag_settings()
+    settings = build_rag_settings(collection=collection)
     store = ChromaStore.from_settings(settings.vector_store)
     return store, settings
 
@@ -229,19 +235,50 @@ def cmd_query_collection(collection: str, video_id: str | None = None,
 
 
 def cmd_find_by_video_id(video_id: str, limit: int = 50, full_text: bool = False):
-    """按视频 ID 查找：检查单视频 collection 和所有 KB collection。"""
+    """按视频 ID 查找：优先查 per-video 物理 collection，再查旧 "default" collection。"""
+    from modular_rag.libs.vector_store.base_vector_store import VectorStoreQueryResult
+
     store, settings = _build_chroma_store()
     chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
 
     single_collection = f"video_{video_id}"
+    all_results: list = []
+    seen_ids: set = set()
 
+    # 1. 优先查 per-video 物理 Chroma collection（新架构）
     try:
-        results = store.get_by_metadata({"video_id": video_id}, limit=limit)
+        per_video_store, _ = _build_chroma_store(collection=single_collection)
+        total = per_video_store._collection.count()
+        if total > 0:
+            payload = per_video_store._collection.get(
+                limit=limit, include=["documents", "metadatas"],
+            )
+            for rid, doc, meta in zip(
+                payload.get("ids", []),
+                payload.get("documents", []),
+                payload.get("metadatas", []),
+            ):
+                if rid not in seen_ids:
+                    seen_ids.add(rid)
+                    all_results.append(VectorStoreQueryResult(
+                        id=str(rid), score=0.0, text=doc or "",
+                        metadata=per_video_store._deserialize_metadata(meta or {}),
+                    ))
+            print(f"  [INFO] per-video physical collection '{single_collection}': {total} chunks")
     except Exception as exc:
-        print(f"查询失败: {exc}")
-        return
+        print(f"  [INFO] per-video physical collection '{single_collection}' not found: {exc}")
 
-    if not results:
+    # 2. 补充查旧 "default" collection（legacy 数据，用 metadata filter）
+    try:
+        legacy_results = store.get_by_metadata({"video_id": video_id}, limit=limit)
+        for r in legacy_results:
+            if r.id not in seen_ids:
+                seen_ids.add(r.id)
+                all_results.append(r)
+    except Exception as exc:
+        print(f"查询旧 default collection 失败: {exc}")
+
+    if not all_results:
         print("=" * 70)
         print(f"按 video_id={video_id} 查找")
         print("=" * 70)
@@ -252,7 +289,7 @@ def cmd_find_by_video_id(video_id: str, limit: int = 50, full_text: bool = False
         return
 
     by_collection: dict[str, list] = defaultdict(list)
-    for r in results:
+    for r in all_results:
         coll = (r.metadata or {}).get("collection", "(missing)")
         by_collection[coll].append(r)
 
@@ -260,7 +297,7 @@ def cmd_find_by_video_id(video_id: str, limit: int = 50, full_text: bool = False
     print(f"按 video_id={video_id} 查找")
     print("=" * 70)
     print(f"  Chroma persist_path: {chroma_path}")
-    print(f"  共找到 {len(results)} 条记录，分布在 {len(by_collection)} 个 collection:")
+    print(f"  共找到 {len(all_results)} 条记录，分布在 {len(by_collection)} 个 collection:")
     print()
 
     for coll, items in sorted(by_collection.items()):

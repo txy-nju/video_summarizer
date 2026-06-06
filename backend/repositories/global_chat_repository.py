@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from backend.models.database import GlobalChatSession
+from backend.models.database import GlobalChatSession, KnowledgeBase
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +45,8 @@ class GlobalChatRepository:
     def list_by_owner_and_kb(self, owner_id: str, kbid: str) -> list[GlobalChatSessionData]:
         rows = (
             self._session.query(GlobalChatSession)
-            .filter(GlobalChatSession.kbid == kbid)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(KnowledgeBase.owner_id == owner_id, GlobalChatSession.kbid == kbid)
             .order_by(GlobalChatSession.created_at.desc())
             .all()
         )
@@ -56,7 +57,12 @@ class GlobalChatRepository:
     ) -> GlobalChatSessionData | None:
         row = (
             self._session.query(GlobalChatSession)
-            .filter(GlobalChatSession.kbid == kbid, GlobalChatSession.chat_id == chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                GlobalChatSession.kbid == kbid,
+                GlobalChatSession.chat_id == chat_id,
+            )
             .one_or_none()
         )
         if row is None:
@@ -68,7 +74,12 @@ class GlobalChatRepository:
     ) -> GlobalChatSessionData | None:
         row = (
             self._session.query(GlobalChatSession)
-            .filter(GlobalChatSession.kbid == kbid, GlobalChatSession.chat_id == chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                GlobalChatSession.kbid == kbid,
+                GlobalChatSession.chat_id == chat_id,
+            )
             .one_or_none()
         )
         if row is None:
@@ -84,7 +95,12 @@ class GlobalChatRepository:
     ) -> bool:
         row = (
             self._session.query(GlobalChatSession)
-            .filter(GlobalChatSession.kbid == kbid, GlobalChatSession.chat_id == chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                GlobalChatSession.kbid == kbid,
+                GlobalChatSession.chat_id == chat_id,
+            )
             .one_or_none()
         )
         if row is None:

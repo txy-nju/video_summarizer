@@ -5,15 +5,7 @@ from datetime import datetime
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from backend.schemas.common import MetaInfo, PaginationInfo
-
-
-class AttachmentInfo(BaseModel):
-    """多模态附件元数据"""
-    name: str = Field(min_length=1, max_length=255)
-    oss_key: str = Field(min_length=1, max_length=1024)
-    mime_type: str = Field(min_length=1, max_length=100)
-    size_bytes: int = Field(ge=0)
-    presigned_url: str | None = None
+from backend.schemas.global_chat import AttachmentInfo, CitedSource
 
 
 class VideoQARecordCreateRequest(BaseModel):
@@ -58,6 +50,7 @@ class VideoQARecordView(BaseModel):
     question_content: str
     answer_content: str | None = None
     attachments: list[AttachmentInfo] = Field(default_factory=list)
+    cited_sources: list[CitedSource] = Field(default_factory=list)
     question_time: datetime
 
 

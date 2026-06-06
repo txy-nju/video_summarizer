@@ -59,6 +59,7 @@ class CitedSourceSchema(BaseModel):
 
     video_id: str
     task_id: str | None = None
+    video_name: str | None = None
     time_range: str
     quote: str
     score: float = Field(ge=0.0, le=1.0)
@@ -235,6 +236,7 @@ class VideoQARecord(Base):
     question_content: Mapped[str] = mapped_column(Text, nullable=False)
     answer_content: Mapped[str | None] = mapped_column(Text)
     attachments: Mapped[dict | list | None] = mapped_column(JSONB)
+    cited_sources: Mapped[dict | list | None] = mapped_column(JSONB)
     question_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     @validates("attachments")
@@ -242,6 +244,12 @@ class VideoQARecord(Base):
         if value is None:
             return None
         return _validate_model_list(value, AttachmentSchema, key)
+
+    @validates("cited_sources")
+    def validate_cited_sources(self, key: str, value: dict | list | None) -> list[dict] | None:
+        if value is None:
+            return None
+        return _validate_model_list(value, CitedSourceSchema, key)
 
 
 class GlobalChatSession(Base):
