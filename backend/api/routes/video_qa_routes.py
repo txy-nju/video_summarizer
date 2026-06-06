@@ -223,7 +223,7 @@ async def time_travel_qa_stream(
         if qa_record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
 
-        token_gen = service.stream_rag_for_video(
+        cited_sources, token_gen = service.stream_rag_for_video(
             owner_id=current_user.user_id,
             task_id=task_id,
             question_content=payload.question_content,
@@ -258,6 +258,7 @@ async def time_travel_qa_stream(
                     task_id=task_id,
                     qa_id=qa_record.qa_id,
                     answer_content=full_answer,
+                    cited_sources=cited_sources,
                 )
                 yield _sse_event(
                     "done",
@@ -265,6 +266,10 @@ async def time_travel_qa_stream(
                         "task_id": task_id,
                         "qa_id": qa_record.qa_id,
                         "answer_content": full_answer,
+                        "cited_sources": [
+                            s if isinstance(s, dict) else (s.model_dump() if hasattr(s, "model_dump") else s)
+                            for s in cited_sources
+                        ],
                         "timestamp": produced_at,
                     },
                 )
@@ -340,6 +345,7 @@ async def time_travel_qa_stream(
                     "task_id": task_id,
                     "qa_id": qa_record.qa_id,
                     "answer_content": answer,
+                    "cited_sources": [],
                     "timestamp": produced_at,
                 },
             )

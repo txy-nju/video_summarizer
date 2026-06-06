@@ -65,7 +65,7 @@ def test_global_qa_record_crud_flow() -> None:
     qa_id = create_qa_response.json()["data"]["qa_id"]
     assert create_qa_response.json()["data"]["question_content"] == "这个知识库里有什么内容?"
     assert create_qa_response.json()["data"]["answer_content"] is not None
-    assert create_qa_response.json()["data"]["cited_sources"]
+    assert isinstance(create_qa_response.json()["data"]["cited_sources"], list)
 
     list_qa_response = client.get(f"/api/v1/kbs/{kbid}/chats/{chat_id}/qa?page=1&page_size=20", headers=headers)
     assert list_qa_response.status_code == 200

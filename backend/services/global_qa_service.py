@@ -176,7 +176,23 @@ class GlobalQAService:
         if record is None:
             return None
 
-        return self._to_qa_view(record)
+        # 重新检索并生成新回答
+        rag_answer = self._rag_agent_service.answer_global_question(
+            owner_id=owner_id,
+            kbid=kbid,
+            question_content=record.question_content,
+            attachments=[],
+        )
+        updated = self._repository.update_answer_by_owner_chat_and_qa_id(
+            owner_id=owner_id,
+            chat_id=chat_id,
+            qa_id=qa_id,
+            answer_content=rag_answer.answer_content,
+            cited_sources=rag_answer.cited_sources,
+        )
+        if updated is None:
+            return self._to_qa_view(record)
+        return self._to_qa_view(updated)
 
     def delete_qa_record(
         self,

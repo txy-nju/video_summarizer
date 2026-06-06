@@ -53,20 +53,21 @@ class VideoQAService:
             attachments=attachments_data,
         )
         try:
-            answer = "".join(
-                self._rag_agent_service.stream_video_question(
-                    owner_id=owner_id,
-                    task_id=task_id,
-                    question_content=payload.question_content,
-                    attachments=attachments_data,
-                )
+            cited_sources, token_gen = self._rag_agent_service.stream_video_question(
+                owner_id=owner_id,
+                task_id=task_id,
+                question_content=payload.question_content,
+                attachments=attachments_data,
             )
+            answer = "".join(token_gen)
         except Exception:
             logger.exception("create_qa_record: RAG failed for task_id=%s", task_id)
             answer = ""
+            cited_sources = []
         if answer:
             updated = self._repository.update_answer_by_owner_task_and_qa_id(
-                owner_id, task_id, record.qa_id, answer
+                owner_id, task_id, record.qa_id, answer,
+                cited_sources=cited_sources,
             )
             if updated:
                 return self._to_view(updated)
@@ -131,21 +132,22 @@ class VideoQAService:
             return None
 
         try:
-            new_answer = "".join(
-                self._rag_agent_service.stream_video_question(
-                    owner_id=owner_id,
-                    task_id=task_id,
-                    question_content=record.question_content,
-                    attachments=[],
-                )
+            cited_sources, token_gen = self._rag_agent_service.stream_video_question(
+                owner_id=owner_id,
+                task_id=task_id,
+                question_content=record.question_content,
+                attachments=[],
             )
+            new_answer = "".join(token_gen)
         except Exception:
             logger.exception("update_qa_record: RAG failed for task_id=%s qa_id=%s", task_id, qa_id)
             new_answer = ""
+            cited_sources = []
 
         if new_answer:
             updated = self._repository.update_answer_by_owner_task_and_qa_id(
-                owner_id, task_id, qa_id, new_answer
+                owner_id, task_id, qa_id, new_answer,
+                cited_sources=cited_sources,
             )
             if updated:
                 return self._to_view(updated)
@@ -172,8 +174,11 @@ class VideoQAService:
         task_id: str,
         question_content: str,
         attachments: list[AttachmentInfo],
-    ) -> Iterator[str]:
-        """返回真实 LLM token 流，token 到达即可 yield 到 SSE。"""
+    ) -> tuple[list[dict], Iterator[str]]:
+        """返回 (cited_sources, token_gen)。
+
+        cited_sources 在检索完成后立即可用；token_gen 是真实 LLM token 流。
+        """
         return self._rag_agent_service.stream_video_question(
             owner_id=owner_id,
             task_id=task_id,
@@ -225,16 +230,19 @@ class VideoQAService:
         task_id: str,
         qa_id: str,
         answer_content: str,
+        cited_sources: list[dict] | None = None,
     ) -> None:
-        """流式结束后将完整答案写回数据库。"""
+        """流式结束后将完整答案和引用溯源写回数据库。"""
         self._repository.update_answer_by_owner_task_and_qa_id(
-            owner_id, task_id, qa_id, answer_content
+            owner_id, task_id, qa_id, answer_content,
+            cited_sources=cited_sources,
         )
 
     @staticmethod
     def _to_view(record) -> VideoQARecordView:
         """将 Repository 记录转换为视图"""
         from backend.infrastructure.storage.oss_client import get_object_storage_client
+        from backend.schemas.global_chat import CitedSource
         storage = get_object_storage_client()
         attachments = []
         try:
@@ -250,6 +258,14 @@ class VideoQAService:
         except (json.JSONDecodeError, TypeError, ValueError):
             pass
 
+        cited_sources = []
+        try:
+            if record.cited_sources:
+                cited_sources_data = json.loads(record.cited_sources)
+                cited_sources = [CitedSource(**s) for s in cited_sources_data]
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
         return VideoQARecordView(
             qa_id=record.qa_id,
             task_id=record.task_id,
@@ -258,6 +274,7 @@ class VideoQAService:
             question_content=record.question_content,
             answer_content=record.answer_content,
             attachments=attachments,
+            cited_sources=cited_sources,
             question_time=record.question_time,
         )
 
