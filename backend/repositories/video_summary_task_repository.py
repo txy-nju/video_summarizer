@@ -76,6 +76,40 @@ class VideoSummaryTaskRepository:
         )
         return [self._to_record(row, owner_id=owner_id) for row in rows]
 
+    def delete_by_video_id(self, owner_id: str, video_id: str) -> int:
+        """Cascade-delete all tasks (and their QA records) referencing a video.
+
+        Called by VideoResourceService during video deletion to ensure no
+        dangling task references block physical_delete.  Does NOT go through
+        VideoSummaryTaskService, so no GC is dispatched — the video deletion
+        flow handles all cleanup via async_cascade_delete_video.
+
+        Returns:
+            Number of tasks deleted.
+        """
+        from backend.models.database import VideoQARecord
+
+        rows = (
+            self._session.query(VideoSummaryTask)
+            .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
+            .join(VideoResource, VideoSummaryTask.video_id == VideoResource.video_id)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                VideoResource.owner_id == owner_id,
+                VideoSummaryTask.video_id == video_id,
+            )
+            .all()
+        )
+
+        for row in rows:
+            self._session.query(VideoQARecord).filter(
+                VideoQARecord.task_id == row.task_id
+            ).delete(synchronize_session=False)
+            self._session.delete(row)
+
+        self._session.commit()
+        return len(rows)
+
     def get_by_owner_and_id(self, owner_id: str, task_id: str) -> VideoSummaryTaskRecord | None:
         row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
         if row is None:

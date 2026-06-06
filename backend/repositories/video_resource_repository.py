@@ -69,7 +69,7 @@ class VideoResourceRepository:
         if hasattr(VideoResource, "is_deleted"):
             query = query.filter(VideoResource.is_deleted.is_(False))
 
-        rows = query.order_by(VideoResource.video_id.desc()).all()
+        rows = query.order_by(VideoResource.created_at.desc()).all()
         return [self._to_record(row) for row in rows]
 
     def get_by_owner_and_id(self, owner_id: str, video_id: str) -> VideoResourceRecord | None:

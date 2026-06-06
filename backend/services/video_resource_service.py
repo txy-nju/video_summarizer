@@ -80,6 +80,22 @@ class VideoResourceService:
     def delete_video_resource(self, *, owner_id: str, video_id: str) -> bool:
         # 在断开 KB 关联前收集关联知识库列表，供异步任务清理 per-KB 向量
         linked_kbids = self._repository.get_linked_kb_ids_for_video(video_id)
+
+        # Cascade-delete all tasks referencing this video before soft-deleting.
+        # Uses the same DB session so the deletes are visible to physical_delete.
+        # Bypasses VideoSummaryTaskService (no per-task GC dispatch) — the
+        # async_cascade_delete_video dispatched below handles all cleanup.
+        from backend.repositories.video_summary_task_repository import VideoSummaryTaskRepository
+
+        task_repo = VideoSummaryTaskRepository(self._repository._session)
+        deleted_tasks = task_repo.delete_by_video_id(owner_id, video_id)
+        if deleted_tasks > 0:
+            logger.info(
+                "Cascade-deleted %d task(s) referencing video_id=%s before video deletion",
+                deleted_tasks,
+                video_id,
+            )
+
         deleted = self._repository.delete_by_owner_and_id(owner_id, video_id)
         if not deleted:
             return False
