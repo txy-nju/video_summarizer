@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from backend.models.database import GlobalQARecord
+from backend.models.database import GlobalChatSession, GlobalQARecord, KnowledgeBase
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +52,9 @@ class GlobalQARepository:
     def list_by_owner_and_chat(self, owner_id: str, chat_id: str) -> list[GlobalQARecordData]:
         rows = (
             self._session.query(GlobalQARecord)
-            .filter(GlobalQARecord.chat_id == chat_id)
+            .join(GlobalChatSession, GlobalQARecord.chat_id == GlobalChatSession.chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(KnowledgeBase.owner_id == owner_id, GlobalQARecord.chat_id == chat_id)
             .order_by(GlobalQARecord.question_time.asc())
             .all()
         )
@@ -63,7 +65,13 @@ class GlobalQARepository:
     ) -> GlobalQARecordData | None:
         row = (
             self._session.query(GlobalQARecord)
-            .filter(GlobalQARecord.chat_id == chat_id, GlobalQARecord.qa_id == qa_id)
+            .join(GlobalChatSession, GlobalQARecord.chat_id == GlobalChatSession.chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                GlobalQARecord.chat_id == chat_id,
+                GlobalQARecord.qa_id == qa_id,
+            )
             .one_or_none()
         )
         if row is None:
@@ -80,7 +88,13 @@ class GlobalQARepository:
     ) -> GlobalQARecordData | None:
         row = (
             self._session.query(GlobalQARecord)
-            .filter(GlobalQARecord.chat_id == chat_id, GlobalQARecord.qa_id == qa_id)
+            .join(GlobalChatSession, GlobalQARecord.chat_id == GlobalChatSession.chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                GlobalQARecord.chat_id == chat_id,
+                GlobalQARecord.qa_id == qa_id,
+            )
             .one_or_none()
         )
         if row is None:
@@ -95,7 +109,13 @@ class GlobalQARepository:
     def delete_by_owner_chat_and_qa_id(self, owner_id: str, chat_id: str, qa_id: str) -> bool:
         row = (
             self._session.query(GlobalQARecord)
-            .filter(GlobalQARecord.chat_id == chat_id, GlobalQARecord.qa_id == qa_id)
+            .join(GlobalChatSession, GlobalQARecord.chat_id == GlobalChatSession.chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(
+                KnowledgeBase.owner_id == owner_id,
+                GlobalQARecord.chat_id == chat_id,
+                GlobalQARecord.qa_id == qa_id,
+            )
             .one_or_none()
         )
         if row is None:
@@ -106,7 +126,13 @@ class GlobalQARepository:
         return True
 
     def delete_all_by_owner_and_chat(self, owner_id: str, chat_id: str) -> int:
-        rows = self._session.query(GlobalQARecord).filter(GlobalQARecord.chat_id == chat_id).all()
+        rows = (
+            self._session.query(GlobalQARecord)
+            .join(GlobalChatSession, GlobalQARecord.chat_id == GlobalChatSession.chat_id)
+            .join(KnowledgeBase, GlobalChatSession.kbid == KnowledgeBase.kbid)
+            .filter(KnowledgeBase.owner_id == owner_id, GlobalQARecord.chat_id == chat_id)
+            .all()
+        )
         count = len(rows)
         for row in rows:
             self._session.delete(row)

@@ -42,12 +42,18 @@ def _resolve_bm25_index_path() -> str:
     return str(Path(_BM25_INDEX_DIR) / "bm25_index.json")
 
 
-@lru_cache(maxsize=1)
-def build_rag_settings() -> Settings:
+@lru_cache(maxsize=128)
+def build_rag_settings(
+    collection: str = "default",
+    bm25_index_dir: str | None = None,
+) -> Settings:
     """构造 RAG Settings 实例。
 
-    Chroma collection 名称固定为 'default'；
-    查询/摄取时的数据域隔离通过 chunk 元数据字段 collection 实现，而非切换 Chroma collection。
+    Args:
+        collection: Chroma 物理 collection 名称。视频 QA 使用 "default"，
+                   KB QA 使用 KB 的 vector_collection_name（如 "kb_{uuid}"）。
+        bm25_index_dir: Per-collection BM25 索引目录路径。None 表示使用全局
+                       默认路径（BM25_INDEX_DIR 环境变量或 data/db/bm25）。
 
     persist_path / BM25 index 使用绝对路径从项目根目录推导，
     避免不同进程 CWD 不同导致访问不同的向量库文件。
@@ -74,12 +80,14 @@ def build_rag_settings() -> Settings:
         chunk_size=512,
         chunk_overlap=64,
     )
-    # Chroma collection 名称固定；分类隔离由 metadata.collection 过滤实现
+    # Chroma collection 可参数化：KB QA 使用 per-KB 物理 collection 实现隔离；
+    # 视频 QA 保持 "default" + metadata 过滤
     # persist_path 使用绝对路径，确保 Celery worker 和 Web 服务访问同一份 Chroma 数据
     vector_store = VectorStoreSettings(
         provider="chroma",
-        collection="default",
+        collection=collection,
         persist_path=_CHROMA_PERSIST_PATH,
+        bm25_index_dir=bm25_index_dir,
     )
     retrieval = RetrievalSettings(top_k=6)
     rerank = RerankSettings(provider="llm")

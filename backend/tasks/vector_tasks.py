@@ -115,15 +115,24 @@ def _run_rag_ingestion_with_segments(
     segments: list[dict],
     collection: str,
     base_metadata: dict,
+    kbid: str = "",
 ) -> None:
     """基于 Whisper segments 进行时间戳感知摄取。
     每个 segment 生成独立 Document，metadata 携带 start_s/end_s/time_range。
+
+    kbid 不为空时使用 per-KB 的 Chroma 物理 collection 和 BM25 索引；
+    kbid 为空时使用全局共享的 "default" collection 和 BM25 索引（视频 QA 路径）。
     """
-    from backend.infrastructure.rag_settings_factory import build_rag_settings
+    from pathlib import Path
+    from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
     from modular_rag.ingestion.pipeline import IngestionPipeline
     from modular_rag.libs.loader.transcript_text_loader import TranscriptTextLoader
 
-    settings = build_rag_settings()
+    if kbid:
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+    else:
+        settings = build_rag_settings()
     chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
     video_id = base_metadata.get("video_id", "unknown")
 
@@ -148,15 +157,23 @@ def _run_rag_ingestion_with_segments(
     _verify_ingestion(collection, video_id, chroma_path)
 
 
-def _run_rag_ingestion(text: str, collection: str, metadata: dict) -> None:
+def _run_rag_ingestion(text: str, collection: str, metadata: dict, kbid: str = "") -> None:
     """全文本摄取（无时间戳），用于 segments 缺失时的降级路径。
     同样被 global_retrieval_tasks.py 复用。
+
+    kbid 不为空时使用 per-KB 的 Chroma 物理 collection 和 BM25 索引；
+    kbid 为空时使用全局共享的 "default" collection 和 BM25 索引（视频 QA 路径）。
     """
-    from backend.infrastructure.rag_settings_factory import build_rag_settings
+    from pathlib import Path
+    from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
     from modular_rag.ingestion.pipeline import IngestionPipeline
     from modular_rag.libs.loader.transcript_text_loader import TranscriptTextLoader
 
-    settings = build_rag_settings()
+    if kbid:
+        bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+        settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+    else:
+        settings = build_rag_settings()
     chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
     video_id = metadata.get("video_id", "unknown")
 

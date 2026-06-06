@@ -49,12 +49,17 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-def _build_chroma_store():
-    """按项目配置创建 ChromaStore 实例。"""
+def _build_chroma_store(collection: str = "default"):
+    """按项目配置创建 ChromaStore 实例。
+
+    collection: Chroma 物理 collection 名称。
+                KB QA 使用 kb_{kbid} 或 vector_collection_name，
+                视频 QA 使用 "default"。
+    """
     from backend.infrastructure.rag_settings_factory import build_rag_settings
     from modular_rag.libs.vector_store.chroma_store import ChromaStore
 
-    settings = build_rag_settings()
+    settings = build_rag_settings(collection=collection)
     store = ChromaStore.from_settings(settings.vector_store)
     return store, settings
 

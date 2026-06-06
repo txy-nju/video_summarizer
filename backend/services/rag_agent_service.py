@@ -63,6 +63,8 @@ class RagAgentService:
             top_k=int(cfg.get("top_k", 6)),
             rerank=bool(cfg.get("rerank", True)),
             extra_frames=self._download_attachment_frames(attachments),
+            is_kb=True,
+            kbid=kbid,
         )
 
     def stream_global_question(
@@ -84,14 +86,16 @@ class RagAgentService:
             question_content, collection,
             top_k=int(cfg.get("top_k", 6)),
             rerank=bool(cfg.get("rerank", True)),
+            is_kb=True,
+            kbid=kbid,
         )
         context.frames.extend(self._download_attachment_frames(attachments))
         return context.cited_sources, self._stream_from_context(question_content, context)
 
     # ── 核心非流式路径（answer_global_question 使用）─────────────────
 
-    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool, extra_frames: list[dict] | None = None) -> RagAgentAnswer:
-        context = self._build_retrieval_context(question, collection, top_k, rerank)
+    def _rag_answer(self, *, question: str, collection: str, top_k: int, rerank: bool, extra_frames: list[dict] | None = None, is_kb: bool = False, kbid: str = "") -> RagAgentAnswer:
+        context = self._build_retrieval_context(question, collection, top_k, rerank, is_kb=is_kb, kbid=kbid)
         if extra_frames:
             context.frames.extend(extra_frames)
         answer_text = "".join(self._stream_from_context(question, context))
@@ -105,13 +109,23 @@ class RagAgentService:
         collection: str,
         top_k: int,
         rerank: bool,
+        is_kb: bool = False,
+        kbid: str = "",
     ) -> _RagContext:
         from modular_rag.core.query_engine.hybrid_search import HybridSearch
         from modular_rag.core.query_engine.reranker import Reranker
-        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
         from backend.infrastructure.keyframe_lookup import KeyframeLookup, load_keyframes_for_video
+        from pathlib import Path
 
-        settings = build_rag_settings()
+        if is_kb and kbid:
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+            filters = None  # 物理隔离：collection 即 Chroma physical collection，无需 metadata filter
+        else:
+            settings = build_rag_settings()  # 视频 QA 保持共享 "default" collection
+            filters = {"collection": collection}  # 逻辑隔离：metadata 过滤
+
         hybrid = HybridSearch(settings=settings)
 
         logger.info(
@@ -124,7 +138,7 @@ class RagAgentService:
         results = hybrid.search(
             query=question,
             top_k=top_k,
-            filters={"collection": collection},
+            filters=filters,
         )
 
         result_count = len(results)
