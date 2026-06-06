@@ -35,6 +35,7 @@ IRRECOVERABLE_STATUS = "IRRECOVERABLE"
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.recovery_tasks.async_scan_and_recover_stuck_videos",
     acks_late=True,
     max_retries=1,

@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_rebuild_vector_collection",
     acks_late=True,
     max_retries=2,
@@ -122,6 +123,7 @@ def async_rebuild_vector_collection(self, kbid: str) -> dict:
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_add_video_to_vector_collection",
     acks_late=True,
     max_retries=2,
@@ -221,6 +223,7 @@ def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_remove_video_from_vector_collection",
     acks_late=True,
     max_retries=2,
@@ -276,6 +279,7 @@ def async_remove_video_from_vector_collection(self, kbid: str, video_id: str) ->
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_purge_vector_collection",
     acks_late=True,
     max_retries=2,

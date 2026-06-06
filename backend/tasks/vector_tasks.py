@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,          # ← 加这一行
     name="backend.tasks.vector_tasks.async_embed_transcript_chunks_background",
     acks_late=True,
     queue="low_priority",
