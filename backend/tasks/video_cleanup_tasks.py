@@ -64,14 +64,44 @@ def async_cascade_delete_video(self, video_id: str) -> dict:
         if keyframes_oss_prefix:
             storage_client.delete_prefix(keyframes_oss_prefix)
 
-        # 2. 向量库清理（占位实现；步骤 7 后接入）
-        if video.transcript_vector_ids:
-            logger.info(
-                "async_cascade_delete_video: vector cleanup placeholder for video_id=%s, vector_ids=%s",
-                video_id,
-                video.transcript_vector_ids,
+        # 2. 向量库清理：删除 per-video Chroma physical collection + BM25 索引目录
+        try:
+            from pathlib import Path
+            from backend.infrastructure.rag_settings_factory import build_rag_settings, _BM25_INDEX_DIR
+            from modular_rag.libs.vector_store.chroma_store import ChromaStore
+
+            collection = f"video_{video_id}"
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+
+            # 删除 Chroma physical collection
+            store = ChromaStore.from_settings(settings.vector_store)
+            try:
+                store._client.delete_collection(name=collection)
+                logger.info(
+                    "async_cascade_delete_video: deleted Chroma collection=%s for video_id=%s",
+                    collection, video_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "async_cascade_delete_video: failed to delete Chroma collection=%s for video_id=%s: %s",
+                    collection, video_id, exc,
+                )
+
+            # 删除 BM25 索引目录
+            import shutil
+            bm25_dir_path = Path(bm25_dir)
+            if bm25_dir_path.exists():
+                shutil.rmtree(bm25_dir_path)
+                logger.info(
+                    "async_cascade_delete_video: deleted BM25 index dir=%s for video_id=%s",
+                    bm25_dir, video_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "async_cascade_delete_video: vector cleanup error for video_id=%s: %s",
+                video_id, exc,
             )
-            # TODO: vector_store.delete_vectors(video.transcript_vector_ids)
 
         # 3. 数据库物理删除
         service.purge_video(video_id=video_id)

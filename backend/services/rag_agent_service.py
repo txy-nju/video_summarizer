@@ -123,8 +123,11 @@ class RagAgentService:
             settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
             filters = None  # 物理隔离：collection 即 Chroma physical collection，无需 metadata filter
         else:
-            settings = build_rag_settings()  # 视频 QA 保持共享 "default" collection
-            filters = {"collection": collection}  # 逻辑隔离：metadata 过滤
+            # 视频 QA 也使用 per-video 物理 Chroma collection + BM25 隔离
+            # collection 格式为 "video_{video_id}"，直接作为 Chroma physical collection 名
+            bm25_dir = str(Path(_BM25_INDEX_DIR) / f"video_{collection}")
+            settings = build_rag_settings(collection=collection, bm25_index_dir=bm25_dir)
+            filters = None  # 物理隔离，无需 metadata filter
 
         hybrid = HybridSearch(settings=settings)
 
