@@ -7,9 +7,10 @@ from core.llm.deepseek_model import DeepSeekModel
 from core.llm.qwen_model import QwenModel
 from core.llm.local_model import LocalModel
 from core.llm.gemini_model import GeminiModel
+from core.llm.aigc_model import AigcModel
 
 # 不支持原生音频转录的 provider 集合；若用户将 transcribe 指向这些 provider，直接提示切换。
-_UNSUPPORTED_TRANSCRIBE_PROVIDERS = {"deepseek", "gemini"}
+_UNSUPPORTED_TRANSCRIBE_PROVIDERS = {"deepseek", "gemini", "aigc"}
 
 
 def _build_model(capability: str, provider: str) -> BaseModel:
@@ -57,6 +58,17 @@ def _build_model(capability: str, provider: str) -> BaseModel:
                 "未能找到 DEEPSEEK_API_KEY、CHAT_API_KEY 或 OPENAI_API_KEY 环境变量。"
             )
         return DeepSeekModel(
+            api_key=api_key,
+            base_url=resolve_base_url(capability),
+        )
+
+    if provider == "aigc":
+        api_key = resolve_api_key(capability)
+        if not api_key:
+            raise ValueError(
+                "未能找到 AIGC_API_KEY、CHAT_API_KEY 或 OPENAI_API_KEY 环境变量。"
+            )
+        return AigcModel(
             api_key=api_key,
             base_url=resolve_base_url(capability),
         )
