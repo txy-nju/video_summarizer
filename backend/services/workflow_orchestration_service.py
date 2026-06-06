@@ -34,7 +34,6 @@ from backend.websocket.schemas import WSEventType, WSScope, WSStage
 
 logger = logging.getLogger(__name__)
 
-
 class WorkflowOrchestrationService:
     """High-level workflow orchestration facade for backend integration.
 
@@ -66,6 +65,26 @@ class WorkflowOrchestrationService:
         self._progress_publisher = progress_publisher
         self._task_status_service = task_status_service
         self._notification_service = notification_service
+
+
+    def publish_task_accepted(self, user_id: str, task_id: str, trace_id: str = "") -> int:
+        """Publish a "task accepted" WS event via Redis Pub/Sub.
+
+        Called from the API route immediately after Celery task dispatch,
+        so the frontend receives its first progress event without waiting
+        for the Celery worker to start.
+
+        The message traverses the standard Redis Pub/Sub path:
+        API process → Redis PUBLISH → subscriber thread → WebSocket.
+        """
+        return self._progress_publisher.publish_status_update(
+            user_id=user_id,
+            scope=WSScope.VIDEO_SUMMARY_TASK,
+            scope_id=task_id,
+            status="DRAFT_GENERATING",
+            message="Phase-1 analysis started",
+            trace_id=trace_id,
+        )
 
     def _build_workflow_callback(
         self,
@@ -100,23 +119,37 @@ class WorkflowOrchestrationService:
                     json_str = message[len("[[PROGRESS]]") :]
                     progress_data = json.loads(json_str)
 
-                    stage_str = progress_data.get("stage", "running")
+                    total_chunks = progress_data.get("total_chunks", 0)
+                    done_count = progress_data.get("done_count", 0)
                     overall_percent = progress_data.get("overall_percent", 0)
-                    stage_map = {
-                        "running": WSStage.ANALYSIS,
-                        "finished": WSStage.ANALYSIS,
+                    chunk_stage = progress_data.get("stage", "running")
+
+                    # Forward simplified payload with chunk-level detail
+                    chunk_payload = {
+                        "total_chunks": total_chunks,
+                        "done_count": done_count,
+                        "overall_percent": overall_percent,
+                        "stage": chunk_stage,
                     }
-                    stage = stage_map.get(stage_str, WSStage.ANALYSIS)
+
+                    # Build readable Chinese message based on stage
+                    if chunk_stage == "starting":
+                        msg_text = f"共 {total_chunks} 个分片，即将开始并行分析"
+                    elif chunk_stage == "running":
+                        msg_text = f"分片 {done_count}/{total_chunks} 分析完成"
+                    else:  # "finished"
+                        msg_text = f"全部分片分析完成：共 {total_chunks} 个分片"
 
                     self._progress_publisher.publish_progress(
                         user_id=user_id,
                         scope=WSScope.VIDEO_SUMMARY_TASK,
                         scope_id=task_id,
-                        stage=stage,
+                        stage=WSStage.ANALYSIS,
                         substage="chunk_processing",
                         status="RUNNING",
                         progress=overall_percent,
-                        message=f"Chunk processing: {progress_data.get('overall_done', 0)}/{progress_data.get('overall_total', 0)}",
+                        message=msg_text,
+                        payload=chunk_payload,
                         trace_id=trace_id,
                     )
                 except json.JSONDecodeError:
@@ -180,17 +213,10 @@ class WorkflowOrchestrationService:
         if not task_record:
             raise ValueError(f"Task {task_id} not found or permission denied")
 
-        # Emit status update event
-        self._progress_publisher.publish_status_update(
-            user_id=owner_id,
-            scope=WSScope.VIDEO_SUMMARY_TASK,
-            scope_id=task_id,
-            status="DRAFT_GENERATING",
-            message="Phase-1 analysis started",
-            trace_id=trace_id,
-        )
+        # Note: the initial "DRAFT_GENERATING" status_update is now published
+        # from the API route (publish_task_accepted), so we don't duplicate it here.
 
-        # Run workflow in executor to avoid blocking event loop
+        # Run workflow in executor
         loop = asyncio.get_event_loop()
         callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id)
 

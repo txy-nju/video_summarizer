@@ -11,6 +11,7 @@ class CitedSource(BaseModel):
     """引用来源（格式遵循全局约定）"""
     video_id: str = Field(min_length=1, max_length=64)
     task_id: str | None = Field(default=None, max_length=64)
+    video_name: str | None = Field(default=None, max_length=255)
     time_range: str = Field(min_length=1, max_length=50)  # "00:10:00-00:11:00"
     quote: str = Field(min_length=1, max_length=1000)
     score: float = Field(ge=0, le=1)

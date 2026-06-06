@@ -74,10 +74,14 @@ class ProgressEventBus:
             except Exception:
                 logger.exception("Failed to publish to channel: %s", ch)
 
-        logger.debug(
-            "Progress event published: event_type=%s, event_id=%s, sequence=%s, channels=%d, subscribers=%d",
+        logger.info(
+            "Progress event published: event_type=%s, event_id=%s, user_id=%s, scope=%s, scope_id=%s, "
+            "sequence=%s, channels=%d, subscribers=%d",
             event.event_type,
             event.event_id,
+            event.user_id,
+            event.scope,
+            event.scope_id,
             event.sequence,
             len(channels),
             total,

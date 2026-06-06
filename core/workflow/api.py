@@ -10,12 +10,14 @@ from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
 from core.workflow.video_summary.graph import build_video_summary_graph, build_finalization_graph
+from core.workflow.video_summary.planner.chunk_planner import chunk_planner_node
 from core.workflow.checkpoint_factory import create_checkpointer
 from core.workflow.session import ensure_thread_id
 from core.workflow.time_travel import (
     parse_timestamp_to_seconds,
     find_nearest_keyframe,
     extract_transcript_window,
+    format_seconds,
 )
 from config.settings import (
     CHECKPOINT_BACKEND,
@@ -101,53 +103,53 @@ def analyze_video(
         "human_gate_reason": "",
     }
 
-    if status_callback:
-        status_callback("⚡ [引擎点火] 第一阶段启动：并行并发拆解多模态任务并生成待审批聚合稿...")
-
-    node_msg_map = {
-        "chunk_planner_node": "📋 [Plan Checker] 正在以时间戳为锚点，将视频逻辑分割成多个 120 秒粒度的分片任务...",
-        "map_dispatch_node": "🗺️ [Dispatcher] 正在为微智能体群编排分片执行配方，准备发起并行实时处理...",
-        "chunk_audio_worker_node": "🎧 [Chunk Audio Send Worker] 图级 fan-out：正在处理单分片音频洞察...",
-        "chunk_vision_worker_node": "📸 [Chunk Vision Send Worker] 图级 fan-out：正在处理单分片视觉洞察...",
-        "chunk_aggregator_node": "🧾 [Chunk Aggregator] 正在按时间线整合 n 个分片洞察，生成统一证据底稿...",
-        "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
-    }
-
     def _emit_chunk_progress(
         total_chunks: int,
-        audio_done_ids: set[str],
-        vision_done_ids: set[str],
+        done_count: int,
         stage: str = "running",
     ) -> None:
         if not status_callback:
             return
 
         safe_total = max(0, total_chunks)
-        audio_done = len(audio_done_ids)
-        vision_done = len(vision_done_ids)
-        overall_total = safe_total * 2
-        overall_done = audio_done + vision_done
-        overall_percent = int((overall_done / overall_total) * 100) if overall_total > 0 else 0
+        overall_percent = int((done_count / safe_total) * 100) if safe_total > 0 else 0
 
         payload = {
             "type": "chunk_progress",
             "stage": stage,
             "total_chunks": safe_total,
-            "audio_done": audio_done,
-            "vision_done": vision_done,
-            "overall_done": overall_done,
-            "overall_total": overall_total,
+            "done_count": done_count,
             "overall_percent": overall_percent,
         }
         status_callback(f"[[PROGRESS]]{json.dumps(payload, ensure_ascii=False)}")
 
+    # 预执行分片规划，提前获取 total_chunks 用于事前进度通知
+    pre_plan = chunk_planner_node(initial_state)  # type: ignore[arg-type]
+    chunk_plan_pre = pre_plan.get("chunk_plan", [])
+    total_chunks_pre = len(chunk_plan_pre) if isinstance(chunk_plan_pre, list) else 0
+    initial_state.update(pre_plan)
+
+    if status_callback and total_chunks_pre > 0:
+        _emit_chunk_progress(total_chunks_pre, 0, stage="starting")
+
+    if status_callback:
+        status_callback("⚡ [引擎点火] 第一阶段启动：并行并发拆解多模态任务并生成待审批聚合稿...")
+
+    node_msg_map = {
+        "outline_bootstrap_node": "🧭 叙事大纲已生成",
+        "data_preparation_node": "🖼️ 关键帧图片数据已就绪",
+        "map_dispatch_node": "🗺️ 分片执行配方已编排，worker 开始并行处理",
+        "wave_gate_node": "🧱 当前波次分片已完成，正在准备聚合",
+        "chunk_aggregator_node": "🧾 分片洞察整合完成，已生成统一证据底稿",
+        "human_gate_node": "🧑‍⚖️ [Human Gate] 已到达人类审批关口，请确认或编辑聚合稿后继续。",
+    }
+
     current_state = initial_state.copy()
     previous_event_at = run_started_at
     node_event_counts: Dict[str, int] = {}
-    audio_done_ids: set[str] = set()
-    vision_done_ids: set[str] = set()
+    done_chunk_ids: set[str] = set()
     total_chunks = 0
-    last_progress_signature: tuple[int, int, int] = (-1, -1, -1)
+    last_done_count: int = -1
 
     with start_span(
         build_span_name("workflow", "analysis", "run"),
@@ -173,38 +175,22 @@ def analyze_video(
                 if isinstance(chunk_plan, list):
                     total_chunks = len(chunk_plan)
 
-                if node_name in {
-                    "chunk_audio_worker_node",
-                    "chunk_vision_worker_node",
-                }:
+                if node_name == "chunk_multimodal_worker_node":
                     updated_chunks = state_update.get("chunk_results", []) if isinstance(state_update, dict) else []
                     if isinstance(updated_chunks, list):
                         for chunk_item in updated_chunks:
-                            if not isinstance(chunk_item, dict):
-                                continue
-                            chunk_id = str(chunk_item.get("chunk_id", "")).strip()
-                            if not chunk_id:
-                                continue
-                            modality_status = chunk_item.get("modality_status", {})
-                            if isinstance(modality_status, dict):
-                                if modality_status.get("audio"):
-                                    audio_done_ids.add(chunk_id)
-                                if modality_status.get("vision"):
-                                    vision_done_ids.add(chunk_id)
-
-                    progress_signature = (
-                        total_chunks,
-                        len(audio_done_ids),
-                        len(vision_done_ids),
-                    )
-                    if progress_signature != last_progress_signature:
+                            if isinstance(chunk_item, dict):
+                                chunk_id = str(chunk_item.get("chunk_id", "")).strip()
+                                if chunk_id:
+                                    done_chunk_ids.add(chunk_id)
+                    done_count = len(done_chunk_ids)
+                    if done_count != last_done_count:
                         _emit_chunk_progress(
                             total_chunks,
-                            audio_done_ids,
-                            vision_done_ids,
+                            done_count,
                             stage="running",
                         )
-                        last_progress_signature = progress_signature
+                        last_done_count = done_count
 
                 if metrics_enabled:
                     chunk_results = current_state.get("chunk_results", [])
@@ -221,19 +207,25 @@ def analyze_video(
                     )
                 previous_event_at = event_now
 
-                if status_callback and node_name in node_msg_map:
-                    msg = node_msg_map[node_name]
-                    if node_name == "chunk_synthesizer_node":
+                if status_callback:
+                    if node_name == "chunk_planner_node":
+                        chunk_plan = current_state.get("chunk_plan", [])
+                        num_chunks = len(chunk_plan) if isinstance(chunk_plan, list) else total_chunks
+                        status_callback(f"📋 分片规划完成，共 {num_chunks} 个分片，即将开始并行分析")
+                    elif node_name == "chunk_aggregator_node":
+                        msg = node_msg_map.get(node_name, "")
                         chunk_results = current_state.get("chunk_results", [])
                         if isinstance(chunk_results, list) and chunk_results:
                             num_chunks = len(chunk_results)
-                            msg = f"{msg}\n✅ [微智能体群汇聚] 已完成 {num_chunks} 个分片的并行深度分析，成果已交付全局融合层..."
-                    status_callback(msg)
+                            msg = f"{msg}\n✅ 已完成 {num_chunks} 个分片的并行深度分析，成果已交付全局融合层"
+                        if msg:
+                            status_callback(msg)
+                    elif node_name in node_msg_map:
+                        status_callback(node_msg_map[node_name])
 
     _emit_chunk_progress(
         total_chunks,
-        audio_done_ids,
-        vision_done_ids,
+        len(done_chunk_ids),
         stage="finished",
     )
 
@@ -412,8 +404,9 @@ def answer_question_at_timestamp(
 
     if status_callback:
         frame_count = len(representative_frames)
+        end_timestamp = format_seconds(target_seconds + window_seconds)
         status_callback(
-            f"🎯 [Time Travel] 已定位目标窗口 {timestamp} ±{window_seconds}s，"
+            f"🎯 [Time Travel] 已定位目标窗口 {timestamp} - {end_timestamp} ({window_seconds}s)，"
             f"已选取 {frame_count} 帧代表性关键帧（时间戳: {frame_times_str}）"
         )
 
@@ -424,9 +417,6 @@ def answer_question_at_timestamp(
             transcript_window=transcript_window,
             reason="未配置 CHAT_API_KEY 或 OPENAI_API_KEY，当前返回的是证据抽取结果（已选取 {} 帧视觉证据）。".format(len(representative_frames)),
         )
-
-    model_client = get_model_for_capability("chat")
-    model_name = get_model_name_for_capability("chat")
 
     system_prompt = (
         "你是一名严谨的视频证据问答助手。"
@@ -447,10 +437,12 @@ def answer_question_at_timestamp(
     user_content: List[Dict] = [{"type": "text", "text": evidence_text + f"\n\n[追问问题]\n{question}"}]
     
     # 为所有代表性帧添加图像证据
+    has_images = False
     for idx, frame in enumerate(representative_frames, 1):
         if isinstance(frame, dict):
             frame_image_b64 = resolve_frame_image_base64(frame, keyframes_base_path)
             if frame_image_b64:
+                has_images = True
                 frame_time = frame.get("time", "未知")
                 user_content.append(
                     {
@@ -463,6 +455,13 @@ def answer_question_at_timestamp(
                 )
                 # 在文本中添加帧的时间戳标注
                 user_content[0]["text"] += f"\n[视觉证据帧 {idx}] 时间戳: {frame_time}"
+
+    if has_images:
+        model_client = get_model_for_capability("vision")
+        model_name = get_model_name_for_capability("vision")
+    else:
+        model_client = get_model_for_capability("chat")
+        model_name = get_model_name_for_capability("chat")
 
     messages_payload: Any = [
         {"role": "system", "content": system_prompt},

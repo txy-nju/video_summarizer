@@ -44,14 +44,13 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
     # 2. 构造 System Prompt（聚合输入 -> 最终成文）
     system_prompt = (
         "你是一个顶级的视频内容编辑与深度报告撰写专家。\n"
-        "你的输入是按时间轴和章节大纲聚合后的结构化多模态事实列表（Chunk Aggregated Insights）。\n"
-        "你的核心任务是：基于这些极其干瘪的事实骨架，发挥你的语言天赋，撰写一篇语义连贯、逻辑通顺、具有深度洞察的正式文章。\n\n"
+        "你的输入是按时间片聚合后的多模态证据。"
+        "你的任务是基于这些证据生成一份高质量、连贯且逻辑自洽的视频总结报告。\n\n"
         "【架构级约束指令】：\n"
-        "1. 🔗 绝对忠于底层事实：你必须并且只能使用输入事实清单中的信息，严禁根据你的预训练知识捏造任何未在输入中出现过的动作、观点或因果关系。\n"
-        "2. 🧭 结构自洽：请遵循输入材料中提供的章节标题大纲结构（## 标题名）来进行内容组织。\n"
-        "3. 📍 溯源锚点机制：在你生成的每一段或每一句描述特定事实的句子末尾，必须保留并打上对应的时间戳锚点（如 `[02:15]`）。\n"
-        "4. 📝 专业脚注要求：如果你在事实列表中看到生僻的专业技术术语（或者缩写），并且该术语并未在上下文中解释，请基于你自身的丰富知识库，在整篇文章的末尾自动生成一个【名词解释附录】，解释这些术语的背景含义。\n"
-        "5. 🎨 优美的过渡：输入的事实是碎片化的，请使用具有连接性的过渡句将它们巧妙地编织在一起，确保读者获得流畅的阅读体验。"
+        "1. 🔗 证据优先：仅允许使用输入证据中的信息，不得补造事实。\n"
+        "2. 🧭 时间一致性：尽量保持时间线顺序与逻辑衔接，必要时指出跨片段关联。\n"
+        "3. 📝 专业排版规范：输出必须使用易于阅读的 Markdown 语法。建议包含：【内容导读】、【核心内容解析】、【关键结论】、【总结与建议】等模块。\n"
+        "4. ⏰ 时间戳锚定：每个实质性陈述句末须附 [HH:MM] 时间戳引用（直接来自输入证据中的时间戳字段），以供读者精准定位视频片段。\n"
     )
 
     if human_guidance and str(human_guidance).strip():
@@ -121,10 +120,5 @@ def fusion_drafter_node(state: VideoSummaryState, llm_model: BaseModel | None = 
             }
         except Exception as e:
             print(f"  -> [Fusion Drafter Node] Error during synthesis: {str(e)}")
-            # 将异常上抛，由后续路由或最终结果展现
-            return {
-                "draft_summary": f"[系统自动提示]：综合图文大纲失败，LLM 调用发生异常：{str(e)}",
-                "revision_count": current_count + 1,
-                "error_code": "FUSION_DRAFTER_FAILED",
-                "status": "ERROR",
-            }
+            # 上抛异常，让编排层将 state 正确标记为 FAILED 并触发 Celery 重试
+            raise

@@ -96,6 +96,12 @@ def register_task_trace_hooks() -> None:
         if not task_id or task is None:
             return
         trace_id = _resolve_trace_id(task, kwargs)
+
+        # 检测重试是否耗尽
+        request_retries = getattr(getattr(task, "request", None), "retries", 0) or 0
+        max_retries = getattr(task, "max_retries", 0) or 0
+        retries_exhausted = max_retries > 0 and request_retries >= max_retries
+
         with start_span(
             build_span_name("celery", "task", "failure"),
             attributes={
@@ -104,15 +110,21 @@ def register_task_trace_hooks() -> None:
                 "scope_id": getattr(task, "name", "unknown"),
                 "trace_id": trace_id,
                 "error_code": exception.__class__.__name__ if exception else "UNKNOWN",
+                "retries_attempted": request_retries,
+                "max_retries": max_retries,
+                "retries_exhausted": retries_exhausted,
             },
         ):
-            logger.exception(
+            logger.error(
                 "task_trace_failure",
                 extra={
                     "trace_id": trace_id,
                     "task_id": task_id,
                     "task_name": getattr(task, "name", "unknown"),
                     "error_code": exception.__class__.__name__ if exception else "UNKNOWN",
+                    "retries_attempted": request_retries,
+                    "max_retries": max_retries,
+                    "retries_exhausted": retries_exhausted,
                 },
             )
 

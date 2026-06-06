@@ -182,7 +182,7 @@ def test_video_delete_dispatches_async_cleanup(monkeypatch) -> None:
 
     captured: dict[str, str] = {}
 
-    def _fake_delay(v_id: str):
+    def _fake_delay(v_id: str, linked_kbids: list[str] | None = None):
         captured["video_id"] = v_id
 
     monkeypatch.setattr(
@@ -211,7 +211,7 @@ def test_trigger_processing_after_upload_dispatches_async_process(monkeypatch) -
 
     captured: dict[str, str] = {}
 
-    def _fake_dispatch(v_id: str) -> None:
+    def _fake_dispatch(v_id: str, trace_id: str = "") -> None:
         captured["video_id"] = v_id
 
     monkeypatch.setattr(

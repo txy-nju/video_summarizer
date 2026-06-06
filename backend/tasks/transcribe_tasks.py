@@ -11,6 +11,7 @@ import os
 
 from backend.db.session import SessionLocal
 from backend.infrastructure.storage.oss_client import get_object_storage_client
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -27,10 +28,13 @@ def _create_video_resource_service():
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.transcribe_tasks.async_transcribe_video",
     max_retries=3,
     default_retry_delay=30,
     acks_late=True,
+    task_soft_time_limit=600,
+    task_time_limit=900,
 )
 def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
     """
@@ -62,6 +66,7 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
 
         full_text = ""
         segments = None
+        duration = None
         if audio_path:
             api_key = os.getenv("OPENAI_API_KEY", "")
             base_url = os.getenv("OPENAI_BASE_URL") or None
@@ -71,6 +76,11 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
                 parsed = json.loads(raw)
                 full_text = parsed.get("text", raw)
                 segments = parsed.get("segments") or None
+                if "duration" in parsed:
+                    try:
+                        duration = int(round(float(parsed["duration"])))
+                    except Exception:
+                        pass
             except (json.JSONDecodeError, AttributeError):
                 full_text = raw
                 segments = None
@@ -79,6 +89,7 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
             video_id=video_id,
             full_transcript=full_text,
             transcript_segments=segments,
+            duration=duration,
         )
 
         from backend.tasks.vector_tasks import async_embed_transcript_chunks_background
@@ -97,13 +108,18 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
 
     except Exception as exc:
         logger.exception("async_transcribe_video failed for video_id=%s trace_id=%s", video_id, trace_id)
-        # 写入 FAILED 状态（幂等，忽略二次错误）
-        try:
-            fail_service, fail_db = _create_video_resource_service()
-            fail_service.mark_transcription_failed(video_id=video_id)
-            fail_db.close()
-        except Exception:
-            pass
-        raise self.retry(exc=exc)
+        # 仅在重试耗尽时标记 FAILED；重试期间保留原状态让 WebSocket 展示"重试中"
+        if self.is_last_attempt:
+            logger.critical(
+                "async_transcribe_video: retries exhausted for video_id=%s trace_id=%s",
+                video_id, trace_id,
+            )
+            try:
+                fail_service, fail_db = _create_video_resource_service()
+                fail_service.mark_transcription_failed(video_id=video_id)
+                fail_db.close()
+            except Exception:
+                pass
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()

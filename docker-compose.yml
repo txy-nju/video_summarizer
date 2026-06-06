@@ -72,6 +72,21 @@ services:
     volumes:
       - ./temp:/app/temp
 
+  celery_beat:
+    build:
+      context: ..
+      dockerfile: video_summarizer/Dockerfile
+    container_name: vs_celery_beat
+    restart: unless-stopped
+    command: python -m celery -A backend.tasks.celery_app beat --loglevel=info
+    env_file:
+      - .env.docker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   frontend:
     build:
       context: ..

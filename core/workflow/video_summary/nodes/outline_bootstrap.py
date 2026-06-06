@@ -18,11 +18,8 @@ from config.settings import (
     OUTLINE_ZH_REGEX_MIN,
     OUTLINE_ZH_STOPWORDS_PATH,
 )
-from core.workflow.video_summary.state import VideoSummaryState
-from core.llm.base import BaseModel
-from core.llm.config import resolve_api_key
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
-from backend.observability.llm_tracing import trace_llm_call
+from core.workflow.video_summary.state import VideoSummaryState
 
 try:
     import jieba
@@ -304,79 +301,115 @@ def _build_timeline_anchors(chunk_plan: List[Dict[str, Any]]) -> List[Dict[str, 
     return anchors
 
 
-def _extract_narrative_arc(transcript_text: str, user_prompt: str, trace_id: str) -> List[Dict[str, Any]]:
-    fallback = [{"chapter_title": "全局大纲(未切分)", "start_sec": 0, "end_sec": 999999}]
-    if not transcript_text or not resolve_api_key("chat"):
-        return fallback
-
-    model_client = get_model_for_capability("chat")
-    model_name = get_model_name_for_capability("chat")
-    system_prompt = (
-        "你是严谨的视频大纲提取助手。请根据提供的逐字稿提取全文的故事线大纲。\n"
-        "1. 将视频逻辑划分为几个主要章节(chapter_title)。\n"
-        "2. 每个章节必须推断出精确的起始秒数(start_sec)和结束秒数(end_sec)。\n"
-        "3. 输出必须是JSON对象，包含 narrative_arc 数组。例如：{\"narrative_arc\": [{\"chapter_title\": \"引言\", \"start_sec\": 0, \"end_sec\": 120}]}\n"
-        "严禁捏造无关大纲。"
-    )
-    
-    try:
-        with trace_llm_call(
-            provider="openai_compatible",
-            model=model_name,
-            scope="outline_bootstrap",
-            scope_id="global_arc",
-            workflow_state="PLANNING",
-        ):
-            raw = model_client.chat_completion(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"[user_prompt]\n{user_prompt}\n\n[transcript]\n{transcript_text[:100000]}"}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"},
-                timeout=60.0
-            )
-        parsed = json.loads(raw)
-        arc = parsed.get("narrative_arc")
-        if isinstance(arc, list) and arc:
-            return arc
-        return fallback
-    except Exception:
-        return fallback
+_NARRATIVE_ARC_SYSTEM_PROMPT = (
+    "你是一个视频内容分析助手。\n"
+    "你的任务是：根据给定的视频语音转录稿，提取该视频的叙事章节大纲（narrative arc）。\n\n"
+    "【严格约束】：\n"
+    "1. 🚫 禁止臆造：每个章节的 summary 必须严格来源于转录稿原文，不得补充任何未提及的内容。\n"
+    "2. ⏱ 时间对齐：start_sec / end_sec 必须与转录稿中的时间戳对齐，不得随意估算。\n"
+    "3. 📦 JSON 输出：直接输出 JSON 数组，不要包裹在 markdown 代码块中，不要有其他说明文字。\n\n"
+    "输出格式（JSON 数组）：\n"
+    "[\n"
+    "  {\"chapter_id\": \"ch_0\", \"title\": \"章节标题\", \"start_sec\": 0, \"end_sec\": 120, \"summary\": \"基于转录稿的简短描述\"},\n"
+    "  ...\n"
+    "]"
+)
 
 
-def outline_bootstrap_node(state: VideoSummaryState) -> dict:
+def _build_transcript_text_for_llm(transcript_items: List[Dict[str, Any]]) -> str:
+    """将 transcript 段落列表拼接成适合 LLM 输入的带时间戳纯文本。"""
+    lines: List[str] = []
+    for item in transcript_items:
+        start = item.get("start", item.get("timestamp", 0))
+        text = str(item.get("text", "")).strip()
+        if text:
+            lines.append(f"[{start:.1f}s] {text}")
+    return "\n".join(lines)
+
+
+def _extract_narrative_arc_llm(
+    transcript_items: List[Dict[str, Any]],
+    llm_model=None,
+) -> List[Dict[str, Any]]:
     """
-    第一阶段的全局上下文引导节点。
+    调用轻量 LLM 从 transcript 提取 narrative_arc 章节列表。
+
+    失败时静默降级，返回空列表，不阻断主流程。
+    """
+    if not transcript_items:
+        return []
+
+    transcript_text = _build_transcript_text_for_llm(transcript_items)
+    if not transcript_text.strip():
+        return []
+
+    try:
+        model_client = llm_model or get_model_for_capability("chat")
+        model_name = get_model_name_for_capability("chat")
+        raw_text = model_client.chat_completion(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": _NARRATIVE_ARC_SYSTEM_PROMPT},
+                {"role": "user", "content": f"以下是视频转录稿，请提取叙事章节大纲：\n\n{transcript_text}"},
+            ],
+            temperature=0.2,
+        )
+        raw_text = raw_text.strip()
+
+        # 尝试提取 JSON 数组（兼容模型在输出前后加额外文字的情况）
+        json_match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+        if json_match:
+            raw_text = json_match.group(0)
+
+        chapters = json.loads(raw_text)
+        if not isinstance(chapters, list):
+            return []
+
+        validated: List[Dict[str, Any]] = []
+        for ch in chapters:
+            if not isinstance(ch, dict):
+                continue
+            validated.append({
+                "chapter_id": str(ch.get("chapter_id", f"ch_{len(validated)}")),
+                "title": str(ch.get("title", "")).strip(),
+                "start_sec": int(ch.get("start_sec", 0)),
+                "end_sec": int(ch.get("end_sec", 0)),
+                "summary": str(ch.get("summary", "")).strip(),
+            })
+        return validated
+
+    except Exception:
+        return []
+
+
+def outline_bootstrap_node(state: VideoSummaryState, llm_model=None) -> dict:
+    """
+    全局上下文引导节点。
 
     目标:
-    - 仅输出结构化、非叙事的全局上下文。
-    - 只保留实体候选与时间锚点，避免生成故事化摘要污染下游 worker。
+    - 调用 LLM 从完整 transcript 提取 narrative_arc（按时间轴划分的叙事章节）。
+    - LLM 失败时降级为空列表，不阻断主流程。
+    - 同时保留确定性实体/时间锚点提取，写入 reduce_debug_info 供观测使用。
     """
     transcript = str(state.get("transcript", ""))
-    user_prompt = str(state.get("user_prompt", ""))
-    trace_id = str(state.get("trace_id", ""))
     chunk_plan = state.get("chunk_plan", [])
     if not isinstance(chunk_plan, list):
         chunk_plan = []
 
     transcript_data = _load_transcript_data(transcript)
     transcript_items = _collect_transcript_items(transcript_data)
-    
-    # 提取纯文本用于大纲生成
-    transcript_text = "\n".join([str(item.get("text", "")).strip() for item in transcript_items if str(item.get("text", "")).strip()])
 
-    structured_global_context = {
-        "entities": _collect_entity_candidates(transcript_items, chunk_plan),
-        "timeline_anchors": _build_timeline_anchors(chunk_plan),
-        "narrative_arc": _extract_narrative_arc(transcript_text, user_prompt, trace_id),
-        "source_policy": {
-            "mode": "structured_only",
-            "narrative_summary_allowed": False,
-            "allowed_fields": ["entities", "timeline_anchors", "narrative_arc"],
-        },
-    }
+    # 确定性结构提取（仅用于 debug 观测，不再写入主状态字段）
+    entities = _collect_entity_candidates(transcript_items, chunk_plan)
+    timeline_anchors = _build_timeline_anchors(chunk_plan)
+
+    # LLM 提取 narrative_arc，失败时降级为 []
+    print("  -> [Outline Bootstrap] Extracting narrative arc via LLM...")
+    narrative_arc = _extract_narrative_arc_llm(transcript_items, llm_model=llm_model)
+    if narrative_arc:
+        print(f"  -> [Outline Bootstrap] narrative_arc extracted: {len(narrative_arc)} chapters.")
+    else:
+        print("  -> [Outline Bootstrap] narrative_arc extraction failed or empty, proceeding with [].")
 
     reduce_debug_info = state.get("reduce_debug_info", {})
     if not isinstance(reduce_debug_info, dict):
@@ -384,12 +417,13 @@ def outline_bootstrap_node(state: VideoSummaryState) -> dict:
     reduce_debug_info.update(
         {
             "outline_bootstrap_ready": True,
-            "outline_entity_count": len(structured_global_context["entities"]),
-            "outline_timeline_anchor_count": len(structured_global_context["timeline_anchors"]),
+            "outline_entity_count": len(entities),
+            "outline_timeline_anchor_count": len(timeline_anchors),
+            "outline_narrative_arc_chapter_count": len(narrative_arc),
         }
     )
 
     return {
-        "structured_global_context": structured_global_context,
+        "narrative_arc": narrative_arc,
         "reduce_debug_info": reduce_debug_info,
     }

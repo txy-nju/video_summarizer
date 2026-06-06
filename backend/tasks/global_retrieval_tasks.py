@@ -5,17 +5,31 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
+def _kb_bm25_dir(kbid: str) -> str:
+    """计算 per-KB BM25 索引目录路径。"""
+    from backend.infrastructure.rag_settings_factory import _BM25_INDEX_DIR
+    return str(Path(_BM25_INDEX_DIR) / f"kb_{kbid}")
+
+
 @celery_app.task(
+    bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_rebuild_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=60,
+    task_soft_time_limit=1800,
+    task_time_limit=3600,
 )
-def async_rebuild_vector_collection(kbid: str) -> dict:
+def async_rebuild_vector_collection(self, kbid: str) -> dict:
     """
     全量重建知识库向量集合。
     1. 查询 KB 的 vector_collection_name 与所有关联视频
@@ -24,6 +38,7 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
     source_path 使用 transcript://kb/{collection}/{video_id}，
     与单视频 collection（transcript://video/{video_id}）的 source_path 不同，
     避免 Chroma chunk_id 冲突。
+    先删后建保证幂等性。
     """
     from backend.db.session import SessionLocal
     from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -45,13 +60,13 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
                 "async_rebuild_vector_collection: kbid=%s collection=%s no linked videos, purging only",
                 kbid, collection_name,
             )
-            _purge_chroma_collection(collection_name)
-            _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
+            _purge_chroma_collection(collection_name, kbid=kbid)
+            _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/", kbid=kbid)
             return {"kbid": kbid, "collection": collection_name, "status": "PURGED", "videos_ingested": 0}
 
         # 清空旧 collection 数据（先删后建，保证幂等）
-        _purge_chroma_collection(collection_name)
-        _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
+        _purge_chroma_collection(collection_name, kbid=kbid)
+        _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/", kbid=kbid)
 
         video_repo = VideoResourceRepository(db_session=db)
         ingested = 0
@@ -77,12 +92,14 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
                     segments=segments,
                     collection=collection_name,
                     base_metadata=base_metadata,
+                    kbid=kbid,
                 )
             else:
                 _run_rag_ingestion(
                     text=transcript,
                     collection=collection_name,
                     metadata=base_metadata,
+                    kbid=kbid,
                 )
             ingested += 1
 
@@ -90,6 +107,13 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
             "async_rebuild_vector_collection: kbid=%s collection=%s ingested=%d skipped=%d",
             kbid, collection_name, ingested, skipped,
         )
+
+        # 重建完成后验证
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        _settings = build_rag_settings(collection=collection_name, bm25_index_dir=_kb_bm25_dir(kbid))
+        _chroma_path = getattr(_settings.vector_store, "persist_path", "N/A")
+        _verify_kb_collection(collection_name, _chroma_path, kbid=kbid)
+
         return {
             "kbid": kbid,
             "collection": collection_name,
@@ -97,15 +121,26 @@ def async_rebuild_vector_collection(kbid: str) -> dict:
             "videos_ingested": ingested,
             "videos_skipped": skipped,
         }
+    except Exception as exc:
+        logger.exception("async_rebuild_vector_collection failed for kbid=%s", kbid)
+        if self.is_last_attempt:
+            logger.critical("async_rebuild_vector_collection: retries exhausted for kbid=%s", kbid)
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()
 
 
 @celery_app.task(
+    bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_add_video_to_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+    task_soft_time_limit=600,
+    task_time_limit=900,
 )
-def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
+def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict:
     """
     增量摄取：将单个视频的转录文本追加到知识库向量集合。
     - source_path 使用 transcript://kb/{collection}/{video_id}，
@@ -140,7 +175,7 @@ def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
             )
             return {"kbid": kbid, "video_id": video_id, "status": "SKIPPED", "reason": "empty transcript"}
 
-        if _is_video_indexed_in_collection(collection_name, video_id):
+        if _is_video_indexed_in_collection(collection_name, video_id, kbid=kbid):
             logger.info(
                 "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s already indexed, skip",
                 kbid, collection_name, video_id,
@@ -153,6 +188,10 @@ def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
             "owner_id": str(getattr(video, "owner_id", "")),
             "doc_type": "transcript",
         }
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        _settings = build_rag_settings(collection=collection_name, bm25_index_dir=_kb_bm25_dir(kbid))
+        _chroma_path = getattr(_settings.vector_store, "persist_path", "N/A")
+
         segments = getattr(video, "transcript_segments", None) or []
         from backend.tasks.vector_tasks import _run_rag_ingestion_with_segments, _run_rag_ingestion
         if segments:
@@ -160,33 +199,56 @@ def async_add_video_to_vector_collection(kbid: str, video_id: str) -> dict:
                 segments=segments,
                 collection=collection_name,
                 base_metadata=base_metadata,
+                kbid=kbid,
             )
         else:
             _run_rag_ingestion(
                 text=transcript,
                 collection=collection_name,
                 metadata=base_metadata,
+                kbid=kbid,
             )
 
+        # 摄取后立即验证
+        _verify_kb_ingestion(collection_name, video_id, _chroma_path, kbid=kbid)
+
         logger.info(
-            "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s ingested",
-            kbid, collection_name, video_id,
+            "async_add_video_to_vector_collection: kbid=%s collection=%s video_id=%s "
+            "ingested chroma_path=%s",
+            kbid, collection_name, video_id, _chroma_path,
         )
         return {"kbid": kbid, "collection": collection_name, "video_id": video_id, "status": "COMPLETED"}
+    except Exception as exc:
+        logger.exception(
+            "async_add_video_to_vector_collection failed for kbid=%s video_id=%s", kbid, video_id
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_add_video_to_vector_collection: retries exhausted for kbid=%s video_id=%s",
+                kbid, video_id,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()
 
 
 @celery_app.task(
+    bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_remove_video_from_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+    task_soft_time_limit=300,
+    task_time_limit=600,
 )
-def async_remove_video_from_vector_collection(kbid: str, video_id: str) -> dict:
+def async_remove_video_from_vector_collection(self, kbid: str, video_id: str) -> dict:
     """
     增量删除：从知识库向量集合中精准删除指定视频的所有 chunk。
     - Chroma：双字段过滤 {collection, video_id}
     - BM25：按 source_path 前缀精准移除，重算 IDF 后保存
     无需重新摄取任何视频，Embedding 调用量 = 0。
+    删除操作天然幂等，重复调用安全。
     """
     from backend.db.session import SessionLocal
     from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -199,49 +261,80 @@ def async_remove_video_from_vector_collection(kbid: str, video_id: str) -> dict:
     finally:
         db.close()
 
-    chroma_deleted = _delete_video_chunks_from_collection(collection_name, video_id)
-    bm25_removed = _remove_bm25_entries_by_prefix(
-        f"transcript://kb/{collection_name}/{video_id}"
-    )
-    logger.info(
-        "async_remove_video_from_vector_collection: kbid=%s collection=%s video_id=%s "
-        "chroma_deleted=%d bm25_removed=%d",
-        kbid, collection_name, video_id, chroma_deleted, bm25_removed,
-    )
-    return {
-        "kbid": kbid, "collection": collection_name, "video_id": video_id,
-        "status": "REMOVED", "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed,
-    }
+    try:
+        chroma_deleted = _delete_video_chunks_from_collection(collection_name, video_id, kbid=kbid)
+        bm25_removed = _remove_bm25_entries_by_prefix(
+            f"transcript://kb/{collection_name}/{video_id}", kbid=kbid
+        )
+        logger.info(
+            "async_remove_video_from_vector_collection: kbid=%s collection=%s video_id=%s "
+            "chroma_deleted=%d bm25_removed=%d",
+            kbid, collection_name, video_id, chroma_deleted, bm25_removed,
+        )
+        return {
+            "kbid": kbid, "collection": collection_name, "video_id": video_id,
+            "status": "REMOVED", "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed,
+        }
+    except Exception as exc:
+        logger.exception(
+            "async_remove_video_from_vector_collection failed for kbid=%s video_id=%s",
+            kbid, video_id,
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_remove_video_from_vector_collection: retries exhausted for kbid=%s video_id=%s",
+                kbid, video_id,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
 
 
 @celery_app.task(
+    bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_purge_vector_collection",
     acks_late=True,
+    max_retries=2,
+    default_retry_delay=30,
+    task_soft_time_limit=300,
+    task_time_limit=600,
 )
-def async_purge_vector_collection(collection_name: str) -> dict:
+def async_purge_vector_collection(self, collection_name: str, kbid: str = "") -> dict:
     """
     清理向量集合中属于 collection_name 的所有 chunk（KB 删除时调用）。
     collection_name 由调用方（kb_service）在 DB 删除前传入。
+    kbid 用于定位 per-KB 的 Chroma 物理 collection 和 BM25 索引。
     同步清理 Chroma + BM25。
+    删除操作天然幂等，重复调用安全。
     """
-    chroma_deleted = _purge_chroma_collection(collection_name)
-    bm25_removed = _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/")
-    logger.info(
-        "async_purge_vector_collection: collection=%s chroma_deleted=%d bm25_removed=%d",
-        collection_name, chroma_deleted, bm25_removed,
-    )
-    return {"collection": collection_name, "status": "PURGED",
-            "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed}
+    try:
+        chroma_deleted = _purge_chroma_collection(collection_name, kbid=kbid)
+        bm25_removed = _remove_bm25_entries_by_prefix(f"transcript://kb/{collection_name}/", kbid=kbid)
+        logger.info(
+            "async_purge_vector_collection: collection=%s kbid=%s chroma_deleted=%d bm25_removed=%d",
+            collection_name, kbid, chroma_deleted, bm25_removed,
+        )
+        return {"collection": collection_name, "status": "PURGED",
+                "chroma_deleted": chroma_deleted, "bm25_removed": bm25_removed}
+    except Exception as exc:
+        logger.exception(
+            "async_purge_vector_collection failed for collection=%s", collection_name,
+        )
+        if self.is_last_attempt:
+            logger.critical(
+                "async_purge_vector_collection: retries exhausted for collection=%s", collection_name,
+            )
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
 
 
 # ── 工具函数 ────────────────────────────────────────────────────────────────
 
-def _purge_chroma_collection(collection_name: str) -> int:
+def _purge_chroma_collection(collection_name: str, kbid: str = "") -> int:
     """用 delete_by_metadata 删除 Chroma 中所有 collection == collection_name 的向量记录。"""
     try:
         from modular_rag.libs.vector_store.chroma_store import ChromaStore
         from backend.infrastructure.rag_settings_factory import build_rag_settings
-        settings = build_rag_settings()
+        bm25_dir = _kb_bm25_dir(kbid) if kbid else None
+        settings = build_rag_settings(collection=collection_name, bm25_index_dir=bm25_dir)
         store = ChromaStore.from_settings(settings.vector_store)
         return store.delete_by_metadata({"collection": collection_name})
     except Exception:
@@ -249,12 +342,13 @@ def _purge_chroma_collection(collection_name: str) -> int:
         return 0
 
 
-def _delete_video_chunks_from_collection(collection_name: str, video_id: str) -> int:
+def _delete_video_chunks_from_collection(collection_name: str, video_id: str, kbid: str = "") -> int:
     """精准删除指定 collection 中属于 video_id 的所有 chunk（双字段过滤）。"""
     try:
         from modular_rag.libs.vector_store.chroma_store import ChromaStore
         from backend.infrastructure.rag_settings_factory import build_rag_settings
-        settings = build_rag_settings()
+        bm25_dir = _kb_bm25_dir(kbid) if kbid else None
+        settings = build_rag_settings(collection=collection_name, bm25_index_dir=bm25_dir)
         store = ChromaStore.from_settings(settings.vector_store)
         return store.delete_by_metadata({"collection": collection_name, "video_id": video_id})
     except Exception:
@@ -265,14 +359,15 @@ def _delete_video_chunks_from_collection(collection_name: str, video_id: str) ->
         return 0
 
 
-def _is_video_indexed_in_collection(collection_name: str, video_id: str) -> bool:
+def _is_video_indexed_in_collection(collection_name: str, video_id: str, kbid: str = "") -> bool:
     """检查 Chroma 中是否已存在该 KB collection 内属于 video_id 的向量数据。
     双字段过滤 {collection, video_id}，limit=1，开销极低。
     """
     try:
         from modular_rag.libs.vector_store.chroma_store import ChromaStore
         from backend.infrastructure.rag_settings_factory import build_rag_settings
-        settings = build_rag_settings()
+        bm25_dir = _kb_bm25_dir(kbid) if kbid else None
+        settings = build_rag_settings(collection=collection_name, bm25_index_dir=bm25_dir)
         store = ChromaStore.from_settings(settings.vector_store)
         results = store.get_by_metadata(
             {"collection": collection_name, "video_id": video_id}, limit=1
@@ -286,17 +381,104 @@ def _is_video_indexed_in_collection(collection_name: str, video_id: str) -> bool
         return False
 
 
-def _remove_bm25_entries_by_prefix(source_path_prefix: str) -> int:
+def _verify_kb_ingestion(collection_name: str, video_id: str, chroma_path: str, kbid: str = "") -> None:
+    """验证 KB 级别单视频摄取后向量数据是否已成功写入 Chroma。
+
+    摄取完成后立即查询 Chroma，用 {collection, video_id} 双字段过滤。
     """
-    从全局 BM25 索引中删除 source_path 包含指定前缀的所有文档条目，
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        bm25_dir = _kb_bm25_dir(kbid) if kbid else None
+        settings = build_rag_settings(collection=collection_name, bm25_index_dir=bm25_dir)
+        actual_path = getattr(settings.vector_store, "persist_path", "N/A")
+        store = ChromaStore.from_settings(settings.vector_store)
+
+        results = store.get_by_metadata(
+            {"collection": collection_name, "video_id": video_id}, limit=5
+        )
+        total_stats = store.get_collection_stats()
+
+        if results:
+            sample_meta = results[0].metadata or {}
+            logger.info(
+                "_verify_kb_ingestion: OK collection=%s video_id=%s "
+                "found_chunks=%d total_chroma_chunks=%s chroma_path=%s "
+                "sample_chunk_id=%s sample_meta_keys=%s",
+                collection_name, video_id, len(results),
+                total_stats.get("chunk_count", -1), actual_path,
+                results[0].id, list(sample_meta.keys()),
+            )
+        else:
+            logger.error(
+                "_verify_kb_ingestion: FAILED collection=%s video_id=%s "
+                "found_chunks=0 total_chroma_chunks=%s chroma_path=%s "
+                "→ Vectors may NOT be persisted! Check Celery worker vs "
+                "web server chroma_path consistency.",
+                collection_name, video_id,
+                total_stats.get("chunk_count", -1), actual_path,
+            )
+    except Exception:
+        logger.exception(
+            "_verify_kb_ingestion: verification query failed collection=%s video_id=%s "
+            "chroma_path=%s",
+            collection_name, video_id, chroma_path,
+        )
+
+
+def _verify_kb_collection(collection_name: str, chroma_path: str, kbid: str = "") -> None:
+    """验证 KB 级别 collection 中是否有向量数据。
+
+    用 collection 单字段过滤，确认至少有 1 条记录。
+    """
+    try:
+        from modular_rag.libs.vector_store.chroma_store import ChromaStore
+        from backend.infrastructure.rag_settings_factory import build_rag_settings
+        bm25_dir = _kb_bm25_dir(kbid) if kbid else None
+        settings = build_rag_settings(collection=collection_name, bm25_index_dir=bm25_dir)
+        actual_path = getattr(settings.vector_store, "persist_path", "N/A")
+        store = ChromaStore.from_settings(settings.vector_store)
+
+        results = store.get_by_metadata({"collection": collection_name}, limit=5)
+        total_stats = store.get_collection_stats()
+
+        if results:
+            video_ids = list({r.metadata.get("video_id", "?") for r in results})
+            logger.info(
+                "_verify_kb_collection: OK collection=%s found_chunks=%d "
+                "total_chroma_chunks=%s chroma_path=%s video_ids=%s",
+                collection_name, len(results),
+                total_stats.get("chunk_count", -1), actual_path, video_ids,
+            )
+        else:
+            logger.error(
+                "_verify_kb_collection: FAILED collection=%s found_chunks=0 "
+                "total_chroma_chunks=%s chroma_path=%s → Collection may be empty!",
+                collection_name, total_stats.get("chunk_count", -1), actual_path,
+            )
+    except Exception:
+        logger.exception(
+            "_verify_kb_collection: verification query failed collection=%s chroma_path=%s",
+            collection_name, chroma_path,
+        )
+
+
+def _remove_bm25_entries_by_prefix(source_path_prefix: str, kbid: str = "") -> int:
+    """
+    从 BM25 索引中删除 source_path 包含指定前缀的所有文档条目，
     随后重算 IDF 并保存。不依赖 embedding，调用代价极低。
+
+    kbid 不为空时操作 per-KB BM25 索引，否则操作全局索引。
 
     原理：BM25Indexer._documents 是以 chunk_id 为 key 的字典，
     每条目记录 {source_path, terms, doc_length}。直接过滤再重建即可。
     """
     try:
         from modular_rag.ingestion.storage.bm25_indexer import BM25Indexer
-        indexer = BM25Indexer()
+        if kbid:
+            indexer = BM25Indexer(index_dir=_kb_bm25_dir(kbid))
+        else:
+            indexer = BM25Indexer()
         if not indexer.index_path.exists():
             return 0
         indexer.load()

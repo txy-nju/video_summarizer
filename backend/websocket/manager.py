@@ -81,11 +81,32 @@ class ConnectionManager:
         async with self._lock:
             ws = self._connections.get(user_id)
         if ws is None:
+            logger.debug(
+                "WS send skipped (user not connected): user_id=%s, event_type=%s, sequence=%s",
+                user_id,
+                event.event_type,
+                event.sequence,
+            )
             return False
         try:
             await ws.send_text(event.model_dump_json())
+            logger.info(
+                "WS sent: user_id=%s, event_type=%s, scope=%s, scope_id=%s, sequence=%s, event_id=%s",
+                user_id,
+                event.event_type,
+                event.scope,
+                event.scope_id,
+                event.sequence,
+                event.event_id,
+            )
             return True
         except Exception:
+            logger.exception(
+                "WS send failed, disconnecting: user_id=%s, event_type=%s, sequence=%s",
+                user_id,
+                event.event_type,
+                event.sequence,
+            )
             await self.disconnect(user_id)
             return False
 
@@ -112,7 +133,6 @@ class ConnectionManager:
 
         channels = [
             _channel_name("tenant", tenant_id),
-            _channel_name("control", ""),
         ]
         main_loop = asyncio.get_running_loop()
 
@@ -124,8 +144,8 @@ class ConnectionManager:
                 async def _forward():
                     success = await self.send_personal(event.user_id, event)
                     if not success:
-                        logger.debug(
-                            "Progress event dropped (user offline): user_id=%s, event_type=%s, sequence=%s",
+                        logger.info(
+                            "WS event dropped (user offline): user_id=%s, event_type=%s, sequence=%s",
                             event.user_id,
                             event.event_type,
                             event.sequence,
@@ -134,7 +154,12 @@ class ConnectionManager:
                 try:
                     asyncio.run_coroutine_threadsafe(_forward(), main_loop)
                 except Exception:
-                    pass
+                    logger.exception(
+                        "WS forward failed (event loop error): user_id=%s, event_type=%s, sequence=%s",
+                        event.user_id,
+                        event.event_type,
+                        event.sequence,
+                    )
 
             try:
                 self._event_bus.subscribe(channels, _on_event, stop_check=lambda: self._should_stop)

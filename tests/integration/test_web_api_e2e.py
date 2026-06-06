@@ -146,11 +146,14 @@ def mock_external_services(monkeypatch):
     from backend.services.rag_agent_service import RagAgentService, RagAgentAnswer
 
     def mock_stream_video_question(self, owner_id, task_id, question_content, attachments):
-        yield "Mocked "
-        yield "RAG "
-        yield "answer "
-        yield "for "
-        yield f"question: {question_content}"
+        cited_sources = [{"video_id": "vid_1", "time_range": "00:00:10-00:00:20", "quote": "source text", "score": 0.95}]
+        def token_gen():
+            yield "Mocked "
+            yield "RAG "
+            yield "answer "
+            yield "for "
+            yield f"question: {question_content}"
+        return cited_sources, token_gen()
 
     def mock_answer_global_question(self, owner_id, kbid, question_content, attachments, kb_config=None):
         return RagAgentAnswer(

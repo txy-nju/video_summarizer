@@ -23,14 +23,14 @@ class _FakeWorkflowApp:
         }
 
         yield {
-            "chunk_vision_node": {
+            "chunk_vision_worker_node": {
                 "chunk_results": [
                     {"chunk_id": "chunk-000", "vision_insights": "vision", "latency_ms": {"vision": 5}}
                 ]
             }
         }
         yield {
-            "chunk_synthesizer_node": {
+            "chunk_subgraph_node": {
                 "chunk_results": [
                     {
                         "chunk_id": "chunk-000",

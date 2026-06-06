@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import UTC, datetime
 import json
+import logging
 
 from backend.api.pagination import build_pagination, normalize_page_size
 from backend.repositories.kb_repository import KnowledgeBaseRepository
@@ -14,6 +15,8 @@ from backend.schemas.video_summary_task import (
     VideoSummaryTaskView,
 )
 
+
+logger = logging.getLogger(__name__)
 
 _WORKFLOW_TRANSITIONS: dict[str, set[str]] = {
     "DRAFT_GENERATING": {"WAITING_USER_APPROVAL", "FAILED"},
@@ -208,10 +211,53 @@ class VideoSummaryTaskService:
         task_id: str,
         trace_id: str,
     ) -> dict[str, str]:
-        """Validate task/video context and dispatch phase-1 analysis Celery task."""
+        """Validate task/video context and dispatch phase-1 analysis Celery task.
+
+        Idempotency guards:
+        - WAITING_USER_APPROVAL: phase-1 already completed, return cached draft_summary.
+        - COMPLETED: task fully completed, return cached final_summary.
+        - FINAL_GENERATING: phase-2 in progress, reject with ValueError.
+        """
         task = self._repository.get_by_owner_and_id(owner_id, task_id)
         if task is None:
             raise LookupError("Video summary task not found")
+
+        # ── 幂等性守卫 ──────────────────────────────────────────────
+        # 所有数据来自 DB（task 由 get_by_owner_and_id 查询），不存在缓存失效问题。
+        # draft_summary / final_summary 与 workflow_state 在同一事务中写入，保证一致性。
+
+        # phase-1 已完成：直接返回 DB 中已持久化的 draft_summary
+        if task.workflow_state == "WAITING_USER_APPROVAL":
+            if not task.draft_summary:
+                logger.warning(
+                    "Data integrity: workflow_state=WAITING_USER_APPROVAL but draft_summary is empty for task_id=%s",
+                    task_id,
+                )
+            return {
+                "task_id": task_id,
+                "workflow_state": "WAITING_USER_APPROVAL",
+                "draft_summary": task.draft_summary or "",
+                "message": "Phase-1 analysis already completed. Returning persisted draft_summary.",
+            }
+
+        # 全部已完成：直接返回 DB 中已持久化的 final_summary
+        if task.workflow_state == "COMPLETED":
+            if not task.final_summary:
+                logger.warning(
+                    "Data integrity: workflow_state=COMPLETED but final_summary is empty for task_id=%s",
+                    task_id,
+                )
+            return {
+                "task_id": task_id,
+                "workflow_state": "COMPLETED",
+                "final_summary": task.final_summary or "",
+                "message": "Task already completed. Returning persisted final_summary.",
+            }
+
+        # phase-2 正在执行中：拒绝回到 phase-1
+        if task.workflow_state == "FINAL_GENERATING":
+            raise ValueError("finalization_in_progress")
+        # ────────────────────────────────────────────────────────────
 
         video = self._video_repository.get_by_owner_and_id(owner_id=owner_id, video_id=task.video_id)
         if video is None:
@@ -232,7 +278,7 @@ class VideoSummaryTaskService:
         keyframes = video.keyframes or []
 
         from backend.tasks.workflow_runtime_tasks import async_execute_analysis_workflow
-        
+
         # Update state synchronously to prevent race conditions in clients
         self._repository.update_state_by_owner_and_id(
             owner_id=owner_id,

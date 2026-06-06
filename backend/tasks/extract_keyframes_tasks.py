@@ -10,6 +10,7 @@ from pathlib import Path
 
 from backend.db.session import SessionLocal
 from backend.infrastructure.storage.oss_client import ObjectStorageClient, get_object_storage_client
+from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ def _sanitize_frames_for_db(
     - 保留 time, scene_change_score, scene_change_level
     - 将 frame_file 或 image 替换为 oss_key（不持久化 base64）
     """
+    import base64 as b64_lib
+    import tempfile
+
     result = []
     for i, frame in enumerate(raw_frames):
         frame_file = frame.get("frame_file")
@@ -53,6 +57,19 @@ def _sanitize_frames_for_db(
         frame_oss_key = _build_oss_key(owner_id, video_id, filename)
         if frame_file and Path(frame_file).exists():
             storage_client.upload_file(local_path=Path(frame_file), object_key=frame_oss_key)
+        elif frame.get("image"):
+            # 如果没有 frame_file 但有内联的 base64 图片，先写入临时文件再上传
+            try:
+                img_data = b64_lib.b64decode(frame["image"])
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
+                    tmp.write(img_data)
+                    tmp_path = Path(tmp.name)
+                try:
+                    storage_client.upload_file(local_path=tmp_path, object_key=frame_oss_key)
+                finally:
+                    tmp_path.unlink(missing_ok=True)
+            except Exception as e:
+                logger.error("Failed to upload inline base64 keyframe image to storage: %s", e)
 
         db_frame = {
             "time": frame.get("time", ""),
@@ -66,10 +83,13 @@ def _sanitize_frames_for_db(
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.extract_keyframes_tasks.async_extract_keyframes",
     max_retries=3,
     default_retry_delay=30,
     acks_late=True,
+    task_soft_time_limit=600,
+    task_time_limit=900,
 )
 def async_extract_keyframes(self, video_id: str, trace_id: str = "") -> dict:
     """
@@ -122,12 +142,18 @@ def async_extract_keyframes(self, video_id: str, trace_id: str = "") -> dict:
 
     except Exception as exc:
         logger.exception("async_extract_keyframes failed for video_id=%s trace_id=%s", video_id, trace_id)
-        try:
-            fail_service, fail_db = _create_video_resource_service()
-            fail_service.mark_frame_extraction_failed(video_id=video_id)
-            fail_db.close()
-        except Exception:
-            pass
-        raise self.retry(exc=exc)
+        # 仅在重试耗尽时标记 FAILED；重试期间保留原状态
+        if self.is_last_attempt:
+            logger.critical(
+                "async_extract_keyframes: retries exhausted for video_id=%s trace_id=%s",
+                video_id, trace_id,
+            )
+            try:
+                fail_service, fail_db = _create_video_resource_service()
+                fail_service.mark_frame_extraction_failed(video_id=video_id)
+                fail_db.close()
+            except Exception:
+                pass
+        raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
     finally:
         db.close()

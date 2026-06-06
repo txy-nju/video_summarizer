@@ -23,7 +23,7 @@ class _FakeTaskSelf:
     def __init__(self) -> None:
         self.retry_called = False
 
-    def retry(self, *, exc: Exception):
+    def retry(self, *, exc: Exception, countdown: int = 0):
         self.retry_called = True
         raise RuntimeError("retry-called")
 
@@ -99,18 +99,17 @@ def test_async_extract_keyframes_routes_status_through_service(monkeypatch, tmp_
     assert service.completed_keyframes[0]["oss_key"].endswith("/frame_0001.jpg")
 
 
-def test_async_extract_keyframes_failure_marks_failed_and_retries(monkeypatch) -> None:
+def test_async_extract_keyframes_failure_retries_but_does_not_mark_failed_on_first_attempt(
+    monkeypatch,
+) -> None:
+    """FAILED status should NOT be set on the first failure — only on the last retry attempt."""
     task_self = _FakeTaskSelf()
-    main_service = _ServiceFail()
-    fail_service = _ServiceFail()
 
     calls = {"count": 0}
 
     def _fake_factory():
         calls["count"] += 1
-        if calls["count"] == 1:
-            return main_service, _FakeDb()
-        return fail_service, _FakeDb()
+        return _ServiceFail(), _FakeDb()
 
     monkeypatch.setattr("backend.tasks.extract_keyframes_tasks._create_video_resource_service", _fake_factory)
     monkeypatch.setattr(async_extract_keyframes, "retry", task_self.retry)
@@ -119,4 +118,31 @@ def test_async_extract_keyframes_failure_marks_failed_and_retries(monkeypatch) -
         async_extract_keyframes.run("vid-fail")
 
     assert task_self.retry_called is True
-    assert fail_service.failed_called is True
+    assert calls["count"] == 1  # only main service; FAILED was NOT called
+
+
+def test_async_extract_keyframes_failure_marks_failed_on_last_attempt() -> None:
+    """FAILED status IS set on the terminal retry attempt (BaseTask retry_or_fail contract)."""
+    from backend.tasks.base_task import BaseTask
+
+    class _TestTask(BaseTask):
+        exhausted_exc: Exception | None = None
+
+        def on_exhausted_retry(self, exc: Exception) -> None:
+            self.exhausted_exc = exc
+
+    task = _TestTask()
+    task.name = "test_extract_keyframes"
+    task.max_retries = 3
+
+    class _FakeReq:
+        retries = 3
+        id = "task-001"
+        args = ("vid-fail",)
+
+    task.request_stack = type("_Stack", (), {"top": _FakeReq()})()
+
+    with pytest.raises(ValueError, match="exhausted"):
+        task.retry_or_fail(ValueError("exhausted"))
+
+    assert task.exhausted_exc is not None

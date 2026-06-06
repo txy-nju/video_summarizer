@@ -66,6 +66,28 @@ class VideoSummaryTaskRepository:
             return None
         return self._to_record(row, owner_id=owner_id)
 
+    # ── 系统级只读查询（后台任务，无 owner_id 上下文）─────────────────
+
+    def get_by_id_system(self, task_id: str) -> VideoSummaryTaskRecord | None:
+        """系统级查询：不校验 owner，仅供后台任务使用。
+
+        VideoSummaryTask 自身不存储 owner_id，因此 JOIN KnowledgeBase
+        以获取 owner_id 用于构造 Record。
+
+        仅限 Celery 任务、RAG 检索等无用户请求上下文的场景调用。
+        有请求上下文的路径必须使用 get_by_owner_and_id() 进行 owner 校验。
+        """
+        row = (
+            self._session.query(VideoSummaryTask, KnowledgeBase.owner_id)
+            .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
+            .filter(VideoSummaryTask.task_id == task_id)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        entity, kb_owner_id = row
+        return self._to_record(entity, owner_id=str(kb_owner_id) if kb_owner_id else "")
+
     def update_by_owner_and_id(
         self,
         *,

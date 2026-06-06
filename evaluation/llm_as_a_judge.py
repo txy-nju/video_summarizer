@@ -49,7 +49,11 @@ def _get_client(api_key: Optional[str] = None, base_url: Optional[str] = None) -
 
 
 def _get_model_name(model_name: Optional[str] = None) -> str:
-    return (model_name or os.getenv("OPENAI_MODEL_NAME", "gpt-4o")).strip() or "gpt-4o"
+    # 优先级：调用时显式传入 > EVAL_JUDGE_MODEL 环境变量 > OPENAI_MODEL_NAME 环境变量 > 默认 gpt-4o
+    env_judge_model = os.getenv("EVAL_JUDGE_MODEL", "").strip()
+    env_openai_model = os.getenv("OPENAI_MODEL_NAME", "").strip()
+    resolved = model_name or env_judge_model or env_openai_model or "gpt-4o"
+    return resolved.strip() or "gpt-4o"
 
 
 def _chat_json(

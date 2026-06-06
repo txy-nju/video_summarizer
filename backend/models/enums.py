@@ -6,6 +6,7 @@ class TranscribeStatus(str, Enum):
     TRANSCRIBING = "TRANSCRIBING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    IRRECOVERABLE = "IRRECOVERABLE"  # 超过恢复重试上限，需人工介入
 
 
 class FrameExtractionStatus(str, Enum):
@@ -13,6 +14,7 @@ class FrameExtractionStatus(str, Enum):
     EXTRACTING = "EXTRACTING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    IRRECOVERABLE = "IRRECOVERABLE"  # 超过恢复重试上限，需人工介入
 
 
 class WorkflowState(str, Enum):

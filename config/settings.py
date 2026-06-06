@@ -47,6 +47,10 @@ TEMP_VIDEO_DIR = TEMP_DIR / "videos"
 TEMP_AUDIO_DIR = TEMP_DIR / "audios"
 TEMP_FRAMES_DIR = TEMP_DIR / "frames"
 
+# 本地对象存储根目录（与 backend/config.py 的 OSS_LOCAL_ROOT 对齐）
+_oss_local_raw = os.getenv("OSS_LOCAL_ROOT", "temp/object_storage")
+OSS_LOCAL_ROOT_PATH = (BASE_DIR / _oss_local_raw).resolve()
+
 # 确保目录存在
 for dir_path in [TEMP_VIDEO_DIR, TEMP_AUDIO_DIR, TEMP_FRAMES_DIR]:
     dir_path.mkdir(parents=True, exist_ok=True)
@@ -103,7 +107,7 @@ SCENE_CHANGE_SEVERE_MEDIUM_THRESHOLD = _get_float_env("SCENE_CHANGE_SEVERE_MEDIU
 SCENE_CHANGE_SEVERE_LONG_THRESHOLD = _get_float_env("SCENE_CHANGE_SEVERE_LONG_THRESHOLD", 0.25, minimum=0.0)
 
 # 5.6 第三阶段：波次并行容错配置
-CHUNK_WORKER_TIMEOUT_SECONDS = float(os.getenv("CHUNK_WORKER_TIMEOUT_SECONDS", "45"))
+CHUNK_WORKER_TIMEOUT_SECONDS = float(os.getenv("CHUNK_WORKER_TIMEOUT_SECONDS", "120"))
 if CHUNK_WORKER_TIMEOUT_SECONDS <= 0:
     CHUNK_WORKER_TIMEOUT_SECONDS = 45.0
 CHUNK_WORKER_MAX_RETRIES = _get_int_env("CHUNK_WORKER_MAX_RETRIES", 1, minimum=0)
@@ -116,7 +120,7 @@ CONTEXT_MEMORY_SUMMARY_MAX_CHARS = _get_int_env("CONTEXT_MEMORY_SUMMARY_MAX_CHAR
 # 5.3 Map-Reduce（迭代 B）配置
 CHUNK_MAX_TOOL_CALLS = int(os.getenv("CHUNK_MAX_TOOL_CALLS", "2"))
 ENABLE_CHUNK_CACHE = os.getenv("ENABLE_CHUNK_CACHE", "true").strip().lower() in {"1", "true", "yes", "on"}
-AGGREGATED_CHUNK_INSIGHTS_MAX_CHARS: int = int(os.environ.get("AGGREGATED_CHUNK_INSIGHTS_MAX_CHARS", "100000"))
+AGGREGATED_CHUNK_INSIGHTS_MAX_CHARS = int(os.getenv("AGGREGATED_CHUNK_INSIGHTS_MAX_CHARS", "100000"))
 
 # 5.5 Outline Bootstrap 配置（第一阶段工程化）
 OUTLINE_STOPWORDS_DIR = Path(

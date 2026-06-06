@@ -156,9 +156,14 @@ async def start_analysis_workflow(
     Loads video transcript and keyframes, then dispatches async analysis task.
     Returns immediately with 202 Accepted.
 
+    Idempotency:
+    - WAITING_USER_APPROVAL → returns 200 with cached draft_summary.
+    - COMPLETED → returns 200 with cached final_summary.
+    - FINAL_GENERATING → returns 422 (phase-2 in progress, cannot go back).
+
     State transition: task.workflow_state = DRAFT_GENERATING (until analysis completes)
     """
-    _ = payload, workflow_service
+    _ = payload
 
     trace_id = str(getattr(request.state, "trace_id", ""))
     try:
@@ -169,6 +174,23 @@ async def start_analysis_workflow(
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        msg = str(exc)
+        if msg == "finalization_in_progress":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Phase-2 finalization is currently in progress. "
+                "Cannot restart phase-1 analysis. Please wait for finalization to complete.",
+            ) from exc
+        raise
+
+    # 仅在任务被真正分发（非幂等命中）时推送 WS 首事件
+    if response_data.get("workflow_state") == "DRAFT_GENERATING":
+        workflow_service.publish_task_accepted(
+            user_id=current_user.user_id,
+            task_id=task_id,
+            trace_id=trace_id,
+        )
 
     return StartAnalysisWorkflowResponse(
         data=response_data,

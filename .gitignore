@@ -33,3 +33,6 @@ test_out.log
 Z/
 start_dev.bat
 start_prod.bat
+
+# data
+data/db/*

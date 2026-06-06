@@ -80,7 +80,7 @@ class KnowledgeBaseService:
         if deleted and collection_name:
             from backend.tasks.global_retrieval_tasks import async_purge_vector_collection
             async_purge_vector_collection.apply_async(
-                args=[collection_name],
+                args=[collection_name, kbid],
                 queue="low_priority",
             )
         return deleted

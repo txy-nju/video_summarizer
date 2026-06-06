@@ -30,6 +30,7 @@ class InitUploadRequest(BaseModel):
 
     file_name: str = Field(..., min_length=1, max_length=512)
     total_size: int = Field(..., gt=0, le=10 * 1024 * 1024 * 1024)  # 最大 10GB
+    video_id: str | None = Field(default=None, min_length=1, max_length=36)  # 可选：关联的预注册 VideoResource ID
 
 
 class InitUploadResponse(BaseModel):
@@ -97,6 +98,7 @@ class UploadSessionState(BaseModel):
     state: str = "created"
     expires_at: str = ""
     created_at: str = ""
+    video_id: str | None = None
 
     @property
     def uploaded_size(self) -> int:

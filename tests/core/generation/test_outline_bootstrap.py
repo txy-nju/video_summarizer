@@ -1,90 +1,103 @@
 import unittest
 from typing import cast
+from unittest.mock import MagicMock, patch
 
 from core.workflow.video_summary.nodes.outline_bootstrap import outline_bootstrap_node
 from core.workflow.video_summary.state import VideoSummaryState
 
+_VALID_TRANSCRIPT = (
+    '{"segments": [' 
+    '{"start": 0, "end": 8, "text": "OpenAI launches GPT4o in Beijing"}, '
+    '{"start": 9, "end": 18, "text": "随后团队演示 LangGraph workflow"}' 
+    ']}' 
+)
+
+_VALID_CHUNK_PLAN = [
+    {
+        "chunk_id": "chunk-000",
+        "start_sec": 0,
+        "end_sec": 60,
+        "transcript_segment_indexes": [0, 1],
+        "keyframe_indexes": [0],
+    }
+]
+
+_NARRATIVE_ARC_RESPONSE = (
+    '[{"chapter_id": "ch1", "title": "Introduction", "start_sec": 0, "end_sec": 18, "summary": "OpenAI demo"}]'
+)
+
 
 class TestOutlineBootstrapNode(unittest.TestCase):
-    def test_builds_structured_context_without_narrative_summary(self):
-        state = cast(
-            VideoSummaryState,
-            {
-                "transcript": (
-                    '{"segments": ['
-                    '{"start": 0, "end": 8, "text": "OpenAI launches GPT4o in Beijing"}, '
-                    '{"start": 9, "end": 18, "text": "随后团队演示 LangGraph workflow"}'
-                    ']}'
-                ),
-                "chunk_plan": [
-                    {
-                        "chunk_id": "chunk-000",
-                        "start_sec": 0,
-                        "end_sec": 60,
-                        "transcript_segment_indexes": [0, 1],
-                        "keyframe_indexes": [0],
-                    }
-                ],
-            },
-        )
 
+    @patch("core.workflow.video_summary.nodes.outline_bootstrap.get_model_for_capability")
+    def test_narrative_arc_written_when_llm_succeeds(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = _NARRATIVE_ARC_RESPONSE
+        mock_get_model.return_value = mock_model
+
+        state = cast(VideoSummaryState, {"transcript": _VALID_TRANSCRIPT, "chunk_plan": _VALID_CHUNK_PLAN})
         result = outline_bootstrap_node(state)
 
-        structured = result.get("structured_global_context", {})
-        self.assertIn("entities", structured)
-        self.assertIn("timeline_anchors", structured)
-        self.assertNotIn("summary", structured)
-        self.assertFalse(structured.get("source_policy", {}).get("narrative_summary_allowed", True))
+        arc = result.get("narrative_arc", [])
+        self.assertIsInstance(arc, list)
+        self.assertGreater(len(arc), 0)
+        chapter = arc[0]
+        self.assertIn("chapter_id", chapter)
+        self.assertIn("title", chapter)
+        self.assertIn("start_sec", chapter)
+        self.assertIn("end_sec", chapter)
 
-        entity_names = {item.get("name") for item in structured.get("entities", []) if isinstance(item, dict)}
-        self.assertIn("OpenAI", entity_names)
-        self.assertIn("LangGraph", entity_names)
+    @patch("core.workflow.video_summary.nodes.outline_bootstrap.get_model_for_capability")
+    def test_narrative_arc_degrades_to_empty_when_llm_fails(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.side_effect = Exception("LLM unavailable")
+        mock_get_model.return_value = mock_model
 
-        anchors = structured.get("timeline_anchors", [])
-        self.assertEqual(len(anchors), 1)
-        self.assertEqual(anchors[0].get("chunk_id"), "chunk-000")
-        self.assertEqual(anchors[0].get("transcript_segment_indexes"), [0, 1])
-
-    def test_handles_invalid_inputs_with_empty_structured_context(self):
-        result = outline_bootstrap_node(cast(VideoSummaryState, {"transcript": "{bad-json}", "chunk_plan": "invalid"}))
-
-        structured = result.get("structured_global_context", {})
-        self.assertEqual(structured.get("entities"), [])
-        self.assertEqual(structured.get("timeline_anchors"), [])
-        self.assertEqual(structured.get("source_policy", {}).get("allowed_fields"), ["entities", "timeline_anchors"])
-
-    def test_filters_spoken_chinese_fillers_and_keeps_keywords(self):
-        state = cast(
-            VideoSummaryState,
-            {
-                "transcript": (
-                    '{"segments": ['
-                    '{"start": 0, "end": 10, "text": "我觉得你看这个项目其实是一个多模态视频总结系统"}, '
-                    '{"start": 11, "end": 20, "text": "然后我们用了 LangGraph 和 OpenAI API 来编排工作流"}'
-                    ']}'
-                ),
-                "chunk_plan": [
-                    {
-                        "chunk_id": "chunk-000",
-                        "start_sec": 0,
-                        "end_sec": 30,
-                        "transcript_segment_indexes": [0, 1],
-                        "keyframe_indexes": [],
-                    }
-                ],
-            },
-        )
-
+        state = cast(VideoSummaryState, {"transcript": _VALID_TRANSCRIPT, "chunk_plan": _VALID_CHUNK_PLAN})
         result = outline_bootstrap_node(state)
-        entity_names = {item.get("name") for item in result.get("structured_global_context", {}).get("entities", [])}
 
-        self.assertTrue(any("多模态" in str(name) for name in entity_names))
-        self.assertIn("LangGraph", entity_names)
-        self.assertIn("OpenAI", entity_names)
-        self.assertNotIn("我觉得", entity_names)
-        self.assertNotIn("你看这个", entity_names)
-        self.assertNotIn("其实", entity_names)
-        self.assertNotIn("一个多", entity_names)
+        arc = result.get("narrative_arc", "MISSING")
+        self.assertIsInstance(arc, list)
+        self.assertEqual(arc, [])
+
+    @patch("core.workflow.video_summary.nodes.outline_bootstrap.get_model_for_capability")
+    def test_narrative_arc_degrades_to_empty_when_llm_returns_invalid_json(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = "not json at all"
+        mock_get_model.return_value = mock_model
+
+        state = cast(VideoSummaryState, {"transcript": _VALID_TRANSCRIPT, "chunk_plan": _VALID_CHUNK_PLAN})
+        result = outline_bootstrap_node(state)
+
+        arc = result.get("narrative_arc", "MISSING")
+        self.assertIsInstance(arc, list)
+        self.assertEqual(arc, [])
+
+    @patch("core.workflow.video_summary.nodes.outline_bootstrap.get_model_for_capability")
+    def test_reduce_debug_info_records_chapter_count(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = _NARRATIVE_ARC_RESPONSE
+        mock_get_model.return_value = mock_model
+
+        state = cast(VideoSummaryState, {"transcript": _VALID_TRANSCRIPT, "chunk_plan": _VALID_CHUNK_PLAN})
+        result = outline_bootstrap_node(state)
+
+        debug = result.get("reduce_debug_info", {})
+        self.assertTrue(debug.get("outline_bootstrap_ready"))
+        self.assertIn("outline_narrative_arc_chapter_count", debug)
+        self.assertGreater(debug["outline_narrative_arc_chapter_count"], 0)
+
+    @patch("core.workflow.video_summary.nodes.outline_bootstrap.get_model_for_capability")
+    def test_handles_invalid_transcript_without_raising(self, mock_get_model):
+        mock_model = MagicMock()
+        mock_model.chat_completion.return_value = "[]"
+        mock_get_model.return_value = mock_model
+
+        result = outline_bootstrap_node(
+            cast(VideoSummaryState, {"transcript": "{bad-json}", "chunk_plan": "invalid"})
+        )
+        arc = result.get("narrative_arc", "MISSING")
+        self.assertIsInstance(arc, list)
 
 
 if __name__ == "__main__":
