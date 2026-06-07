@@ -10,6 +10,15 @@ from backend.schemas.kb import KnowledgeBaseConfig, KnowledgeBaseCreateRequest, 
 from backend.schemas.kb import KnowledgeBaseVideoItem
 
 
+class DuplicateVideoInKbError(Exception):
+    """Raised when a video is already linked to a KB."""
+
+    def __init__(self, kbid: str, video_id: str) -> None:
+        self.kbid = kbid
+        self.video_id = video_id
+        super().__init__(f"Video {video_id} is already linked to KB {kbid}")
+
+
 class KnowledgeBaseService:
     def __init__(
         self,
@@ -117,8 +126,10 @@ class KnowledgeBaseService:
         if kb is None or video is None:
             return False
 
-        # Use new Repository method that operates on ORM relationship
-        self._repository.add_video_to_kb(owner_id=owner_id, kbid=kbid, video_id=video_id)
+        is_new = self._repository.add_video_to_kb(owner_id=owner_id, kbid=kbid, video_id=video_id)
+        if not is_new:
+            raise DuplicateVideoInKbError(kbid=kbid, video_id=video_id)
+
         from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
         async_add_video_to_vector_collection.apply_async(args=[kbid, video_id], queue="low_priority")
         return True

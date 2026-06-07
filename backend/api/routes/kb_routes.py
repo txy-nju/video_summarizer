@@ -6,7 +6,9 @@ from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
 from backend.api.filters import parse_fields
 from backend.dependencies import get_kb_service
+from backend.exceptions import AppError
 from backend.schemas.common import MetaInfo, PaginationInfo
+from backend.services.kb_service import DuplicateVideoInKbError
 from backend.schemas.kb import (
     KnowledgeBaseCreateRequest,
     KnowledgeBaseDeleteData,
@@ -120,11 +122,19 @@ async def add_video_to_knowledge_base(
     current_user: UserView = Depends(get_current_user),
     kb_service: KnowledgeBaseService = Depends(get_kb_service),
 ):
-    bound = kb_service.add_video_to_knowledge_base(
-        owner_id=current_user.user_id,
-        kbid=kbid,
-        video_id=payload.video_id,
-    )
+    try:
+        bound = kb_service.add_video_to_knowledge_base(
+            owner_id=current_user.user_id,
+            kbid=kbid,
+            video_id=payload.video_id,
+        )
+    except DuplicateVideoInKbError as exc:
+        raise AppError(
+            code="KB_DUPLICATE_VIDEO",
+            message="This video is already linked to this knowledge base.",
+            status_code=status.HTTP_409_CONFLICT,
+            details={"kbid": exc.kbid, "video_id": exc.video_id},
+        )
     if not bound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base or video resource not found")
     return KnowledgeBaseVideoBindResponse(data=KnowledgeBaseVideoBindData(kbid=kbid, video_id=payload.video_id), meta=_build_meta(request))

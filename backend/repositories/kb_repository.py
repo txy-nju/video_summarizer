@@ -165,12 +165,12 @@ class KnowledgeBaseRepository:
             created_at=created_at,
         )
 
-    def add_video_to_kb(self, owner_id: str, kbid: str, video_id: str) -> None:
+    def add_video_to_kb(self, owner_id: str, kbid: str, video_id: str) -> bool:
         """
         Add a video to a knowledge base.
         - Ownership check: kbid belongs to owner_id
-        - Idempotency: duplicate add returns success (no error)
-        - Implementation: append video to kb.videos ORM relationship
+        - Idempotency: duplicate add returns False (already linked)
+        - Returns True if a new relation was created, False if already exists.
         """
         kb = (
             self._session.query(KnowledgeBase)
@@ -178,7 +178,7 @@ class KnowledgeBaseRepository:
             .one_or_none()
         )
         if kb is None:
-            return
+            return False
 
         video = (
             self._session.query(VideoResource)
@@ -186,7 +186,7 @@ class KnowledgeBaseRepository:
             .one_or_none()
         )
         if video is None:
-            return
+            return False
 
         exists = self._session.execute(
             select(kb_video_relation_table.c.kbid).where(
@@ -195,12 +195,13 @@ class KnowledgeBaseRepository:
             )
         ).first()
         if exists is not None:
-            return
+            return False
 
         self._session.execute(
             insert(kb_video_relation_table).values(kbid=kbid, video_id=video_id)
         )
         self._session.commit()
+        return True
 
     def remove_video_from_kb(self, owner_id: str, kbid: str, video_id: str) -> None:
         """
