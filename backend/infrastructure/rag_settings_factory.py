@@ -5,6 +5,12 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# 确保 .env 已加载（Celery Worker 进程中该模块可能在任何 .env 加载逻辑之前被导入）
+_env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+load_dotenv(dotenv_path=_env_path)
+
 from modular_rag.core.settings import (
     Settings,
     LLMSettings,
