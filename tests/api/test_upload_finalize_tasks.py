@@ -79,10 +79,20 @@ def test_async_finalize_upload_writes_object_key_in_db(monkeypatch, tmp_path) ->
         "backend.tasks.upload_finalize_tasks._create_upload_service",
         lambda: fake_upload_service,
     )
+    # Bypass magic-byte validation — test file is not a real video container
+    monkeypatch.setattr(
+        "backend.tasks.upload_finalize_tasks.validate_video_magic_bytes",
+        lambda file_path: (True, "mp4"),
+    )
     _expected_video_id = video_id
     monkeypatch.setattr(
         "backend.tasks.upload_finalize_tasks._create_video_resource",
-        lambda *, owner_id, file_name, video_id=None: video_id or _expected_video_id,
+        lambda *, owner_id, file_name: _expected_video_id,
+    )
+    # Retry idempotency: return None so a new record is created on first attempt
+    monkeypatch.setattr(
+        "backend.tasks.upload_finalize_tasks._get_session_video_id",
+        lambda upload_id: None,
     )
     monkeypatch.setattr(
         "backend.infrastructure.storage.oss_client.get_object_storage_client",
@@ -100,8 +110,11 @@ def test_async_finalize_upload_writes_object_key_in_db(monkeypatch, tmp_path) ->
         def cleanup_chunks(self, _upload_id: str) -> None:
             return None
 
-        def update_state(self, _upload_id: str, _state: str) -> None:
+        def finalize_session(self, upload_id: str, *, video_id=None, final_state="done") -> None:
             return None
+
+        def get_session(self, upload_id: str):
+            return None  # Always return None → no pre-existing video_id in session
 
     monkeypatch.setattr("backend.repositories.upload_repository.UploadRepository", _FakeUploadRepo)
     monkeypatch.setattr("redis.Redis.from_url", lambda *args, **kwargs: object())

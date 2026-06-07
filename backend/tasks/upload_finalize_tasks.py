@@ -53,9 +53,10 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
     - 写入 video_resource.oss_key
     - 发布 VideoUploadedEvent → 触发 async_process_video
 
-    幂等性：若上传已处理（UploadService 状态为 done），直接返回。
-    重试安全：_create_video_resource 会复用预注册记录，OSS 上传覆盖写，
-    consumer 侧通过 DB 状态判断跳过重复处理。
+    幂等性：若上传已处于终态（done/dedup_reused/rejected），直接返回。
+    Celery 重试安全：_get_session_video_id 检查 Redis 会话中已有的 video_id，
+    若前次执行已创建 VideoResource，重试时直接复用该 ID，跳过重复创建。
+    OSS 上传覆盖写，consumer 侧通过 DB 状态判断跳过重复处理。
     """
     service = _create_upload_service()
     try:
@@ -74,7 +75,7 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
                     upload_id, file_name, detected_type,
                 )
                 _abort_video_resource(result.get("video_id"))
-                _cleanup_upload_session(upload_id)
+                _cleanup_upload_session(upload_id, final_state="rejected")
                 Path(merged_path).unlink(missing_ok=True)
                 return {
                     "upload_id": upload_id,
@@ -94,7 +95,11 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
                     existing_video_id, file_hash[:16],
                 )
                 _ensure_file_hash(existing_video_id, file_hash)
-                _cleanup_upload_session(upload_id)
+                # Clean up orphan pre-registered record if it differs from the dedup match
+                pre_registered_id = result.get("video_id")
+                if pre_registered_id and pre_registered_id != existing_video_id:
+                    _abort_video_resource(pre_registered_id)
+                _cleanup_upload_session(upload_id, video_id=existing_video_id, final_state="dedup_reused")
                 existing_oss_key = _get_existing_oss_key(existing_video_id)
                 return {
                     "upload_id": upload_id,
@@ -104,11 +109,11 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
                     "trace_id": trace_id,
                 }
 
-            # Step 1: 创建或复用 VideoResource 记录（幂等）
-            video_id = _create_video_resource(
+            # Step 1: 创建 VideoResource 记录
+            # 幂等保护：先检查 Redis 会话是否已有 video_id（Celery 重试场景）
+            video_id = _get_session_video_id(upload_id) or _create_video_resource(
                 owner_id=owner_id,
                 file_name=file_name,
-                video_id=result.get("video_id"),
             )
             if video_id is None:
                 logger.error("async_finalize_upload: failed to create video_resource for upload_id=%s", upload_id)
@@ -127,8 +132,8 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
             stored_key = storage_client.upload_file(local_path=Path(merged_path), object_key=object_key)
             _set_video_resource_oss_key(video_id=video_id, oss_key=stored_key)
 
-            # Step 3: 清理分片文件
-            _cleanup_upload_session(upload_id)
+            # Step 3: 清理分片文件并写入最终 video_id 到会话
+            _cleanup_upload_session(upload_id, video_id=video_id, final_state="done")
 
             # Step 4: 发布 VideoUploadedEvent
             _publish_video_uploaded_event(
@@ -169,66 +174,20 @@ def _create_video_resource(
     *,
     owner_id: str,
     file_name: str,
-    video_id: str | None = None,
 ) -> str | None:
-    """创建或复用 VideoResource 记录（系统内部操作）。
+    """Create a new VideoResource record.
 
-    优先路径：若提供了显式 video_id，通过 video_id + owner_id 精确查找
-             目标记录，oss_key 为空时直接复用。
-    后备路径：video_id 未提供、记录不存在或已被占用时，回退到
-             (owner_id, file_name, 空 oss_key) 的文件名模糊匹配。
+    Always creates a fresh record — no pre-registration matching.
+    The hash-based dedup check (Step 2) runs BEFORE this function,
+    so if we reach here, a new record is always appropriate.
     """
     from backend.db.session import SessionLocal
-    from backend.models.database import VideoResource
     from backend.schemas.video_resource import VideoResourceCreateRequest
     from backend.repositories.video_resource_repository import VideoResourceRepository
     from backend.services.video_resource_service import VideoResourceService
 
     db = SessionLocal()
     try:
-        # ── 优先路径：显式 video_id → 精确查找 ──
-        if video_id:
-            row = (
-                db.query(VideoResource)
-                .filter(
-                    VideoResource.video_id == video_id,
-                    VideoResource.owner_id == owner_id,
-                )
-                .one_or_none()
-            )
-            if row is not None and _oss_key_is_empty(row.oss_key):
-                logger.info(
-                    "Reusing explicitly-provided VideoResource: video_id=%s, file_name=%s",
-                    video_id, file_name,
-                )
-                return str(row.video_id)
-            if row is not None and not _oss_key_is_empty(row.oss_key):
-                logger.warning(
-                    "Explicit video_id=%s already has oss_key set, falling back to file_name match",
-                    video_id,
-                )
-            else:
-                logger.warning(
-                    "Explicit video_id=%s not found for owner_id=%s, falling back to file_name match",
-                    video_id, owner_id,
-                )
-
-        # ── 后备路径（向后兼容）：文件名模糊匹配 ──
-        row = (
-            db.query(VideoResource)
-            .filter(
-                VideoResource.owner_id == owner_id,
-                VideoResource.file_name == file_name,
-                (VideoResource.oss_key == "") | (VideoResource.oss_key.is_(None)),
-            )
-            .order_by(VideoResource.video_id.desc())
-            .first()
-        )
-        if row is not None:
-            logger.info("Found pre-registered VideoResource by file_name: video_id=%s, reusing it.", row.video_id)
-            return str(row.video_id)
-
-        # 2. 如果没有预注册的同名记录，才新建一条记录
         repo = VideoResourceRepository(db_session=db)
         service = VideoResourceService(repository=repo)
 
@@ -236,13 +195,13 @@ def _create_video_resource(
             owner_id=owner_id,
             payload=VideoResourceCreateRequest(file_name=file_name),
         )
+        logger.info(
+            "Created VideoResource: video_id=%s, file_name=%s, owner_id=%s",
+            view.video_id, file_name, owner_id,
+        )
         return view.video_id
     finally:
         db.close()
-
-
-def _oss_key_is_empty(oss_key: str | None) -> bool:
-    return not oss_key or oss_key.strip() == ""
 
 
 def _set_video_resource_oss_key(*, video_id: str, oss_key: str) -> None:
@@ -361,16 +320,47 @@ def _get_existing_oss_key(video_id: str) -> str:
         db.close()
 
 
-def _cleanup_upload_session(upload_id: str) -> None:
-    """Clean up Redis upload session chunks and mark as done."""
+def _cleanup_upload_session(
+    upload_id: str,
+    video_id: str | None = None,
+    final_state: str = "done",
+) -> None:
+    """Clean up Redis upload session chunks and set final video_id + state.
+
+    Args:
+        upload_id: The upload session to clean up.
+        video_id: Final VideoResource ID to write into the session (dedup-reused or newly created).
+        final_state: Terminal state to set (done / dedup_reused / rejected).
+    """
     from backend.repositories.upload_repository import UploadRepository
     import redis as redis_lib
     import os
 
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
     redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
-    UploadRepository(redis_client).cleanup_chunks(upload_id)
-    UploadRepository(redis_client).update_state(upload_id, "done")
+    repo = UploadRepository(redis_client)
+    repo.cleanup_chunks(upload_id)
+    repo.finalize_session(upload_id, video_id=video_id, final_state=final_state)
+
+
+def _get_session_video_id(upload_id: str) -> str | None:
+    """Read the video_id already persisted on the Redis upload session.
+
+    Used for Celery-retry idempotency: if a prior execution of
+    async_finalize_upload created a VideoResource and wrote its id back
+    into the session, a retry can skip record creation and resume from
+    the oss_key upload step.
+    """
+    from backend.repositories.upload_repository import UploadRepository
+    import redis as redis_lib
+    import os
+
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
+    redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
+    state = UploadRepository(redis_client).get_session(upload_id)
+    if state is None:
+        return None
+    return state.video_id or None
 
 
 def _publish_video_uploaded_event(*, video_id: str, owner_id: str, oss_key: str, trace_id: str = "") -> None:

@@ -101,6 +101,27 @@ class UploadRepository:
         self._save(state)
         return state
 
+    def finalize_session(
+        self,
+        upload_id: str,
+        *,
+        video_id: str | None = None,
+        final_state: str = "done",
+    ) -> UploadSessionState | None:
+        """更新会话的 video_id 和终态状态（原子操作）。
+
+        用于上传最终化完成后写入正确的 video_id（去重复用 or 新建），
+        使得前端通过 GET /api/v1/uploads/{upload_id} 能获取到最终结果。
+        """
+        state = self.get_session(upload_id)
+        if state is None:
+            return None
+        if video_id is not None:
+            state.video_id = video_id
+        state.state = final_state
+        self._save(state)
+        return state
+
     def delete_session(self, upload_id: str) -> bool:
         """删除会话元数据（不清除已合并的最终文件）。"""
         key = self._session_key(upload_id)

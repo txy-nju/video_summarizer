@@ -34,7 +34,16 @@ class InitUploadRequest(BaseModel):
 
     file_name: str = Field(..., min_length=1, max_length=512)
     total_size: int = Field(..., gt=0, le=10 * 1024 * 1024 * 1024)  # 最大 10GB
-    video_id: str | None = Field(default=None, min_length=1, max_length=36)  # 可选：关联的预注册 VideoResource ID
+    video_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=36,
+        description=(
+            "Deprecated: 不再作为前端导航依据。"
+            "上传完成后请从 GET /api/v1/uploads/{upload_id} 的 video_id 字段获取最终结果。"
+            "此字段仅用于后端内部兼容，将在未来版本移除。"
+        ),
+    )  # 可选：关联的预注册 VideoResource ID（已废弃）
 
     @field_validator("file_name")
     @classmethod
@@ -71,12 +80,16 @@ class ChunkStatusResponse(BaseModel):
     - uploaded_size：已上传总字节数。
     - total_size：文件总字节数。
     - uploaded_chunks：已完成的分片索引列表。
+    - video_id：最终关联的 VideoResource ID（终端状态下才有值）。
+    - state：会话当前状态（created / uploading / uploading_complete / finalizing / done / dedup_reused / failed / cancelled）。
     """
 
     upload_id: str
     uploaded_size: int
     total_size: int
     uploaded_chunks: list[int]
+    video_id: str | None = None
+    state: str | None = None
 
 
 class UploadCancelResponse(BaseModel):

@@ -79,7 +79,7 @@ class UploadService:
             raise ValueError(f"Upload session not found: {upload_id}")
         if state.owner_id != owner_id:
             raise ValueError("Upload session does not belong to current user")
-        if state.state in ("done", "failed", "cancelled"):
+        if state.state in ("done", "dedup_reused", "rejected", "failed", "cancelled"):
             raise ValueError(f"Upload session is in terminal state: {state.state}")
 
         total_chunks = state.total_chunks
@@ -122,6 +122,8 @@ class UploadService:
             uploaded_size=state.uploaded_size,
             total_size=state.total_size,
             uploaded_chunks=sorted(state.uploaded_chunks),
+            video_id=state.video_id,
+            state=state.state,
         )
 
     def cancel_upload(self, *, upload_id: str, owner_id: str) -> UploadCancelResponse | None:
@@ -148,7 +150,7 @@ class UploadService:
         if state is None:
             return {"upload_id": upload_id, "status": "NOT_FOUND"}
 
-        if state.state in ("done", "failed", "cancelled"):
+        if state.state in ("done", "dedup_reused", "rejected", "failed", "cancelled"):
             return {"upload_id": upload_id, "status": state.state.upper()}
 
         try:
