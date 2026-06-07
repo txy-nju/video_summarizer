@@ -18,9 +18,12 @@ WorkflowState = Literal[
 
 
 class VideoSummaryTaskCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     kbid: str = Field(min_length=1, max_length=64)
     video_id: str = Field(min_length=1, max_length=64)
     user_initial_preference: str | None = Field(default=None, max_length=5000)
+    replace_existing_task_id: str | None = Field(default=None, max_length=64)
 
 
 class VideoSummaryTaskUpdateRequest(BaseModel):
@@ -29,6 +32,14 @@ class VideoSummaryTaskUpdateRequest(BaseModel):
     draft_summary: str | None = Field(default=None, max_length=20000)
     user_guidance: str | None = Field(default=None, max_length=10000)
     title: str | None = Field(default=None, max_length=255)
+
+
+class TaskCloneToKbRequest(BaseModel):
+    """Clone an existing Task to another Knowledge Base."""
+    model_config = ConfigDict(extra="forbid")
+
+    kbid: str = Field(min_length=1, max_length=64)
+    replace_existing_task_id: str | None = Field(default=None, max_length=64)
 
 
 # Workflow trigger DTO

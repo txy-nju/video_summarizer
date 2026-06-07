@@ -10,6 +10,7 @@ from backend.repositories.kb_repository import KnowledgeBaseRepository
 from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.repositories.video_summary_task_repository import VideoSummaryTaskRecord, VideoSummaryTaskRepository
 from backend.schemas.video_summary_task import (
+    TaskCloneToKbRequest,
     VideoSummaryTaskCreateRequest,
     VideoSummaryTaskUpdateRequest,
     VideoSummaryTaskView,
@@ -25,6 +26,17 @@ _WORKFLOW_TRANSITIONS: dict[str, set[str]] = {
     "COMPLETED": set(),
     "FAILED": set(),
 }
+
+
+class DuplicateTaskError(Exception):
+    """Raised when a KB already has a Task for the same video."""
+
+    def __init__(self, existing_task_id: str, kbid: str) -> None:
+        self.existing_task_id = existing_task_id
+        self.kbid = kbid
+        super().__init__(
+            f"Task {existing_task_id} already exists in KB {kbid} for this video"
+        )
 
 
 class VideoSummaryTaskService:
@@ -51,6 +63,19 @@ class VideoSummaryTaskService:
             or video.frame_extraction_status != "COMPLETED"
         ):
             raise ValueError("video_not_ready")
+
+        # Check for duplicate: a KB should only have one Task per video
+        existing = self._repository.find_by_kb_and_video(owner_id, payload.kbid, payload.video_id)
+        if existing is not None:
+            if payload.replace_existing_task_id == existing.task_id:
+                # Replace: delete the old Task, then create the new one
+                logger.info(
+                    "Replacing existing task_id=%s in kbid=%s video_id=%s with new task",
+                    existing.task_id, payload.kbid, payload.video_id,
+                )
+                self._repository.delete_by_owner_and_id(owner_id, existing.task_id)
+            else:
+                raise DuplicateTaskError(existing_task_id=existing.task_id, kbid=payload.kbid)
 
         record = self._repository.create(
             owner_id=owner_id,
@@ -112,6 +137,63 @@ class VideoSummaryTaskService:
         """List all summary tasks that reference a specific video."""
         records = self._repository.list_by_video_id(owner_id, video_id)
         return [self._to_view(record) for record in records]
+
+    def clone_task_to_kb(self, *, owner_id: str, task_id: str, payload: TaskCloneToKbRequest) -> VideoSummaryTaskView:
+        """Clone an existing Task to another Knowledge Base.
+
+        The clone gets a new task_id and the target kbid; all analysis fields
+        are copied verbatim.  Additionally, the video is linked to the target KB
+        and its transcript vectors are indexed for KB-level RAG retrieval —
+        making the cloned Task indistinguishable from one created directly in
+        that KB.
+        """
+        # 1. Validate source Task ownership
+        source = self._repository.get_by_owner_and_id(owner_id, task_id)
+        if source is None:
+            raise LookupError("Task not found")
+
+        # 2. Validate target KB ownership
+        target_kb = self._kb_repository.get_by_owner_and_id(owner_id, payload.kbid)
+        if target_kb is None:
+            raise LookupError("Target KB not found")
+
+        # 3. Duplicate check
+        existing = self._repository.find_by_kb_and_video(owner_id, payload.kbid, source.video_id)
+        if existing is not None:
+            if payload.replace_existing_task_id == existing.task_id:
+                logger.info(
+                    "Replacing existing task_id=%s in kbid=%s (clone target) with clone of task_id=%s",
+                    existing.task_id, payload.kbid, task_id,
+                )
+                self._repository.delete_by_owner_and_id(owner_id, existing.task_id)
+            else:
+                raise DuplicateTaskError(existing_task_id=existing.task_id, kbid=payload.kbid)
+
+        # 4. Clone the Task row
+        clone = self._repository.clone_to_kb(
+            source_task_id=task_id,
+            target_kbid=payload.kbid,
+            owner_id=owner_id,
+        )
+
+        # 5. Ensure KB↔Video relation exists (idempotent)
+        self._kb_repository.add_video_to_kb(owner_id, payload.kbid, source.video_id)
+
+        # 6. Index video transcript vectors into the target KB (idempotent, async)
+        from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
+
+        async_add_video_to_vector_collection.delay(payload.kbid, source.video_id)
+
+        # 7. Increment video ref_count
+        try:
+            self._video_repository.increment_ref_count(source.video_id)
+        except Exception:
+            logger.exception(
+                "Failed to increment ref_count for video_id=%s after clone",
+                source.video_id,
+            )
+
+        return self._to_view(clone)
 
     def delete_video_summary_task(self, *, owner_id: str, task_id: str) -> bool:
         # Collect task info before deletion (for ref counting + GC)

@@ -11,8 +11,10 @@ from backend.dependencies import (
     get_video_summary_task_service,
     get_workflow_orchestration_service,
 )
+from backend.exceptions import AppError
 from backend.schemas.common import MetaInfo, PaginationInfo
 from backend.schemas.video_summary_task import (
+    TaskCloneToKbRequest,
     VideoSummaryTaskCreateRequest,
     VideoSummaryTaskDeleteData,
     VideoSummaryTaskDeleteResponse,
@@ -24,7 +26,7 @@ from backend.schemas.video_summary_task import (
     ApproveAndFinalizeRequest,
     ApproveAndFinalizeResponse,
 )
-from backend.services.video_summary_task_service import VideoSummaryTaskService
+from backend.services.video_summary_task_service import DuplicateTaskError, VideoSummaryTaskService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
 
 
@@ -58,6 +60,13 @@ async def create_video_summary_task(
 ):
     try:
         task = task_service.create_video_summary_task(owner_id=current_user.user_id, payload=payload)
+    except DuplicateTaskError as exc:
+        raise AppError(
+            code="TASK_DUPLICATE_VIDEO_IN_KB",
+            message="A task for this video already exists in this knowledge base.",
+            status_code=status.HTTP_409_CONFLICT,
+            details={"existing_task_id": exc.existing_task_id, "kbid": exc.kbid},
+        )
     except ValueError as exc:
         if str(exc) == "video_not_ready":
             raise HTTPException(
@@ -137,6 +146,40 @@ async def delete_video_summary_task(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
     return VideoSummaryTaskDeleteResponse(data=VideoSummaryTaskDeleteData(task_id=task_id), meta=_build_meta(request))
+
+
+@router.post("/{task_id}/clone-to-kb", response_model=VideoSummaryTaskResponse, status_code=status.HTTP_201_CREATED)
+async def clone_task_to_knowledge_base(
+    task_id: str,
+    payload: TaskCloneToKbRequest,
+    request: Request,
+    current_user: UserView = Depends(get_current_user),
+    task_service: VideoSummaryTaskService = Depends(get_video_summary_task_service),
+):
+    """Clone a Task's analysis results to another Knowledge Base.
+
+    The clone receives a new task_id; all analysis fields are copied verbatim.
+    The linked video is automatically associated with the target KB and its
+    transcript vectors are indexed, making the clone indistinguishable from
+    a Task created directly in that KB.
+    """
+    try:
+        clone = task_service.clone_task_to_kb(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            payload=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+    except DuplicateTaskError as exc:
+        raise AppError(
+            code="TASK_DUPLICATE_VIDEO_IN_KB",
+            message="A task for this video already exists in the target knowledge base.",
+            status_code=status.HTTP_409_CONFLICT,
+            details={"existing_task_id": exc.existing_task_id, "kbid": exc.kbid},
+        )
+
+    return VideoSummaryTaskResponse(data=clone, meta=_build_meta(request))
 
 
 # ==================== Workflow Endpoints ====================

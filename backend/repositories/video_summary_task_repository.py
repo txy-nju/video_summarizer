@@ -47,6 +47,40 @@ class VideoSummaryTaskRepository:
         self._session.refresh(entity)
         return self._to_record(entity, owner_id=owner_id)
 
+    def clone_to_kb(self, *, source_task_id: str, target_kbid: str, owner_id: str) -> VideoSummaryTaskRecord:
+        """Clone a Task to another KB with a new task_id.
+
+        All analysis fields (draft/final summary, title, workflow state,
+        summary_vector_ids) are copied verbatim.  Only task_id (new UUID)
+        and kbid (target KB) differ from the source.
+
+        The caller is responsible for:
+        - Validating that the source task and target KB both belong to owner_id
+        - Inserting kb_video_relations (if not already present)
+        - Dispatching async vector indexing for the target KB
+        - Incrementing the video's ref_count
+        """
+        source = (
+            self._session.query(VideoSummaryTask)
+            .filter(VideoSummaryTask.task_id == source_task_id)
+            .one()
+        )
+        clone = VideoSummaryTask(
+            kbid=target_kbid,
+            video_id=source.video_id,
+            workflow_state=source.workflow_state,
+            user_initial_preference=source.user_initial_preference,
+            draft_summary=source.draft_summary,
+            user_guidance=source.user_guidance,
+            final_summary=source.final_summary,
+            title=source.title,
+            summary_vector_ids=source.summary_vector_ids,
+        )
+        self._session.add(clone)
+        self._session.commit()
+        self._session.refresh(clone)
+        return self._to_record(clone, owner_id=owner_id)
+
     def list_by_owner(self, owner_id: str) -> list[VideoSummaryTaskRecord]:
         rows = self._session.query(VideoSummaryTask).join(
             KnowledgeBase,
@@ -109,6 +143,21 @@ class VideoSummaryTaskRepository:
 
         self._session.commit()
         return len(rows)
+
+    def find_by_kb_and_video(self, owner_id: str, kbid: str, video_id: str) -> VideoSummaryTaskRecord | None:
+        """Check whether a KB already has a Task for a given video.
+
+        Core duplicate-detection query.  Uses the standard owner-scoped join
+        so a user can never see (or collide with) another user's tasks.
+        """
+        row = (
+            self._owned_task_query(owner_id)
+            .filter(VideoSummaryTask.kbid == kbid, VideoSummaryTask.video_id == video_id)
+            .one_or_none()
+        )
+        if row is None:
+            return None
+        return self._to_record(row, owner_id=owner_id)
 
     def get_by_owner_and_id(self, owner_id: str, task_id: str) -> VideoSummaryTaskRecord | None:
         row = self._owned_task_query(owner_id).filter(VideoSummaryTask.task_id == task_id).one_or_none()
