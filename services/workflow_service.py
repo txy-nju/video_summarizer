@@ -1,6 +1,7 @@
 import os
 import time
 import random
+from pathlib import Path
 from typing import IO, Callable, Optional, Dict, Any
 
 # 引入抽象层和具体策略
@@ -157,6 +158,16 @@ class VideoSummaryService:
         """
         第一阶段入口（上传文件来源）：接收上传文件，执行分片分析，返回待审批包。
         """
+        # 服务端格式校验（第一道防线，防止客户端绕过前端限制）
+        from backend.schemas.video_format import ALLOWED_VIDEO_EXTENSIONS, validate_video_extension
+
+        if not validate_video_extension(original_filename):
+            allowed = ", ".join(sorted(ext.lstrip(".") for ext in ALLOWED_VIDEO_EXTENSIONS))
+            raise ValueError(
+                f"不支持的文件格式：{Path(original_filename).suffix or '(无扩展名)'}。"
+                f"支持的格式：{allowed}"
+            )
+
         # [生命周期 Bugfix]：必须在实例化 Source 之前进行环境清理。
         clear_temp_folder()
         

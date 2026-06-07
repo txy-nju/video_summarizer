@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from backend.schemas.video_format import validate_video_magic_bytes
 from backend.tasks.base_task import BaseTask
 from backend.tasks.celery_app import celery_app
 
@@ -65,7 +66,24 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
             file_name = result.get("file_name", "")
             merged_path = result.get("merged_path", "")
 
-            # Step 0: Compute SHA256 hash of merged file for dedup
+            # Step 0: Validate merged file is a real video (magic bytes, 第二道防线)
+            is_valid, detected_type = validate_video_magic_bytes(merged_path)
+            if not is_valid:
+                logger.warning(
+                    "Format validation failed: upload_id=%s, file_name=%s, detected=%s",
+                    upload_id, file_name, detected_type,
+                )
+                _abort_video_resource(result.get("video_id"))
+                _cleanup_upload_session(upload_id)
+                Path(merged_path).unlink(missing_ok=True)
+                return {
+                    "upload_id": upload_id,
+                    "status": "REJECTED",
+                    "reason": f"文件格式校验失败，检测到 {detected_type}",
+                    "trace_id": trace_id,
+                }
+
+            # Step 0.5: Compute SHA256 hash of merged file for dedup
             file_hash = _compute_sha256(merged_path)
 
             # Step 0.5: Dedup check — reuse existing video if same hash exists
@@ -239,6 +257,29 @@ def _set_video_resource_oss_key(*, video_id: str, oss_key: str) -> None:
             return
         row.oss_key = oss_key
         db.commit()
+    finally:
+        db.close()
+
+
+def _abort_video_resource(video_id: str | None) -> None:
+    """Soft-delete a pre-registered VideoResource record when the upload is rejected.
+
+    Only acts when *video_id* is non-empty; does nothing otherwise.
+    """
+    if not video_id:
+        return
+    from backend.db.session import SessionLocal
+    from backend.models.database import VideoResource
+
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        if row is not None:
+            row.is_deleted = True
+            db.commit()
+            logger.info("Aborted VideoResource video_id=%s (soft-deleted)", video_id)
+    except Exception:
+        logger.exception("Failed to abort VideoResource video_id=%s", video_id)
     finally:
         db.close()
 

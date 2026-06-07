@@ -13,7 +13,11 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from pydantic import BaseModel, Field
+from pathlib import Path
+
+from pydantic import BaseModel, Field, field_validator
+
+from backend.schemas.video_format import ALLOWED_VIDEO_EXTENSIONS, validate_video_extension
 
 
 # 服务端强制分片大小：10 MiB
@@ -31,6 +35,18 @@ class InitUploadRequest(BaseModel):
     file_name: str = Field(..., min_length=1, max_length=512)
     total_size: int = Field(..., gt=0, le=10 * 1024 * 1024 * 1024)  # 最大 10GB
     video_id: str | None = Field(default=None, min_length=1, max_length=36)  # 可选：关联的预注册 VideoResource ID
+
+    @field_validator("file_name")
+    @classmethod
+    def validate_video_format(cls, v: str) -> str:
+        """拒绝非视频格式的文件扩展名（第一道防线）。"""
+        if not validate_video_extension(v):
+            allowed = ", ".join(sorted(ext.lstrip(".") for ext in ALLOWED_VIDEO_EXTENSIONS))
+            raise ValueError(
+                f"不支持的文件格式：{Path(v).suffix or '(无扩展名)'}。"
+                f"支持的格式：{allowed}"
+            )
+        return v
 
 
 class InitUploadResponse(BaseModel):

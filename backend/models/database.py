@@ -150,6 +150,10 @@ class VideoResource(Base):
     # Hash-based dedup & reference counting
     task_ref_count: Mapped[int] = mapped_column(default=0, nullable=False)
 
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
     @validates("transcript_vector_ids")
     def validate_transcript_vector_ids(self, key: str, value: dict | list | None) -> list[str] | None:
         return _validate_vector_ids(value, key)

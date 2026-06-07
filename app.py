@@ -54,7 +54,9 @@ def main():
         if source_type == "YouTube URL":
             video_url = st.text_input("Video URL")
         else:
-            uploaded_file = st.file_uploader("Upload a video", type=["mp4", "mov", "avi", "mkv"])
+            from backend.schemas.video_format import ALLOWED_VIDEO_EXTENSIONS
+            _allowed_types = sorted(ext.lstrip(".") for ext in ALLOWED_VIDEO_EXTENSIONS)
+            uploaded_file = st.file_uploader("Upload a video", type=_allowed_types)
 
         st.markdown("---")
         st.header("🎯 Summary Requirements (总结偏好)"
