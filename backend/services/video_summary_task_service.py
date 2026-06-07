@@ -165,6 +165,11 @@ class VideoSummaryTaskService:
         #    delete_by_owner_and_id + clone_to_kb)
         existing = self._repository.find_by_kb_and_video(owner_id, payload.kbid, source.video_id)
         if existing is not None:
+            # Guard: 源 task 自身就在目标 KB 中时，clone-to-kb 没有意义。
+            # 必须先 delete 再 clone，但 delete 会把源也删掉导致 clone 失败。
+            # 直接报语义错误，前端应提示用户"该视频在其知识库中已有分析结果"。
+            if existing.task_id == task_id:
+                raise DuplicateTaskError(existing_task_id=existing.task_id, kbid=payload.kbid)
             if payload.replace_existing_task_id == existing.task_id:
                 logger.info(
                     "Replacing existing task_id=%s in kbid=%s (clone target) with clone of task_id=%s",
