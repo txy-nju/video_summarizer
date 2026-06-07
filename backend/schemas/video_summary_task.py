@@ -95,6 +95,7 @@ class VideoSummaryTaskView(BaseModel):
     final_summary: str | None = None
     title: str | None = None
     summary_vector_ids: list[str] | None = None
+    kb_name: str | None = None
     created_at: datetime
     updated_at: datetime
 

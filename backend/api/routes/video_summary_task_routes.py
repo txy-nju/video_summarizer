@@ -42,6 +42,7 @@ _ALLOWED_FIELDS = {
     "final_summary",
     "title",
     "summary_vector_ids",
+    "kb_name",
     "created_at",
     "updated_at",
 }

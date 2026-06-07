@@ -496,4 +496,16 @@ class VideoSummaryTaskService:
     def _to_view(self, record: VideoSummaryTaskRecord) -> VideoSummaryTaskView:
         payload = asdict(record)
         payload.pop("owner_id", None)
+        # For single-task lookups where kb_name wasn't populated by the
+        # repository query (create / clone / get), fill it in from the
+        # KB record that the service already fetched during validation.
+        if not payload.get("kb_name"):
+            try:
+                kb = self._kb_repository.get_by_owner_and_id(
+                    record.owner_id, record.kbid,
+                )
+                if kb is not None:
+                    payload["kb_name"] = kb.name
+            except Exception:
+                pass
         return VideoSummaryTaskView.model_validate(payload)

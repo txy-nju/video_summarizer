@@ -21,6 +21,7 @@ class VideoSummaryTaskRecord:
     final_summary: str | None
     title: str | None
     summary_vector_ids: list[str] | None
+    kb_name: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -90,7 +91,7 @@ class VideoSummaryTaskRepository:
         return self._to_record(clone, owner_id=owner_id)
 
     def list_by_owner(self, owner_id: str) -> list[VideoSummaryTaskRecord]:
-        rows = self._session.query(VideoSummaryTask).join(
+        rows = self._session.query(VideoSummaryTask, KnowledgeBase.name).join(
             KnowledgeBase,
             VideoSummaryTask.kbid == KnowledgeBase.kbid,
         ).join(
@@ -100,12 +101,12 @@ class VideoSummaryTaskRepository:
             KnowledgeBase.owner_id == owner_id,
             VideoResource.owner_id == owner_id,
         ).order_by(VideoSummaryTask.created_at.desc()).all()
-        return [self._to_record(row, owner_id=owner_id) for row in rows]
+        return [self._to_record(entity, owner_id=owner_id, kb_name=kb_name) for entity, kb_name in rows]
 
     def list_by_video_id(self, owner_id: str, video_id: str) -> list[VideoSummaryTaskRecord]:
         """List all tasks that reference a specific video (owner-scoped)."""
         rows = (
-            self._session.query(VideoSummaryTask)
+            self._session.query(VideoSummaryTask, KnowledgeBase.name)
             .join(KnowledgeBase, VideoSummaryTask.kbid == KnowledgeBase.kbid)
             .join(VideoResource, VideoSummaryTask.video_id == VideoResource.video_id)
             .filter(
@@ -116,7 +117,7 @@ class VideoSummaryTaskRepository:
             .order_by(VideoSummaryTask.created_at.desc())
             .all()
         )
-        return [self._to_record(row, owner_id=owner_id) for row in rows]
+        return [self._to_record(entity, owner_id=owner_id, kb_name=kb_name) for entity, kb_name in rows]
 
     def delete_by_video_id(self, owner_id: str, video_id: str) -> int:
         """Cascade-delete all tasks (and their QA records) referencing a video.
@@ -347,6 +348,7 @@ class VideoSummaryTaskRepository:
         entity: VideoSummaryTask,
         *,
         owner_id: str,
+        kb_name: str | None = None,
     ) -> VideoSummaryTaskRecord:
         created = getattr(entity, "created_at", None) or datetime.now(UTC)
         updated = getattr(entity, "updated_at", None) or created
@@ -362,6 +364,7 @@ class VideoSummaryTaskRepository:
             final_summary=entity.final_summary,
             title=entity.title,
             summary_vector_ids=entity.summary_vector_ids,
+            kb_name=kb_name,
             created_at=created,
             updated_at=updated,
         )
