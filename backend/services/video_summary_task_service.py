@@ -83,14 +83,23 @@ class VideoSummaryTaskService:
             video_id=payload.video_id,
             user_initial_preference=payload.user_initial_preference,
         )
-        # Increment reference count on the video
-        try:
-            self._video_repository.increment_ref_count(payload.video_id)
-        except Exception:
-            logger.exception(
-                "Failed to increment ref_count for video_id=%s after task creation",
+
+        # 建立 KB↔Video 关联（幂等；与 POST /kb/{kbid}/videos 的显式绑定不冲突）
+        self._kb_repository.add_video_to_kb(owner_id, payload.kbid, payload.video_id)
+
+        # 异步索引视频 transcript 向量到目标 KB collection（幂等；重复调用安全）
+        from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
+
+        async_add_video_to_vector_collection.delay(payload.kbid, payload.video_id)
+
+        # 原子递增视频引用计数
+        new_count = self._video_repository.increment_ref_count(payload.video_id)
+        if new_count == 0:
+            logger.error(
+                "ref_count increment returned 0 for video_id=%s — video may not exist",
                 payload.video_id,
             )
+
         return self._to_view(record)
 
     def list_video_summary_tasks(self, *, owner_id: str, page: int, page_size: int) -> tuple[list[VideoSummaryTaskView], dict]:
