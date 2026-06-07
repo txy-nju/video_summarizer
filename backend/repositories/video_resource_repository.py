@@ -291,7 +291,15 @@ class VideoResourceRepository:
     # -------------------------------------------------------------------------
 
     def increment_ref_count(self, video_id: str) -> int:
-        """Atomically increment task_ref_count. Returns new value."""
+        """Atomically increment task_ref_count. Returns new value.
+
+        .. deprecated::
+            Task-related ref_count management is now handled inside
+            ``VideoSummaryTaskRepository`` (same transaction as the task
+            row mutation via SQL-level atomic UPDATE).  This method
+            remains available for non-task callers but SHOULD NOT be
+            called from ``VideoSummaryTaskService``.
+        """
         row = self._session.query(VideoResource).filter(
             VideoResource.video_id == video_id,
         ).one_or_none()
@@ -302,7 +310,15 @@ class VideoResourceRepository:
         return row.task_ref_count
 
     def decrement_ref_count(self, video_id: str) -> int:
-        """Atomically decrement task_ref_count (floor 0). Returns new value."""
+        """Atomically decrement task_ref_count (floor 0). Returns new value.
+
+        .. deprecated::
+            Task-related ref_count management is now handled inside
+            ``VideoSummaryTaskRepository`` (same transaction as the task
+            row mutation via SQL-level atomic UPDATE).  This method
+            remains available for non-task callers but SHOULD NOT be
+            called from ``VideoSummaryTaskService``.
+        """
         row = self._session.query(VideoResource).filter(
             VideoResource.video_id == video_id,
         ).one_or_none()

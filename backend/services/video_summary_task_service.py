@@ -68,7 +68,10 @@ class VideoSummaryTaskService:
         existing = self._repository.find_by_kb_and_video(owner_id, payload.kbid, payload.video_id)
         if existing is not None:
             if payload.replace_existing_task_id == existing.task_id:
-                # Replace: delete the old Task, then create the new one
+                # Replace: delete the old Task, then create the new one.
+                # delete_by_owner_and_id atomically decrements ref_count
+                # inside the same transaction; create() atomically
+                # increments it — net-zero change.
                 logger.info(
                     "Replacing existing task_id=%s in kbid=%s video_id=%s with new task",
                     existing.task_id, payload.kbid, payload.video_id,
@@ -91,14 +94,6 @@ class VideoSummaryTaskService:
         from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
 
         async_add_video_to_vector_collection.delay(payload.kbid, payload.video_id)
-
-        # 原子递增视频引用计数
-        new_count = self._video_repository.increment_ref_count(payload.video_id)
-        if new_count == 0:
-            logger.error(
-                "ref_count increment returned 0 for video_id=%s — video may not exist",
-                payload.video_id,
-            )
 
         return self._to_view(record)
 
@@ -166,7 +161,8 @@ class VideoSummaryTaskService:
         if target_kb is None:
             raise LookupError("Target KB not found")
 
-        # 3. Duplicate check
+        # 3. Duplicate check (ref_count is handled atomically inside
+        #    delete_by_owner_and_id + clone_to_kb)
         existing = self._repository.find_by_kb_and_video(owner_id, payload.kbid, source.video_id)
         if existing is not None:
             if payload.replace_existing_task_id == existing.task_id:
@@ -178,7 +174,7 @@ class VideoSummaryTaskService:
             else:
                 raise DuplicateTaskError(existing_task_id=existing.task_id, kbid=payload.kbid)
 
-        # 4. Clone the Task row
+        # 4. Clone the Task row (ref_count +1 is atomic with the INSERT)
         clone = self._repository.clone_to_kb(
             source_task_id=task_id,
             target_kbid=payload.kbid,
@@ -192,15 +188,6 @@ class VideoSummaryTaskService:
         from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
 
         async_add_video_to_vector_collection.delay(payload.kbid, source.video_id)
-
-        # 7. Increment video ref_count
-        try:
-            self._video_repository.increment_ref_count(source.video_id)
-        except Exception:
-            logger.exception(
-                "Failed to increment ref_count for video_id=%s after clone",
-                source.video_id,
-            )
 
         return self._to_view(clone)
 
@@ -225,14 +212,15 @@ class VideoSummaryTaskService:
         if not deleted:
             return False
 
-        # Decrement ref count and check GC eligibility
+        # ref_count was atomically decremented inside delete_by_owner_and_id.
+        # Re-read to decide about GC (separate session sees the committed value).
         try:
-            new_count = self._video_repository.decrement_ref_count(video_id)
-            if new_count == 0:
+            current_ref_count = self._video_repository.get_ref_count(video_id)
+            if current_ref_count == 0:
                 self._trigger_garbage_collection(video_id=video_id, linked_kbids=linked_kbids)
         except Exception:
             logger.exception(
-                "Failed to decrement ref_count / dispatch GC for video_id=%s",
+                "Failed to read ref_count / dispatch GC for video_id=%s",
                 video_id,
             )
 

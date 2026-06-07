@@ -43,6 +43,8 @@ class VideoSummaryTaskRepository:
             user_initial_preference=user_initial_preference
         )
         self._session.add(entity)
+        # Atomic: task row INSERT + ref_count +1 in the SAME transaction
+        self._atomic_incr_ref_count(self._session, video_id)
         self._session.commit()
         self._session.refresh(entity)
         return self._to_record(entity, owner_id=owner_id)
@@ -50,15 +52,19 @@ class VideoSummaryTaskRepository:
     def clone_to_kb(self, *, source_task_id: str, target_kbid: str, owner_id: str) -> VideoSummaryTaskRecord:
         """Clone a Task to another KB with a new task_id.
 
-        All analysis fields (draft/final summary, title, workflow state,
-        summary_vector_ids) are copied verbatim.  Only task_id (new UUID)
-        and kbid (target KB) differ from the source.
+        All analysis fields (draft/final summary, title, workflow state)
+        are copied verbatim.  Only task_id (new UUID) and kbid (target KB)
+        differ from the source.  summary_vector_ids is intentionally reset
+        to None — the source Task's vector IDs belong to the source KB's
+        collection and are invalid in the target KB.
 
         The caller is responsible for:
         - Validating that the source task and target KB both belong to owner_id
         - Inserting kb_video_relations (if not already present)
         - Dispatching async vector indexing for the target KB
-        - Incrementing the video's ref_count
+
+        ref_count is atomically incremented inside this method (same transaction
+        as the clone INSERT), so callers MUST NOT increment it again.
         """
         source = (
             self._session.query(VideoSummaryTask)
@@ -74,9 +80,11 @@ class VideoSummaryTaskRepository:
             user_guidance=source.user_guidance,
             final_summary=source.final_summary,
             title=source.title,
-            summary_vector_ids=source.summary_vector_ids,
+            summary_vector_ids=None,
         )
         self._session.add(clone)
+        # Atomic: clone INSERT + ref_count +1 in the SAME transaction
+        self._atomic_incr_ref_count(self._session, source.video_id)
         self._session.commit()
         self._session.refresh(clone)
         return self._to_record(clone, owner_id=owner_id)
@@ -118,6 +126,10 @@ class VideoSummaryTaskRepository:
         VideoSummaryTaskService, so no GC is dispatched — the video deletion
         flow handles all cleanup via async_cascade_delete_video.
 
+        Also resets task_ref_count to 0 in the same transaction so that
+        the invariant ref_count == number of live tasks is preserved even
+        if the subsequent physical delete fails.
+
         Returns:
             Number of tasks deleted.
         """
@@ -135,14 +147,26 @@ class VideoSummaryTaskRepository:
             .all()
         )
 
+        deleted_count = len(rows)
         for row in rows:
             self._session.query(VideoQARecord).filter(
                 VideoQARecord.task_id == row.task_id
             ).delete(synchronize_session=False)
             self._session.delete(row)
 
+        # Reset ref_count to 0 atomically with the cascade delete.
+        # The video is being permanently removed; if physical delete
+        # retries, a ref_count of 0 correctly signals "no tasks exist".
+        if deleted_count > 0:
+            self._session.query(VideoResource).filter(
+                VideoResource.video_id == video_id,
+            ).update(
+                {VideoResource.task_ref_count: 0},
+                synchronize_session=False,
+            )
+
         self._session.commit()
-        return len(rows)
+        return deleted_count
 
     def find_by_kb_and_video(self, owner_id: str, kbid: str, video_id: str) -> VideoSummaryTaskRecord | None:
         """Check whether a KB already has a Task for a given video.
@@ -222,10 +246,14 @@ class VideoSummaryTaskRepository:
         if row is None:
             return False
 
+        video_id = str(row.video_id)  # Capture BEFORE row is deleted
+
         from backend.models.database import VideoQARecord
         self._session.query(VideoQARecord).filter(VideoQARecord.task_id == task_id).delete(synchronize_session=False)
 
         self._session.delete(row)
+        # Atomic: task DELETE + ref_count -1 in the SAME transaction
+        self._atomic_decr_ref_count(self._session, video_id)
         self._session.commit()
         return True
 
@@ -262,6 +290,57 @@ class VideoSummaryTaskRepository:
             .join(VideoResource, VideoSummaryTask.video_id == VideoResource.video_id)
             .filter(KnowledgeBase.owner_id == owner_id, VideoResource.owner_id == owner_id)
         )
+
+    # ── 原子 ref_count 操作（SQL 级别，避免 lost update）───────────────
+
+    @staticmethod
+    def _atomic_incr_ref_count(session: Session, video_id: str) -> int:
+        """SQL-level atomic increment. Returns new ref_count or 0 if video missing.
+
+        Uses UPDATE ... SET col = col + 1 so two concurrent sessions always
+        produce +2, not a lost-update +1.
+        """
+        result = (
+            session.query(VideoResource)
+            .filter(VideoResource.video_id == video_id)
+            .update(
+                {VideoResource.task_ref_count: VideoResource.task_ref_count + 1},
+                synchronize_session=False,
+            )
+        )
+        if result == 0:
+            return 0
+        row = (
+            session.query(VideoResource.task_ref_count)
+            .filter(VideoResource.video_id == video_id)
+            .one()
+        )
+        return row[0] or 0
+
+    @staticmethod
+    def _atomic_decr_ref_count(session: Session, video_id: str) -> int:
+        """SQL-level atomic decrement (floor 0). Returns new ref_count or 0.
+
+        Uses UPDATE ... SET col = col - 1 WHERE col > 0 so the value never
+        drops below zero, even under concurrent sessions.
+        """
+        result = (
+            session.query(VideoResource)
+            .filter(VideoResource.video_id == video_id)
+            .filter(VideoResource.task_ref_count > 0)
+            .update(
+                {VideoResource.task_ref_count: VideoResource.task_ref_count - 1},
+                synchronize_session=False,
+            )
+        )
+        if result == 0:
+            return 0
+        row = (
+            session.query(VideoResource.task_ref_count)
+            .filter(VideoResource.video_id == video_id)
+            .one()
+        )
+        return row[0] or 0
 
     @staticmethod
     def _to_record(

@@ -519,6 +519,15 @@ def test_create_task_duplicate_detection() -> None:
     assert get_new.status_code == 200
     assert get_new.json()["data"]["user_initial_preference"] == "替换版"
 
+    # Verify ref_count is unchanged after replace (was 1, should stay 1)
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None
+        assert row.task_ref_count == 1, f"Expected ref_count=1 after create-replace, got {row.task_ref_count}"
+    finally:
+        db.close()
+
 
 def test_clone_task_to_another_kb() -> None:
     """克隆已有 Task 到另一个 KB：验证 clone 的字段一致性 + KB↔Video 关联建立。"""
@@ -559,6 +568,10 @@ def test_clone_task_to_another_kb() -> None:
     assert clone["title"] == "项目进展分析"
     assert clone["workflow_state"] == "COMPLETED"
     assert clone["user_initial_preference"] == "源Task"
+    # summary_vector_ids must NOT be copied from source (they belong to source KB's vector collection)
+    assert clone.get("summary_vector_ids") is None, (
+        f"Expected summary_vector_ids=None in clone, got {clone.get('summary_vector_ids')}"
+    )
 
     # KB↔Video 关联已建立（幂等，clone 流程自动添加）
     db = SessionLocal()
@@ -677,3 +690,161 @@ def test_clone_task_duplicate_detection_and_replace() -> None:
 
     # clone 的 kbid 指向 KB B
     assert clone_replace.json()["data"]["kbid"] == kbid_b
+
+    # Verify ref_count: source task in KB_A (1) + clone in KB_B (1) = 2.
+    # The old KB_B task was replaced, so there is no net change.
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None
+        assert row.task_ref_count == 2, (
+            f"Expected ref_count=2 after clone-replace, got {row.task_ref_count}"
+        )
+    finally:
+        db.close()
+
+
+def test_clone_task_ref_count_accounting() -> None:
+    """Clone preserves correct ref_count: each clone increments ref_count by 1."""
+    token = _login("alice-clone-refcount")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid_a, video_id = _prepare_assets(token)
+
+    # Create source task
+    create_src = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid_a, "video_id": video_id},
+        headers=headers,
+    )
+    assert create_src.status_code == 201
+
+    # Verify initial ref_count
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None and row.task_ref_count == 1, (
+            f"Expected ref_count=1 after create, got {row.task_ref_count}"
+        )
+    finally:
+        db.close()
+
+    # Clone to another KB
+    kbid_b = _create_kb(token, "refcount验证库")
+    src_task_id = create_src.json()["data"]["task_id"]
+    clone_resp = client.post(
+        f"/api/v1/tasks/{src_task_id}/clone-to-kb",
+        json={"kbid": kbid_b},
+        headers=headers,
+    )
+    assert clone_resp.status_code == 201
+
+    # After clone, ref_count should be 2
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None and row.task_ref_count == 2, (
+            f"Expected ref_count=2 after clone, got {row.task_ref_count}"
+        )
+    finally:
+        db.close()
+
+
+def test_ref_count_matches_task_count_after_delete() -> None:
+    """Delete one of two tasks and verify ref_count decrements from 2 to 1.
+
+    Uses two tasks (in different KBs) so ref_count does not reach 0,
+    avoiding async GC from removing the VideoResource row mid-test.
+    """
+    token = _login("alice-delete-refcount")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid_a, video_id = _prepare_assets(token)
+
+    # Create task in KB_A
+    create_a = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid_a, "video_id": video_id},
+        headers=headers,
+    )
+    assert create_a.status_code == 201
+    task_id_a = create_a.json()["data"]["task_id"]
+
+    # Create task in KB_B (same video)
+    kbid_b = _create_kb(token, "删除测试KB_B")
+    create_b = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid_b, "video_id": video_id},
+        headers=headers,
+    )
+    assert create_b.status_code == 201
+    task_id_b = create_b.json()["data"]["task_id"]
+
+    # Verify ref_count == 2
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None and row.task_ref_count == 2, (
+            f"Expected ref_count=2 after creating 2 tasks, got {row.task_ref_count}"
+        )
+    finally:
+        db.close()
+
+    # Delete one task
+    delete_resp = client.delete(f"/api/v1/tasks/{task_id_a}", headers=headers)
+    assert delete_resp.status_code == 200
+
+    # Verify ref_count == 1 (delete_by_owner_and_id atomically decremented)
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None and row.task_ref_count == 1, (
+            f"Expected ref_count=1 after deleting 1 of 2 tasks, got {row.task_ref_count}"
+        )
+    finally:
+        db.close()
+
+
+def test_ref_count_unchanged_after_replace_in_create() -> None:
+    """Replacing a task in create should not change ref_count (net zero)."""
+    token = _login("alice-create-replace-refcount")
+    headers = {"Authorization": f"Bearer {token}"}
+    kbid, video_id = _prepare_assets(token)
+
+    # Create first task
+    create1 = client.post(
+        "/api/v1/tasks",
+        json={"kbid": kbid, "video_id": video_id},
+        headers=headers,
+    )
+    assert create1.status_code == 201
+    task_id_1 = create1.json()["data"]["task_id"]
+
+    # Verify ref_count == 1
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None and row.task_ref_count == 1
+    finally:
+        db.close()
+
+    # Replace with new task (create + replace_existing_task_id)
+    create2 = client.post(
+        "/api/v1/tasks",
+        json={
+            "kbid": kbid,
+            "video_id": video_id,
+            "user_initial_preference": "替换版",
+            "replace_existing_task_id": task_id_1,
+        },
+        headers=headers,
+    )
+    assert create2.status_code == 201
+
+    # Verify ref_count still == 1 (delete decremented, create incremented → net 0)
+    db = SessionLocal()
+    try:
+        row = db.query(VideoResource).filter(VideoResource.video_id == video_id).one_or_none()
+        assert row is not None and row.task_ref_count == 1, (
+            f"Expected ref_count=1 after create-replace, got {row.task_ref_count}"
+        )
+    finally:
+        db.close()
