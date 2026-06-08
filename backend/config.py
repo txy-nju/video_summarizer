@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     otel_service_name: str = Field(default="video-summarizer-backend", alias="OTEL_SERVICE_NAME")
     otel_sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0, alias="OTEL_SAMPLE_RATIO")
 
+    # --- Chat Memory / Agent ---
+    chat_memory_redis_ttl: int = Field(
+        default=300, ge=10, le=86400, alias="CHAT_MEMORY_REDIS_TTL"
+    )
+    chat_memory_max_history_tokens: int = Field(
+        default=2048, ge=256, le=32768, alias="CHAT_MEMORY_MAX_HISTORY_TOKENS"
+    )
+    qa_agent_max_iterations: int = Field(
+        default=3, ge=1, le=10, alias="QA_AGENT_MAX_ITERATIONS"
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

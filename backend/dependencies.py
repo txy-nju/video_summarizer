@@ -26,6 +26,15 @@ from backend.config import get_settings as _get_settings
 from backend.services.progress_event_bus import ProgressEventBus
 from backend.websocket.manager import ConnectionManager
 
+# ── Core module imports ──────────────────────────────────────────────
+from core.context.message_builder import MessageBuilder
+from core.memory.hybrid import HybridChatMemory
+from core.tool.base import ToolDefinition
+from core.tool.registry import ToolRegistry
+from core.tool.executor import ToolExecutor
+from core.tool.builtin.rag_search import _build_rag_search_tool
+from core.agent.qa_agent import QAAgent
+
 
 # ------------------------------------------------------------------
 # WebSocket / 进度事件依赖
@@ -134,12 +143,81 @@ def get_global_chat_service() -> GlobalChatService:
     )
 
 
+# ── Chat Memory / Agent 依赖 ──────────────────────────────────────
+
+@lru_cache(maxsize=1)
+def _get_redis_client_for_memory() -> redis_lib.Redis:
+    """Create a Redis client for chat memory caching (reuses broker URL, DB 4)."""
+    settings = _get_settings()
+    url = settings.celery_broker_url
+    if "/" in url:
+        base, db = url.rsplit("/", 1)
+        memory_url = f"{base}/4"
+    else:
+        memory_url = f"{url}/4"
+    return redis_lib.Redis.from_url(memory_url, decode_responses=True)
+
+
+@lru_cache(maxsize=1)
+def get_chat_memory() -> HybridChatMemory:
+    """Create HybridChatMemory (DB + Redis cache)."""
+    return HybridChatMemory(
+        qa_repository=get_global_qa_repository(),
+        redis_client=_get_redis_client_for_memory(),
+        message_builder=MessageBuilder(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_tool_registry() -> ToolRegistry:
+    """Create ToolRegistry with all built-in tools registered."""
+    registry = ToolRegistry()
+    rag_tool = _build_rag_search_tool(get_rag_agent_service())
+    registry.register(rag_tool)
+    return registry
+
+
+def _default_permission_checker(
+    tool_name: str,
+    required_permissions: list[str],
+    context,
+) -> bool:
+    """Permission checker that validates kb:read against the knowledge base."""
+    if "kb:read" in required_permissions:
+        kb_repo = get_kb_repository()
+        kb = kb_repo.get_by_owner_and_id(context.owner_id, context.kbid)
+        return kb is not None
+    return True
+
+
+@lru_cache(maxsize=1)
+def get_tool_executor() -> ToolExecutor:
+    """Create ToolExecutor with registry and permission checker."""
+    return ToolExecutor(
+        registry=get_tool_registry(),
+        permission_checker=_default_permission_checker,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_qa_agent() -> QAAgent:
+    """Create QAAgent with memory, tools, and LLM."""
+    from core.llm.rag_llm import RagStreamLLM
+    return QAAgent(
+        memory=get_chat_memory(),
+        tool_registry=get_tool_registry(),
+        tool_executor=get_tool_executor(),
+        rag_stream_llm=RagStreamLLM.from_env(),
+    )
+
+
 @lru_cache(maxsize=1)
 def get_global_qa_service() -> GlobalQAService:
     return GlobalQAService(
         repository=get_global_qa_repository(),
         chat_repository=get_global_chat_repository(),
-        rag_agent_service=get_rag_agent_service(),
+        qa_agent=get_qa_agent(),
+        chat_memory=get_chat_memory(),
     )
 
 

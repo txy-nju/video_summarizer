@@ -74,21 +74,40 @@ class RagStreamLLM:
     def stream_text(
         self,
         *,
-        question: str,
-        results: list,
+        question: str | None = None,
+        results: list | None = None,
+        messages: list[dict] | None = None,
         max_tokens: int = 1024,
     ) -> Iterator[str]:
         """纯文本 RAG 流式回答：将检索结果拼接为上下文，token 到达即 yield。
 
+        支持两种调用方式：
+
+        1. **便捷接口** (向后兼容): 传入 ``question`` + ``results``，
+           内部自动构建单条 user message。
+        2. **完整接口**: 传入 ``messages`` 列表（已包含 system prompt、
+           历史消息和当前问题），直接调用 LLM。
+
         Parameters
         ----------
         question:
-            用户问题。
+            用户问题（便捷接口）。
         results:
-            HybridSearch / Reranker 返回的检索结果列表，每项须有 ``.text`` 属性。
+            HybridSearch / Reranker 返回的检索结果列表，每项须有 ``.text`` 属性（便捷接口）。
+        messages:
+            完整的 OpenAI-format messages 列表（完整接口）。
         max_tokens:
             最大生成 token 数，默认 1024。
         """
+        if messages is not None:
+            yield from self._model.stream_chat_completion(
+                model=self._model_name,
+                messages=messages,
+                max_tokens=max_tokens,
+            )
+            return
+
+        # 便捷接口：自行构建 messages
         if not results:
             yield _NO_RESULTS_MSG
             return
@@ -112,26 +131,44 @@ class RagStreamLLM:
     def stream_multimodal(
         self,
         *,
-        question: str,
-        results: list,
-        frames: list[dict],
+        question: str | None = None,
+        results: list | None = None,
+        frames: list[dict] | None = None,
+        messages: list[dict] | None = None,
         max_tokens: int = 1024,
     ) -> Iterator[str]:
         """多模态 RAG 流式回答：文本检索结果 + 帧图像 + 问题 → token 流。
 
+        支持两种调用方式：
+
+        1. **便捷接口** (向后兼容): 传入 ``question`` + ``results`` + ``frames``。
+        2. **完整接口**: 传入 ``messages`` 列表，直接调用 LLM（多模态内容
+           需在 messages 中预构建）。
+
         Parameters
         ----------
         question:
-            用户问题。
+            用户问题（便捷接口）。
         results:
-            检索结果列表，每项须有 ``.text`` 属性。
+            检索结果列表，每项须有 ``.text`` 属性（便捷接口）。
         frames:
-            关键帧列表，每项须含 ``frame_path``（文件路径）及可选 ``time_range``。
-            读取失败的帧会被跳过；若所有帧均失败，自动降级为 ``stream_text``。
+            关键帧列表（便捷接口）。读取失败的帧会被跳过；若所有帧均失败，
+            自动降级为 ``stream_text``。
+        messages:
+            完整的 OpenAI-format messages 列表（完整接口）。
         max_tokens:
             最大生成 token 数，默认 1024。
         """
-        text_context = "\n\n".join(r.text for r in results if r.text)
+        if messages is not None:
+            yield from self._model.stream_chat_completion(
+                model=self._model_name,
+                messages=messages,
+                max_tokens=max_tokens,
+            )
+            return
+
+        # 便捷接口：自行构建多模态 messages
+        text_context = "\n\n".join(r.text for r in results if r.text) if results else ""
         content: list[dict] = [
             {
                 "type": "text",
@@ -143,20 +180,21 @@ class RagStreamLLM:
         ]
 
         valid_frames = 0
-        for f in frames:
-            try:
-                with open(f["frame_path"], "rb") as img_file:
-                    b64 = base64.b64encode(img_file.read()).decode()
-                label = f.get("time_range", "")
-                if label:
-                    content.append({"type": "text", "text": f"视频帧（{label}）："})
-                mime = f.get("mime_type", "image/jpeg")
-                content.append(
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-                )
-                valid_frames += 1
-            except OSError as exc:
-                logger.debug("stream_multimodal: 跳过帧 %s（%s）", f.get("frame_path"), exc)
+        if frames:
+            for f in frames:
+                try:
+                    with open(f["frame_path"], "rb") as img_file:
+                        b64 = base64.b64encode(img_file.read()).decode()
+                    label = f.get("time_range", "")
+                    if label:
+                        content.append({"type": "text", "text": f"视频帧（{label}）："})
+                    mime = f.get("mime_type", "image/jpeg")
+                    content.append(
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                    )
+                    valid_frames += 1
+                except OSError as exc:
+                    logger.debug("stream_multimodal: 跳过帧 %s（%s）", f.get("frame_path"), exc)
 
         if valid_frames == 0:
             logger.warning("stream_multimodal: 所有帧读取失败，降级为纯文本模式")

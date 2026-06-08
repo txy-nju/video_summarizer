@@ -34,5 +34,9 @@ Z/
 start_dev.bat
 start_prod.bat
 
+# Code intelligence & spec tools
+.codegraph/
+openspec/
+
 # data
 data/db/*
