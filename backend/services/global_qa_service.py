@@ -12,6 +12,7 @@ from backend.schemas.global_qa import (
     GlobalQARecordUpdateRequest,
     GlobalQARecordView,
 )
+from core.agent.events import AgentProgressEvent
 
 
 class GlobalQAService:
@@ -85,7 +86,7 @@ class GlobalQAService:
         kbid: str,
         chat_id: str,
         payload: GlobalQARecordCreateRequest,
-    ) -> tuple[GlobalQARecordView, Iterator[str]] | tuple[None, None]:
+    ) -> tuple[GlobalQARecordView, Iterator[str | AgentProgressEvent]] | tuple[None, None]:
         """创建问答记录并以流式返回回答 token。
 
         使用 QAAgent 的 answer_stream 进行 ReAct 循环，
@@ -111,10 +112,11 @@ class GlobalQAService:
         )
         accumulated: list[str] = []
 
-        def _streaming_gen() -> Iterator[str]:
-            for token in token_gen:
-                accumulated.append(token)
-                yield token
+        def _streaming_gen() -> Iterator[str | AgentProgressEvent]:
+            for item in token_gen:
+                if isinstance(item, str):
+                    accumulated.append(item)
+                yield item
             # Collect cited sources from the agent
             cited_sources = getattr(self._qa_agent, "last_cited_sources", [])
             answer_text = "".join(accumulated)

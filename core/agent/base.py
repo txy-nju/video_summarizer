@@ -9,6 +9,8 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Iterator
 
+from core.agent.events import AgentProgressEvent
+
 
 class BaseAgent(ABC):
     """Abstract agent that answers user questions.
@@ -25,15 +27,16 @@ class BaseAgent(ABC):
     def answer(self, *, question: str, chat_id: str, kbid: str, owner_id: str) -> str:
         """Non-streaming answer: blocks until the full answer is ready.
 
-        Returns the complete answer text.
+        Returns the complete answer text (progress events are filtered out).
         """
 
     @abstractmethod
     def answer_stream(
         self, *, question: str, chat_id: str, kbid: str, owner_id: str
-    ) -> Iterator[str]:
-        """Streaming answer: yields tokens as they become available.
+    ) -> Iterator[str | AgentProgressEvent]:
+        """Streaming answer: yields tokens and progress events as they become available.
 
-        The caller is responsible for collecting tokens and persisting
-        the final result.
+        Yields ``str`` for text tokens and ``AgentProgressEvent`` for progress
+        phase notifications.  Callers should filter with ``isinstance(item, str)``
+        when only the answer text is needed (e.g. for DB persistence).
         """

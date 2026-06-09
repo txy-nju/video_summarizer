@@ -65,8 +65,8 @@ class RagStreamLLM:
         from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
         return cls(
-            model=get_model_for_capability("chat"),
-            model_name=get_model_name_for_capability("chat"),
+            model=get_model_for_capability("vision"),
+            model_name=get_model_name_for_capability("vision"),
         )
 
     # ── 公开流式接口 ──────────────────────────────────────────────────

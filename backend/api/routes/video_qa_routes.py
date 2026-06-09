@@ -28,6 +28,7 @@ from backend.schemas.video_qa import (
 from backend.services.video_summary_task_service import VideoSummaryTaskService
 from backend.services.video_qa_service import VideoQAService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
+from core.agent.events import AgentProgressEvent
 
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["video-qa"])
@@ -209,7 +210,7 @@ async def time_travel_qa_stream(
 
     trace_id = str(getattr(request.state, "trace_id", ""))
 
-    # ── 无时间窗：创建记录后真实流式 RAG → SSE ─────────────────────────
+    # ── 无时间窗：RAG 流式 → SSE ────────────────────────────────────────
     if payload.window_seconds is None:
         qa_record = service.create_time_travel_qa_record(
             owner_id=current_user.user_id,
@@ -223,7 +224,7 @@ async def time_travel_qa_stream(
         if qa_record is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
 
-        cited_sources, token_gen = service.stream_rag_for_video(
+        token_gen = service.stream_rag_for_video(
             owner_id=current_user.user_id,
             task_id=task_id,
             question_content=payload.question_content,
@@ -239,20 +240,27 @@ async def time_travel_qa_stream(
                     {"task_id": task_id, "qa_id": qa_record.qa_id, "timestamp": produced_at},
                 )
                 seq = 0
-                for token in token_gen:
-                    seq += 1
-                    accumulated.append(token)
-                    yield _sse_event(
-                        "delta",
-                        {
-                            "task_id": task_id,
-                            "qa_id": qa_record.qa_id,
-                            "chunk": token,
-                            "sequence": seq,
-                            "timestamp": produced_at,
-                        },
-                    )
+                for item in token_gen:
+                    if isinstance(item, AgentProgressEvent):
+                        yield _sse_event(
+                            "progress",
+                            {"phase": item.phase, "message": item.message},
+                        )
+                    else:
+                        seq += 1
+                        accumulated.append(item)
+                        yield _sse_event(
+                            "delta",
+                            {
+                                "task_id": task_id,
+                                "qa_id": qa_record.qa_id,
+                                "chunk": item,
+                                "sequence": seq,
+                                "timestamp": produced_at,
+                            },
+                        )
                 full_answer = "".join(accumulated)
+                cited_sources = getattr(service.agent, "last_cited_sources", []) if service.agent else []
                 service.finalize_time_travel_qa_answer(
                     owner_id=current_user.user_id,
                     task_id=task_id,
@@ -285,83 +293,161 @@ async def time_travel_qa_stream(
             headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
         )
 
-    # ── 有时间窗：走 workflow_service 时光旅行 → SSE ─────────────────────
-    try:
-        answer = await workflow_service.start_time_travel_qa_async(
-            owner_id=current_user.user_id,
-            task_id=task_id,
-            timestamp=payload.timestamp,
-            question=payload.question_content,
-            window_seconds=payload.window_seconds,
-            trace_id=trace_id,
-        )
-        output_chunks = _chunk_text(answer)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Time travel Q&A failed: {str(exc)}",
-        ) from exc
-
+    # ── 有时间窗：使用 VideoQAAgent 时间旅行流式 → SSE ────────────────────
     qa_record = service.create_time_travel_qa_record(
         owner_id=current_user.user_id,
         task_id=task_id,
         timestamp=payload.timestamp,
         question_content=payload.question_content,
-        answer_content=answer,
+        answer_content="",
         attachments=payload.attachments,
         window_seconds=payload.window_seconds,
     )
     if qa_record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
 
-    produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-    def _event_iter() -> Iterator[str]:
+    try:
+        token_gen = service.stream_time_travel_for_video(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            question_content=payload.question_content,
+            attachments=payload.attachments,
+            timestamp=payload.timestamp,
+            window_seconds=payload.window_seconds,
+        )
+    except RuntimeError:
+        # Fallback: agent not configured, use old workflow_service path
         try:
-            yield _sse_event(
-                "start",
-                {
-                    "task_id": task_id,
-                    "qa_id": qa_record.qa_id,
-                    "timestamp": produced_at,
-                },
+            answer = await workflow_service.start_time_travel_qa_async(
+                owner_id=current_user.user_id,
+                task_id=task_id,
+                timestamp=payload.timestamp,
+                question=payload.question_content,
+                window_seconds=payload.window_seconds,
+                trace_id=trace_id,
             )
-            for seq, chunk in enumerate(output_chunks, start=1):
+            output_chunks = _chunk_text(answer)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Time travel Q&A failed: {str(exc)}",
+            ) from exc
+
+        qa_record_with_answer = service.create_time_travel_qa_record(
+            owner_id=current_user.user_id,
+            task_id=task_id,
+            timestamp=payload.timestamp,
+            question_content=payload.question_content,
+            answer_content=answer,
+            attachments=payload.attachments,
+            window_seconds=payload.window_seconds,
+        )
+        if qa_record_with_answer is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+
+        produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+        def _event_iter() -> Iterator[str]:
+            try:
                 yield _sse_event(
-                    "delta",
+                    "start",
+                    {"task_id": task_id, "qa_id": qa_record_with_answer.qa_id, "timestamp": produced_at},
+                )
+                for seq, chunk in enumerate(output_chunks, start=1):
+                    yield _sse_event(
+                        "delta",
+                        {
+                            "task_id": task_id,
+                            "qa_id": qa_record_with_answer.qa_id,
+                            "chunk": chunk,
+                            "sequence": seq,
+                            "timestamp": produced_at,
+                        },
+                    )
+                yield _sse_event(
+                    "done",
                     {
                         "task_id": task_id,
-                        "qa_id": qa_record.qa_id,
-                        "chunk": chunk,
-                        "sequence": seq,
+                        "qa_id": qa_record_with_answer.qa_id,
+                        "answer_content": answer,
+                        "cited_sources": [],
                         "timestamp": produced_at,
                     },
                 )
+            except Exception as exc:
+                yield _sse_event(
+                    "error",
+                    {"task_id": task_id, "qa_id": qa_record_with_answer.qa_id, "message": str(exc), "timestamp": produced_at},
+                )
+
+        return StreamingResponse(
+            _event_iter(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+        )
+
+    # ── Agent path: 流式 SSE ─────────────────────────────────────────────
+    produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    accumulated: list[str] = []
+
+    def _sse_time_travel_gen() -> Iterator[str]:
+        try:
+            yield _sse_event(
+                "start",
+                {"task_id": task_id, "qa_id": qa_record.qa_id, "timestamp": produced_at},
+            )
+            seq = 0
+            for item in token_gen:
+                if isinstance(item, AgentProgressEvent):
+                    yield _sse_event(
+                        "progress",
+                        {"phase": item.phase, "message": item.message},
+                    )
+                else:
+                    seq += 1
+                    accumulated.append(item)
+                    yield _sse_event(
+                        "delta",
+                        {
+                            "task_id": task_id,
+                            "qa_id": qa_record.qa_id,
+                            "chunk": item,
+                            "sequence": seq,
+                            "timestamp": produced_at,
+                        },
+                    )
+            full_answer = "".join(accumulated)
+            cited_sources = getattr(service.agent, "last_cited_sources", []) if service.agent else []
+            service.finalize_time_travel_qa_answer(
+                owner_id=current_user.user_id,
+                task_id=task_id,
+                qa_id=qa_record.qa_id,
+                answer_content=full_answer,
+                cited_sources=cited_sources,
+            )
             yield _sse_event(
                 "done",
                 {
                     "task_id": task_id,
                     "qa_id": qa_record.qa_id,
-                    "answer_content": answer,
-                    "cited_sources": [],
+                    "answer_content": full_answer,
+                    "cited_sources": [
+                        s if isinstance(s, dict) else (s.model_dump() if hasattr(s, "model_dump") else s)
+                        for s in cited_sources
+                    ],
                     "timestamp": produced_at,
                 },
             )
         except Exception as exc:
             yield _sse_event(
                 "error",
-                {
-                    "task_id": task_id,
-                    "qa_id": qa_record.qa_id,
-                    "message": str(exc),
-                    "timestamp": produced_at,
-                },
+                {"task_id": task_id, "qa_id": qa_record.qa_id, "message": str(exc), "timestamp": produced_at},
             )
 
     return StreamingResponse(
-        _event_iter(),
+        _sse_time_travel_gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )

@@ -121,6 +121,8 @@ def get_video_qa_service() -> VideoQAService:
         repository=get_video_qa_repository(),
         task_repository=get_video_summary_task_repository(),
         rag_agent_service=get_rag_agent_service(),
+        agent=get_video_qa_agent(),
+        chat_memory=get_chat_memory(),
     )
 
 
@@ -207,6 +209,18 @@ def get_qa_agent() -> QAAgent:
         memory=get_chat_memory(),
         tool_registry=get_tool_registry(),
         tool_executor=get_tool_executor(),
+        rag_stream_llm=RagStreamLLM.from_env(),
+    )
+
+
+@lru_cache(maxsize=1)
+def get_video_qa_agent():
+    """Create VideoQAAgent with memory, RAG service, and LLM."""
+    from core.agent.video_qa_agent import VideoQAAgent
+    from core.llm.rag_llm import RagStreamLLM
+    return VideoQAAgent(
+        memory=get_chat_memory(),
+        rag_agent_service=get_rag_agent_service(),
         rag_stream_llm=RagStreamLLM.from_env(),
     )
 

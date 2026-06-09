@@ -21,6 +21,7 @@ from backend.schemas.global_qa import (
     GlobalQARecordUpdateRequest,
 )
 from backend.services.global_qa_service import GlobalQAService
+from core.agent.events import AgentProgressEvent
 
 router = APIRouter(prefix="/api/v1/kbs", tags=["global-qa"])
 
@@ -82,18 +83,26 @@ async def create_global_qa_stream(
                     "timestamp": produced_at,
                 },
             )
-            for seq, chunk in enumerate(chunks, start=1):
-                yield _sse_event(
-                    "delta",
-                    {
-                        "kbid": kbid,
-                        "chat_id": chat_id,
-                        "qa_id": record.qa_id,
-                        "chunk": chunk,
-                        "sequence": seq,
-                        "timestamp": produced_at,
-                    },
-                )
+            seq = 0
+            for item in chunks:
+                if isinstance(item, AgentProgressEvent):
+                    yield _sse_event(
+                        "progress",
+                        {"phase": item.phase, "message": item.message},
+                    )
+                else:
+                    seq += 1
+                    yield _sse_event(
+                        "delta",
+                        {
+                            "kbid": kbid,
+                            "chat_id": chat_id,
+                            "qa_id": record.qa_id,
+                            "chunk": item,
+                            "sequence": seq,
+                            "timestamp": produced_at,
+                        },
+                    )
             updated_record = qa_service.get_qa_record(
                 owner_id=current_user.user_id,
                 kbid=kbid,

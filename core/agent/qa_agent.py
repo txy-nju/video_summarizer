@@ -16,6 +16,7 @@ import logging
 from typing import Any, Iterator
 
 from core.agent.base import BaseAgent
+from core.agent.events import AgentProgressEvent
 from core.agent.parser import parse_react_output
 from core.context.execution_context import ExecutionContext
 from core.memory.base import BaseChatMemory
@@ -103,9 +104,10 @@ class QAAgent(BaseAgent):
         self, *, question: str, chat_id: str, kbid: str, owner_id: str
     ) -> str:
         return "".join(
-            self.answer_stream(
+            t for t in self.answer_stream(
                 question=question, chat_id=chat_id, kbid=kbid, owner_id=owner_id
             )
+            if isinstance(t, str)
         )
 
     def answer_stream(
@@ -133,6 +135,9 @@ class QAAgent(BaseAgent):
                 len(messages),
             )
 
+            # Progress: thinking
+            yield AgentProgressEvent("thinking", "正在分析你的问题...")
+
             # Call LLM (streaming)
             full_response = ""
             try:
@@ -155,6 +160,11 @@ class QAAgent(BaseAgent):
                 return
 
             if parsed.is_action:
+                # Progress: searching
+                query = parsed.action_params.get("query", "")
+                search_msg = f"正在检索: {query}" if query else "正在从知识库检索相关内容..."
+                yield AgentProgressEvent("searching", search_msg)
+
                 # Execute the tool
                 logger.info(
                     "QAAgent: executing tool '%s' with params %s",
@@ -168,6 +178,9 @@ class QAAgent(BaseAgent):
                 )
 
                 if tool_result.success:
+                    # Progress: retrieved
+                    n_cited = len(tool_result.cited_sources) if tool_result.cited_sources else 0
+                    yield AgentProgressEvent("retrieved", f"已找到 {n_cited} 条相关内容" if n_cited else "未找到相关内容")
                     # Inject observation into messages and continue
                     observation = _OBSERVATION_TEMPLATE.format(
                         data=tool_result.data or "（无结果）"
