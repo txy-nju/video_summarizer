@@ -419,11 +419,21 @@ def answer_question_at_timestamp(
             reason="未配置 CHAT_API_KEY 或 OPENAI_API_KEY，当前返回的是证据抽取结果（已选取 {} 帧视觉证据）。".format(len(representative_frames)),
         )
 
-    system_prompt = (
-        "你是一名严谨的视频证据问答助手。"
-        "你只能基于提供的时间窗证据回答，禁止超出证据臆测。"
-        "若证据不足，必须明确说明不足点。"
-    )
+    # ── 提前下载用户上传图片，避免重复调用 ──
+    attachment_frames: list[dict] = _download_attachment_frames(attachments) if attachments else []
+
+    if attachment_frames:
+        system_prompt = (
+            "你是一名严谨的图片问答助手。"
+            "用户上传了图片，请**仅针对用户上传的图片内容**进行回答。"
+            "知识库文本和视频转录仅供参考背景上下文。"
+        )
+    else:
+        system_prompt = (
+            "你是一名严谨的视频证据问答助手。"
+            "你只能基于提供的时间窗证据回答，禁止超出证据臆测。"
+            "若证据不足，必须明确说明不足点。"
+        )
 
     evidence_text = (
         f"[会话ID] {resolved_thread_id}\n"
@@ -438,46 +448,47 @@ def answer_question_at_timestamp(
     user_content: List[Dict] = [{"type": "text", "text": evidence_text}]
 
     # ── 用户上传的图片附件（优先展示）──
-    if attachments:
-        attachment_frames = _download_attachment_frames(attachments)
-        if attachment_frames:
-            user_content[0]["text"] += (
-                "\n\n[用户上传图片] 以下标注为【用户上传图片】的图片是用户在提问时上传的，"
-                "请**仅针对这些图片内容**回答问题。标注为【知识库参考帧】的图片来自知识库视频帧，"
-                "仅供理解上下文参考，不要对其内容进行分析或描述："
-            )
-            for af in attachment_frames:
-                b64 = _read_frame_base64(af["frame_path"])
-                if b64:
-                    user_content.append({
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{af.get('mime_type', 'image/jpeg')};base64,{b64}", "detail": "low"},
-                    })
-                    user_content[0]["text"] += f"\n【用户上传图片】{af.get('time_range', '')}"
+    if attachment_frames:
+        user_content[0]["text"] += (
+            "\n\n[用户上传图片] 以下标注为【用户上传图片】的图片是用户在提问时上传的，"
+            "请**仅针对这些图片内容**回答问题。标注为【知识库参考帧】的图片来自知识库视频帧，"
+            "仅供理解上下文参考，不要对其内容进行分析或描述："
+        )
+        for af in attachment_frames:
+            b64 = _read_frame_base64(af["frame_path"])
+            if b64:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{af.get('mime_type', 'image/jpeg')};base64,{b64}", "detail": "low"},
+                })
+                user_content[0]["text"] += f"\n【用户上传图片】{af.get('time_range', '')}"
 
     user_content[0]["text"] += f"\n\n[追问问题]\n{question}"
 
+    # ── 判断是否有图片（用户上传 或 知识库帧）──
+    has_images = bool(attachment_frames)
+
     # 为所有代表性帧添加图像证据
-    has_images = False
     for idx, frame in enumerate(representative_frames, 1):
         if isinstance(frame, dict):
-            frame_image_b64 = resolve_frame_image_base64(frame, keyframes_base_path)
-            if frame_image_b64:
-                has_images = True
-                frame_time = frame.get("time", "未知")
-                user_content.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/jpeg;base64,{frame_image_b64}",
-                            "detail": "low",
-                        },
-                    }
-                )
-                # 在文本中添加帧的时间戳标注
-                label_prefix = "【知识库参考帧】" if attachments else "【视觉证据帧"
-                suffix = f" {idx}】时间戳: {frame_time}" if not attachments else f" 时间戳: {frame_time}"
-                user_content[0]["text"] += f"\n{label_prefix}{suffix}"
+            frame_time = frame.get("time", "未知")
+            if attachment_frames:
+                # 有用户上传图片时，知识库帧仅保留文本引用，不发送图像数据
+                user_content[0]["text"] += f"\n[知识库文本参考] 视频帧时间戳: {frame_time}"
+            else:
+                frame_image_b64 = resolve_frame_image_base64(frame, keyframes_base_path)
+                if frame_image_b64:
+                    has_images = True
+                    user_content.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{frame_image_b64}",
+                                "detail": "low",
+                            },
+                        }
+                    )
+                    user_content[0]["text"] += f"\n【视觉证据帧 {idx}】时间戳: {frame_time}"
 
     if has_images:
         model_client = get_model_for_capability("vision")
@@ -532,6 +543,12 @@ def _download_attachment_frames(attachments: list[dict]) -> list[dict]:
     frames: list[dict] = []
 
     for att in attachments:
+        # 兼容 Pydantic 模型与普通 dict
+        if hasattr(att, "model_dump"):
+            att = att.model_dump()
+        if not isinstance(att, dict):
+            continue
+
         mime_type: str = str(att.get("mime_type", ""))
         oss_key: str = str(att.get("oss_key", "")).strip()
         name: str = str(att.get("name", oss_key))

@@ -145,9 +145,8 @@ class RagStreamLLM:
             content.append({
                 "type": "text",
                 "text": (
-                    "用户上传了图片（标注为【用户上传图片】），请**仅针对用户上传的图片内容**回答问题。\n"
-                    "知识库中的参考帧（标注为【知识库参考帧】）仅供理解上下文，不要对其内容进行分析或描述。\n\n"
-                    f"知识库参考资料：\n{text_context}" if text_context else ""
+                    "用户上传了以下图片，请**仅针对用户上传的图片内容**直接回答问题。\n"
+                    f"知识库文本参考资料：\n{text_context}" if text_context else ""
                 ),
             })
         else:
@@ -174,20 +173,25 @@ class RagStreamLLM:
             except OSError as exc:
                 logger.debug("stream_multimodal: 跳过用户上传图片 %s（%s）", f.get("frame_path"), exc)
 
-        # ── 知识库参考帧 ──
+        # ── 知识库参考帧：有用户图片时仅文本引用（不发送图像），无用户图片时正常发送 ──
         for f in kb_frames:
-            try:
-                with open(f["frame_path"], "rb") as img_file:
-                    b64 = base64.b64encode(img_file.read()).decode()
-                label = f.get("time_range", "")
-                content.append({"type": "text", "text": f"【知识库参考帧】{label}" if label else "【知识库参考帧】"})
-                mime = f.get("mime_type", "image/jpeg")
-                content.append(
-                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
-                )
-                valid_frames += 1
-            except OSError as exc:
-                logger.debug("stream_multimodal: 跳过知识库帧 %s（%s）", f.get("frame_path"), exc)
+            label = f.get("time_range", "")
+            if user_frames:
+                if label:
+                    content.append({"type": "text", "text": f"[知识库文本参考] 视频帧时间戳: {label}"})
+            else:
+                try:
+                    with open(f["frame_path"], "rb") as img_file:
+                        b64 = base64.b64encode(img_file.read()).decode()
+                    if label:
+                        content.append({"type": "text", "text": f"视频帧（{label}）："})
+                    mime = f.get("mime_type", "image/jpeg")
+                    content.append(
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                    )
+                    valid_frames += 1
+                except OSError as exc:
+                    logger.debug("stream_multimodal: 跳过知识库帧 %s（%s）", f.get("frame_path"), exc)
 
         if valid_frames == 0:
             logger.warning("stream_multimodal: 所有帧读取失败，降级为纯文本模式")
