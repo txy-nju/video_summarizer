@@ -294,6 +294,7 @@ async def time_travel_qa_stream(
             question=payload.question_content,
             window_seconds=payload.window_seconds,
             trace_id=trace_id,
+            attachments=payload.attachments,
         )
         output_chunks = _chunk_text(answer)
     except ValueError as exc:

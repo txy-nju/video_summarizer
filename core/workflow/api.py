@@ -353,6 +353,7 @@ def answer_question_at_timestamp(
     window_seconds: int = 20,
     status_callback: Optional[Callable[[str], None]] = None,
     trace_id: str = "",
+    attachments: list[dict] | None = None,
 ) -> str:
     """
     基于 checkpoint 的时间旅行追问入口。
@@ -434,8 +435,24 @@ def answer_question_at_timestamp(
         f"[历史总结草稿摘要]\n{draft_summary[:1500]}"
     )
 
-    user_content: List[Dict] = [{"type": "text", "text": evidence_text + f"\n\n[追问问题]\n{question}"}]
-    
+    user_content: List[Dict] = [{"type": "text", "text": evidence_text}]
+
+    # ── 用户上传的图片附件（优先展示）──
+    if attachments:
+        attachment_frames = _download_attachment_frames(attachments)
+        if attachment_frames:
+            user_content[0]["text"] += "\n\n[用户上传的图片] 以下图片为用户在提问时上传，请重点分析这些图片内容并回答用户问题："
+            for af in attachment_frames:
+                b64 = _read_frame_base64(af["frame_path"])
+                if b64:
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{af.get('mime_type', 'image/jpeg')};base64,{b64}", "detail": "low"},
+                    })
+                    user_content[0]["text"] += f"\n[用户上传图片] {af.get('time_range', '')}"
+
+    user_content[0]["text"] += f"\n\n[追问问题]\n{question}"
+
     # 为所有代表性帧添加图像证据
     has_images = False
     for idx, frame in enumerate(representative_frames, 1):
@@ -493,3 +510,52 @@ def answer_question_at_timestamp(
         )
 
     return answer or "[系统提示] 已完成追问，但模型未返回文本内容。"
+
+
+# ── 附件下载辅助函数 ──────────────────────────────────────────────────
+
+def _download_attachment_frames(attachments: list[dict]) -> list[dict]:
+    """将用户上传的图片附件从 OSS 下载到本地缓存，返回 frames 格式列表。"""
+    import shutil
+    from pathlib import Path
+    from backend.infrastructure.storage.oss_client import get_object_storage_client
+
+    cache_dir = Path("temp/frames/attachments")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    storage = get_object_storage_client()
+    frames: list[dict] = []
+
+    for att in attachments:
+        mime_type: str = str(att.get("mime_type", ""))
+        oss_key: str = str(att.get("oss_key", "")).strip()
+        name: str = str(att.get("name", oss_key))
+
+        if not mime_type.startswith("image/") or not oss_key:
+            continue
+
+        sanitized = oss_key.replace("/", "_").replace("\\", "_")
+        cache_path = cache_dir / sanitized
+        try:
+            if not cache_path.exists():
+                with storage.materialize_to_local_path(oss_key) as tmp_path:
+                    shutil.copy2(tmp_path, cache_path)
+            frames.append({
+                "frame_path": str(cache_path),
+                "time_range": name,
+                "mime_type": mime_type,
+            })
+        except Exception:
+            pass
+
+    return frames
+
+
+def _read_frame_base64(frame_path: str) -> str:
+    """读取本地图片文件并返回 base64 编码字符串。"""
+    import base64 as b64
+    from pathlib import Path
+
+    p = Path(frame_path)
+    if not p.exists():
+        return ""
+    return b64.b64encode(p.read_bytes()).decode("utf-8")
