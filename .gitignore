@@ -34,5 +34,16 @@ Z/
 start_dev.bat
 start_prod.bat
 
+# OpenSpec
+openspec/
+.github/prompts/opsx-*.prompt.md
+.github/skills/openspec-*/
+
 # data
 data/db/*
+
+# Codegraph
+.codegraph/daemon.pid
+
+# Claude Code
+.claude/
