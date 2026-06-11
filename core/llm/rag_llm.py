@@ -17,7 +17,8 @@ from core.llm.base import BaseModel
 
 logger = logging.getLogger(__name__)
 
-_NO_RESULTS_MSG = "未找到相关的视频内容，请确认视频已完成转录与向量化。"
+# _NO_RESULTS_MSG = "未找到相关的视频内容，请确认视频已完成转录与向量化。"
+_NO_RESULTS_MSG = "视频转录与向量化正在进行中，请稍后重试。"
 
 
 class RagStreamLLM:

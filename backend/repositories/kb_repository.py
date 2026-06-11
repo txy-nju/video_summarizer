@@ -245,3 +245,10 @@ class KnowledgeBaseRepository:
             select(kb_video_relation_table.c.video_id).where(kb_video_relation_table.c.kbid == kbid)
         ).all()
         return [str(row[0]) for row in rows]
+
+    def get_linked_kbid_by_video_system(self, video_id: str) -> list[str]:
+        """系统级查询：返回包含该视频的所有知识库 ID。供转录完成后触发 KB 向量化使用。"""
+        rows = self._session.execute(
+            select(kb_video_relation_table.c.kbid).where(kb_video_relation_table.c.video_id == video_id)
+        ).all()
+        return [str(row[0]) for row in rows]

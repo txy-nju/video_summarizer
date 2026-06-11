@@ -38,7 +38,7 @@ class TimeTravelQAStreamRequest(BaseModel):
     )
     attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=10)
     # window_seconds omitted => route falls back to RAG streaming path
-    window_seconds: int | None = Field(default=None, ge=5, le=300, description="Evidence window in seconds")
+    window_seconds: int | None = Field(default=None, ge=5, le=86400, description="Evidence window in seconds")
 
 
 class VideoQARecordView(BaseModel):
