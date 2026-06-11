@@ -52,6 +52,7 @@ class AttachmentSchema(BaseModel):
     oss_key: str
     mime_type: str
     size_bytes: int = Field(ge=0)
+    presigned_url: str | None = None
 
 
 class CitedSourceSchema(BaseModel):
