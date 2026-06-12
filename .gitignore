@@ -38,5 +38,10 @@ start_prod.bat
 .codegraph/
 openspec/
 
+# Claude Code
+.claude/
+.github/prompts/opsx-*.prompt.md
+.github/skills/openspec-*/
+
 # data
 data/db/*
