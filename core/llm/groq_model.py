@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterator, List
 
@@ -9,26 +10,28 @@ from core.llm.base import BaseModel
 from core.llm.transcription_result import TranscriptionResult
 
 
-class LocalModel(BaseModel):
-    """本地 / 自托管 LLM provider（兼容 Ollama / vLLM / LM Studio / llama.cpp 等）。
+class GroqModel(BaseModel):
+    """Groq provider implementation (OpenAI-compatible API).
 
-    所有主流本地推理引擎均暴露 OpenAI-compatible API，可直接使用 openai SDK。
-    默认 base_url 指向 Ollama 标准端口；可通过 LOCAL_BASE_URL 覆盖。
-
-    语音转录：取决于本地服务端是否加载了 Whisper 模型。
-    Ollama 默认不支持；vLLM + whisper 插件可以。
+    Groq 提供 OpenAI 兼容端点：https://api.groq.com/openai/v1
+    语音转录使用 whisper-large-v3 / whisper-large-v3-turbo 模型，
+    支持 segment 和 word 级别的 timestamp_granularities。
     """
 
     supports_transcribe = True
-    max_audio_upload_bytes = None  # 本地服务通常无文件大小限制
-    audio_chunk_size_bytes = None
+    max_audio_upload_bytes = 100 * 1024 * 1024  # Dev tier 100MB；Free tier 25MB
+    audio_chunk_size_bytes = None  # 单次上传
 
-    DEFAULT_BASE_URL = "http://localhost:11434/v1"
+    DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 
     def __init__(self, api_key: str, base_url: str | None = None):
-        # 本地服务通常不需要真实 API Key，传任意非空字符串即可通过 SDK 校验。
+        if not api_key:
+            raise ValueError(
+                "Missing API key for Groq provider. "
+                "请设置 GROQ_API_KEY 或 OPENAI_API_KEY 环境变量。"
+            )
         self._client = OpenAI(
-            api_key=api_key or "local",
+            api_key=api_key,
             base_url=base_url or self.DEFAULT_BASE_URL,
         )
 
@@ -83,15 +86,33 @@ class LocalModel(BaseModel):
         model: str,
         audio_path: Path,
         response_format: str = "verbose_json",
+        timestamp_granularities: List[str] | None = None,
     ) -> TranscriptionResult:
-        """调用本地 /v1/audio/transcriptions 端点。
-        若本地服务未加载 Whisper 模型，将返回 HTTP 错误。"""
-        with open(audio_path, "rb") as audio_file:
-            transcript = self._client.audio.transcriptions.create(
-                model=model,
-                file=audio_file,
-                response_format=response_format,
-            )
-        raw_json = transcript.model_dump_json(indent=2)
-        import json
-        return TranscriptionResult.from_whisper_verbose_json(json.loads(raw_json))
+        """调用 Groq Whisper API 并返回标准化 TranscriptionResult。
+
+        kwargs:
+            timestamp_granularities: 可选 ["segment"] 或 ["word", "segment"]，
+                控制返回的时间戳粒度。默认仅 segment 级别。
+        """
+        if timestamp_granularities is None:
+            timestamp_granularities = ["segment"]
+
+        create_kwargs: Dict[str, Any] = {
+            "model": model,
+            "file": open(audio_path, "rb"),
+            "response_format": response_format,
+        }
+
+        # Groq 特有的 timestamp_granularities 参数
+        # 注意：仅 response_format="verbose_json" 时有效
+        if response_format == "verbose_json" and timestamp_granularities:
+            create_kwargs["timestamp_granularities"] = timestamp_granularities
+
+        try:
+            transcript = self._client.audio.transcriptions.create(**create_kwargs)
+            raw_json = transcript.model_dump_json(indent=2)
+            return TranscriptionResult.from_whisper_verbose_json(json.loads(raw_json))
+        finally:
+            # 清理打开的文件句柄
+            if "file" in create_kwargs and hasattr(create_kwargs["file"], "close"):
+                create_kwargs["file"].close()

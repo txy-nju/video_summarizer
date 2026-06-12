@@ -24,6 +24,15 @@ def resolve_provider(capability: str) -> str:
         return _first_non_empty(_read_env("TRANSCRIBE_PROVIDER"), default="openai").lower()
     raise ValueError(f"Unsupported capability: {capability}")
 
+# 仅 transcribe 需要 per-provider 默认模型名
+_TRANSCRIBE_DEFAULT_MODELS: dict[str, str] = {
+    "openai": "whisper-1",
+    "aigc": "fileasrrecorder",
+    "qwen": "paraformer-v2",
+    "groq": "whisper-large-v3-turbo",
+    "local": "whisper-1",
+}
+
 
 def resolve_model_name(capability: str) -> str:
     cap = capability.strip().lower()
@@ -42,10 +51,12 @@ def resolve_model_name(capability: str) -> str:
             default="gpt-4o",
         )
     if cap == "transcribe":
+        provider = resolve_provider("transcribe")
+        provider_default = _TRANSCRIBE_DEFAULT_MODELS.get(provider, "whisper-1")
         return _first_non_empty(
             _read_env("TRANSCRIBE_MODEL_NAME"),
             _read_env("TRANSCRIBER_MODEL"),
-            default="whisper-1",
+            default=provider_default,
         )
     raise ValueError(f"Unsupported capability: {capability}")
 
@@ -77,6 +88,7 @@ def resolve_api_key(capability: str) -> str:
         return _first_non_empty(
             _read_env("TRANSCRIBE_API_KEY"),
             _read_env("AIGC_API_KEY"),
+            _read_env("GROQ_API_KEY"),
             _read_env("QWEN_API_KEY"),
             _read_env("LOCAL_API_KEY"),
             _read_env("OPENAI_API_KEY"),
@@ -113,6 +125,7 @@ def resolve_base_url(capability: str) -> str | None:
         base_url = _first_non_empty(
             _read_env("TRANSCRIBE_BASE_URL"),
             _read_env("AIGC_BASE_URL"),
+            _read_env("GROQ_BASE_URL"),
             _read_env("QWEN_BASE_URL"),
             _read_env("LOCAL_BASE_URL"),
             _read_env("OPENAI_BASE_URL"),

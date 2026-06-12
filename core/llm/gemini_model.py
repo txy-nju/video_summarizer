@@ -19,6 +19,8 @@ class GeminiModel(BaseModel):
     如需转录，请为 transcribe 单独配置其他 provider。
     """
 
+    supports_transcribe = False  # Gemini OpenAI 兼容层不含 /audio 端点
+
     DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
     def __init__(self, api_key: str, base_url: str | None = None):

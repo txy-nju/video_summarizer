@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 
 from backend.db.session import SessionLocal
 from backend.infrastructure.storage.oss_client import get_object_storage_client
@@ -68,9 +67,9 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
         segments = None
         duration = None
         if audio_path:
-            api_key = os.getenv("OPENAI_API_KEY", "")
-            base_url = os.getenv("OPENAI_BASE_URL") or None
-            transcriber = AudioTranscriber(api_key=api_key, base_url=base_url)
+            # API key / base_url 由 AudioTranscriber 内部通过工厂路由解析，
+            # 按 TRANSCRIBE_PROVIDER 环境变量选择 provider
+            transcriber = AudioTranscriber()
             raw = transcriber.transcribe(audio_path)
             try:
                 parsed = json.loads(raw)

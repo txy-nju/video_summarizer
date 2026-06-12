@@ -16,6 +16,8 @@ class DeepSeekModel(BaseModel):
     如需转录能力，请为 transcribe capability 单独配置其他 provider（如 openai）。
     """
 
+    supports_transcribe = False  # DeepSeek 不提供音频转录 API
+
     DEFAULT_BASE_URL = "https://api.deepseek.com"
 
     def __init__(self, api_key: str, base_url: str | None = None):

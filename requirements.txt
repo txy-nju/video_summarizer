@@ -14,6 +14,7 @@ openai
 google-generativeai
 anthropic
 tenacity
+requests
 python-dotenv
 ffmpeg-python
 langgraph

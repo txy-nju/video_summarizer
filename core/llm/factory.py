@@ -9,18 +9,12 @@ from core.llm.local_model import LocalModel
 from core.llm.gemini_model import GeminiModel
 from core.llm.aigc_model import AigcModel
 
-# 不支持原生音频转录的 provider 集合；若用户将 transcribe 指向这些 provider，直接提示切换。
-_UNSUPPORTED_TRANSCRIBE_PROVIDERS = {"deepseek", "gemini", "aigc"}
+
+# 支持的 transcribe provider 列表（用于报错提示）
+_SUPPORTED_TRANSCRIBE_PROVIDERS = ["openai", "aigc", "qwen", "groq", "local"]
 
 
 def _build_model(capability: str, provider: str) -> BaseModel:
-    # transcribe 能力仅 openai 支持；其余 provider 统一提示切换
-    if capability == "transcribe" and provider in _UNSUPPORTED_TRANSCRIBE_PROVIDERS:
-        raise ValueError(
-            f"{provider} 不支持 {capability} 能力。"
-            "请将 TRANSCRIBE_PROVIDER 设为 openai 以使用 Whisper 转录。"
-        )
-
     if provider == "gemini":
         api_key = resolve_api_key(capability)
         if not api_key:
@@ -73,6 +67,18 @@ def _build_model(capability: str, provider: str) -> BaseModel:
             base_url=resolve_base_url(capability),
         )
 
+    if provider == "groq":
+        api_key = resolve_api_key(capability)
+        if not api_key:
+            raise ValueError(
+                "未能找到 GROQ_API_KEY 或 OPENAI_API_KEY 环境变量。"
+            )
+        from core.llm.groq_model import GroqModel
+        return GroqModel(
+            api_key=api_key,
+            base_url=resolve_base_url(capability),
+        )
+
     if provider == "openai":
         api_key = resolve_api_key(capability)
         if not api_key:
@@ -91,7 +97,18 @@ def _build_model(capability: str, provider: str) -> BaseModel:
 def get_model_for_capability(capability: str) -> BaseModel:
     capability = capability.strip().lower()
     provider = resolve_provider(capability)
-    return _build_model(capability, provider)
+
+    model = _build_model(capability, provider)
+
+    # transcribe 能力校验：provider 必须声明 supports_transcribe
+    if capability == "transcribe" and not model.supports_transcribe:
+        raise ValueError(
+            f"{provider} 不支持 transcription 能力。"
+            f"支持的 provider: {', '.join(_SUPPORTED_TRANSCRIBE_PROVIDERS)}。"
+            f"请设置 TRANSCRIBE_PROVIDER 为以上之一。"
+        )
+
+    return model
 
 
 def get_model_name_for_capability(capability: str) -> str:

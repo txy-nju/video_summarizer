@@ -1,4 +1,5 @@
 
+import warnings
 from pathlib import Path
 from tenacity import retry, stop_after_attempt, wait_exponential
 import json
@@ -8,14 +9,14 @@ from collections import deque
 from tenacity import RetryError
 
 from core.llm.base import BaseModel
-from core.llm.config import resolve_api_key
+from core.llm.config import resolve_api_key, resolve_provider
 from core.llm.factory import get_model_for_capability, get_model_name_for_capability
+from core.llm.transcription_result import TranscriptionResult
 
-# Whisper API 单文件硬限制为 25MB，留 1MB 安全余量
-_WHISPER_MAX_BYTES = 24 * 1024 * 1024
-# 实际切段目标使用更保守阈值，降低 VBR 音频导致的分段超限概率
-_WHISPER_TARGET_BYTES = 18 * 1024 * 1024
+# 默认最大切段深度
 _MAX_SPLIT_DEPTH = 6
+# 默认切段目标比例：target = max_bytes * TARGET_RATIO（用于减少切段后的超限概率）
+_TARGET_RATIO = 0.75
 
 
 def _load_audio_file_clip_class():
@@ -55,14 +56,18 @@ def _get_audio_duration(audio_path: Path) -> float:
         return 0.0
 
 
-def _split_audio(audio_path: Path) -> List[Tuple[Path, float]]:
+def _split_audio(audio_path: Path, max_bytes: int | None) -> List[Tuple[Path, float]]:
     """
-    若音频文件超过 Whisper 25MB 限制，将其切分为多个片段。
+    若音频文件超过 max_bytes 限制，将其切分为多个片段。
     返回值：[(片段路径, 起始偏移秒数), ...]
     未超限时直接返回 [(audio_path, 0.0)]。
+    当 max_bytes 为 None 时不切分。
     """
+    if max_bytes is None:
+        return [(audio_path, 0.0)]
+
     file_size = audio_path.stat().st_size
-    if file_size <= _WHISPER_MAX_BYTES:
+    if file_size <= max_bytes:
         return [(audio_path, 0.0)]
 
     AudioFileClip = _load_audio_file_clip_class()
@@ -74,11 +79,14 @@ def _split_audio(audio_path: Path) -> List[Tuple[Path, float]]:
     if duration <= 0:
         return [(audio_path, 0.0)]
 
-    n_segments = math.ceil(file_size / _WHISPER_TARGET_BYTES)
+    target_bytes = int(max_bytes * _TARGET_RATIO)
+    n_segments = math.ceil(file_size / target_bytes)
     segment_duration = duration / n_segments
     print(
         f"[AudioTranscriber] 音频 {audio_path.name} 大小 {file_size / 1024 / 1024:.1f}MB，"
-        f"初始切分为 {n_segments} 段（每段约 {segment_duration:.0f}s，目标<={_WHISPER_TARGET_BYTES / 1024 / 1024:.0f}MB）。"
+        f"限制 {max_bytes / 1024 / 1024:.0f}MB，"
+        f"初始切分为 {n_segments} 段（每段约 {segment_duration:.0f}s，"
+        f"目标<={target_bytes / 1024 / 1024:.0f}MB）。"
     )
 
     queue = deque()
@@ -107,15 +115,14 @@ def _split_audio(audio_path: Path) -> List[Tuple[Path, float]]:
         seg_size = seg_path.stat().st_size if seg_path.exists() else 0
         seg_duration = end - start
 
-        # 兜底：若某段仍超限，按时间二分递归切细，保证最终上传段不超阈值
-        if seg_size > _WHISPER_MAX_BYTES and seg_duration > 2 and depth < _MAX_SPLIT_DEPTH:
+        # 兜底：若某段仍超限，按时间二分递归切细
+        if seg_size > max_bytes and seg_duration > 2 and depth < _MAX_SPLIT_DEPTH:
             try:
                 seg_path.unlink(missing_ok=True)
             except Exception:
                 pass
 
             mid = (start + end) / 2.0
-            # appendleft 顺序：先压后半段再压前半段，确保前半段优先处理，整体顺序不变
             queue.appendleft((mid, end, depth + 1))
             queue.appendleft((start, mid, depth + 1))
             continue
@@ -149,7 +156,6 @@ def _merge_verbose_json(parts: List[Tuple[dict, float]]) -> str:
     language = ""
     seg_id_offset = 0
 
-    # 以首段 transcript 作为结构基座，保留单路径 verbose_json 的其他元字段。
     first_payload = parts[0][0] if isinstance(parts[0][0], dict) else {}
     merged_payload = dict(first_payload)
 
@@ -190,36 +196,67 @@ class AudioTranscriber:
         初始化 AudioTranscriber。
 
         Args:
-            api_key (str): OpenAI API Key。
-            base_url (str, optional): OpenAI API 的中转地址。默认为 None。
-            model (str, optional): 转文本模型名称。默认从 TRANSCRIBE_MODEL_NAME/TRANSCRIBER_MODEL 读取。
+            api_key (str): OpenAI API Key。**已废弃**，转录模型统一走工厂路由。
+            base_url (str, optional): OpenAI API 的中转地址。**已废弃**。
+            model (str, optional): 转文本模型名称。默认从 TRANSCRIBE_MODEL_NAME 读取。
         """
-        # api_key / base_url 参数保留以兼容旧调用方，但已不再用于直接构造 OpenAIModel。
-        # 转录模型统一走 get_model_for_capability("transcribe")，由工厂按 TRANSCRIBE_PROVIDER 路由。
-        self.api_key = api_key or resolve_api_key("transcribe")
-        self.base_url = base_url
-        self.model = model or get_model_name_for_capability("transcribe")
+        if api_key is not None or base_url is not None:
+            warnings.warn(
+                "AudioTranscriber(api_key=..., base_url=...) is deprecated. "
+                "API key and base URL are now resolved by the factory via "
+                "TRANSCRIBE_PROVIDER and related env vars.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         if transcribe_model is not None:
             self.transcribe_model = transcribe_model
         else:
             self.transcribe_model = get_model_for_capability("transcribe")
 
+        self._provider_label = resolve_provider("transcribe")
+        self.model = model or get_model_name_for_capability("transcribe")
+
     def transcribe(self, audio_path: Path) -> str:
         """
         将音频转录为 JSON 格式的文本。
-        若音频超过 25MB，自动切段分批转录后合并时间戳。
+
+        双层分片模型：
+        - 若 provider 声明了 audio_chunk_size_bytes（如 AIGC 5MB），
+          直接将完整文件交给 provider 自行处理分片上传。
+        - 否则根据 max_audio_upload_bytes 限制，必要时用 moviepy 客户端切分。
 
         Args:
             audio_path (Path): 音频文件的路径。
 
         Returns:
-            str: JSON 格式的转录结果（包含详细时间戳段落）。
+            str: JSON 格式的转录结果（与 Whisper verbose_json 兼容）。
         """
-        segments = _split_audio(audio_path)
+        model = self.transcribe_model
+
+        # 情况 1: provider 自带分片上传（如 AIGC 的 5MB 固定分片）
+        if model.audio_chunk_size_bytes is not None:
+            # 检查文件总大小是否超限
+            file_size = audio_path.stat().st_size
+            if model.max_audio_upload_bytes is not None and file_size > model.max_audio_upload_bytes:
+                raise ValueError(
+                    f"音频文件 {file_size / 1024 / 1024:.1f}MB 超过 "
+                    f"{self._provider_label} 限制 {model.max_audio_upload_bytes / 1024 / 1024:.0f}MB。"
+                )
+            result = model.transcribe_audio(
+                model=self.model,
+                audio_path=audio_path,
+            )
+            return result.to_json()
+
+        # 情况 2: 传统路径 — 检查大小限制，必要时 moviepy 切分
+        max_bytes = model.max_audio_upload_bytes
+        segments = _split_audio(audio_path, max_bytes)
 
         if len(segments) == 1:
             try:
-                return self._transcribe_single(segments[0][0])
+                result = self._transcribe_single(segments[0][0])
+                return result.to_json()
             except RetryError as exc:
                 seg_path = segments[0][0]
                 seg_size_mb = 0.0
@@ -236,7 +273,8 @@ class AudioTranscriber:
         parts: List[Tuple[dict, float]] = []
         for seg_path, offset in segments:
             try:
-                result_json = self._transcribe_single(seg_path)
+                result = self._transcribe_single(seg_path)
+                result_json = result.to_json()
             except RetryError as exc:
                 seg_size_mb = 0.0
                 try:
@@ -244,7 +282,8 @@ class AudioTranscriber:
                 except Exception:
                     pass
                 raise RuntimeError(
-                    f"音频分段转录失败（重试耗尽）。段文件: {seg_path.name}, 大小: {seg_size_mb:.1f}MB, 偏移: {offset:.2f}s。"
+                    f"音频分段转录失败（重试耗尽）。段文件: {seg_path.name}, "
+                    f"大小: {seg_size_mb:.1f}MB, 偏移: {offset:.2f}s。"
                     "可能原因：API 配额/限流、凭证异常，或分段仍超过服务端限制。"
                 ) from exc
             try:
@@ -262,24 +301,24 @@ class AudioTranscriber:
         return _merge_verbose_json(parts)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    def _transcribe_single(self, audio_path: Path) -> str:
-        """对单个音频文件调用 Whisper API（含 tenacity 重试）。"""
-        print(f"Transcribing audio segment: {audio_path}...")
-        transcript_json = self.transcribe_model.transcribe_audio(
+    def _transcribe_single(self, audio_path: Path) -> TranscriptionResult:
+        """对单个音频文件调用转录 API（含 tenacity 重试）。
+
+        返回 TranscriptionResult（内部使用），外部通过 to_json() 获取 JSON 字符串。
+        """
+        print(f"[{self._provider_label}] Transcribing audio segment: {audio_path}...")
+        result = self.transcribe_model.transcribe_audio(
             model=self.model,
             audio_path=audio_path,
             response_format="verbose_json",
         )
-        print(f"Transcription successful: {audio_path.name}")
+        print(f"[{self._provider_label}] Transcription successful: {audio_path.name}")
         try:
-            _result = json.loads(transcript_json)
-            _text = _result.get("text", "").strip()
-            _lang = _result.get("language", "unknown")
-            _dur = _result.get("duration", 0)
             print(
-                f"[Whisper] 语言={_lang} | 时长={_dur:.1f}s\n"
-                f"[Whisper] 转录文本: {_text}\n"
+                f"[{self._provider_label}] 语言={result.language} | "
+                f"时长={result.duration:.1f}s\n"
+                f"[{self._provider_label}] 转录文本: {result.text[:200]}\n"
             )
         except Exception:
-            print(f"[Whisper] 原始结果: {transcript_json[:500]}")
-        return transcript_json
+            print(f"[{self._provider_label}] 原始结果: {result.to_json()[:500]}")
+        return result
