@@ -291,6 +291,7 @@ class RagAgentService:
                     "frame_path": str(cache_path),
                     "time_range": name,
                     "mime_type": mime_type,
+                    "source": "user_upload",
                 })
             except Exception:
                 logger.warning("_download_attachment_frames: 跳过附件 oss_key=%s", oss_key)

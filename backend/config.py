@@ -43,6 +43,11 @@ class Settings(BaseSettings):
     storage_backend: str = Field(default="local", alias="STORAGE_BACKEND")
     oss_local_root: str = Field(default="temp/object_storage", alias="OSS_LOCAL_ROOT")
     oss_presign_ttl_seconds: int = Field(default=3600, alias="OSS_PRESIGN_TTL_SECONDS")
+    public_api_base_url: str = Field(
+        default="http://localhost:8000",
+        alias="PUBLIC_API_BASE_URL",
+        description="对外可访问的 API 基地址，用于生成附件的 HTTP 访问链接。",
+    )
 
     # --- Observability/OTEL ---
     otel_enabled: bool = Field(default=False, alias="OTEL_ENABLED")

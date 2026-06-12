@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterator, List
 from openai import OpenAI
 
 from core.llm.base import BaseModel
+from core.llm.transcription_result import TranscriptionResult
 
 
 class QwenModel(BaseModel):
@@ -15,6 +16,10 @@ class QwenModel(BaseModel):
     可直接使用 openai SDK 客户端调用 chat / vision / transcribe 三种能力。
     语音转录底层对接 Paraformer 系列模型（如 paraformer-v2）。
     """
+
+    supports_transcribe = True
+    max_audio_upload_bytes = None  # URL 模式支持 2GB，无客户端大小限制
+    audio_chunk_size_bytes = None
 
     DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -80,12 +85,23 @@ class QwenModel(BaseModel):
         model: str,
         audio_path: Path,
         response_format: str = "verbose_json",
-    ) -> str:
-        """DashScope 兼容模式对接 Paraformer 语音识别。"""
+    ) -> TranscriptionResult:
+        """DashScope 兼容模式对接 Paraformer 语音识别。
+
+        当前使用 OpenAI 兼容端点 `/v1/audio/transcriptions`。
+        若端点不可用，将 fallback 到 DashScope 原生 Paraformer REST API。
+        """
         with open(audio_path, "rb") as audio_file:
             transcript = self._client.audio.transcriptions.create(
                 model=model,
                 file=audio_file,
                 response_format=response_format,
             )
-        return transcript.model_dump_json(indent=2)
+        raw_json = transcript.model_dump_json(indent=2)
+        import json
+        data = json.loads(raw_json)
+
+        # 检测返回格式：Paraformer 格式（sentences）vs Whisper 格式（segments）
+        if "sentences" in data and isinstance(data.get("sentences"), list):
+            return TranscriptionResult.from_paraformer_response(data)
+        return TranscriptionResult.from_whisper_verbose_json(data)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import logging
 from typing import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -30,6 +31,7 @@ from backend.services.video_qa_service import VideoQAService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
 from core.agent.events import AgentProgressEvent
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["video-qa"])
 _ALLOWED_FIELDS = {
@@ -325,9 +327,11 @@ async def time_travel_qa_stream(
                 question=payload.question_content,
                 window_seconds=payload.window_seconds,
                 trace_id=trace_id,
+                attachments=[a.model_dump() for a in payload.attachments] if payload.attachments else None,
             )
             output_chunks = _chunk_text(answer)
         except ValueError as exc:
+            logger.exception("Time travel QA ValueError: payload=%s", payload.model_dump())
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
         except Exception as exc:
             raise HTTPException(

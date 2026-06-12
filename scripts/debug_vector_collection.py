@@ -92,65 +92,41 @@ def cmd_summary():
 
 
 def cmd_list_collections():
-    """列出 Chroma 中所有出现过的 metadata.collection 值及其 chunk 数量。"""
+    """列出 Chroma 中所有物理 collections 及其 chunk 数量。"""
     store, settings = _build_chroma_store()
-    stats = store.get_collection_stats()
-    total = stats.get("chunk_count", 0)
-
-    if total == 0:
-        print("Chroma 中没有任何向量数据。")
-        return
-
-    limit = min(total + 100, 50000)
     try:
-        payload = store._collection.get(
-            limit=limit,
-            include=["metadatas"],
-        )
+        collections = store._client.list_collections()
     except Exception as exc:
-        print(f"获取 Chroma 数据失败: {exc}")
-        print(f"Chroma 中共有 {total} 条记录，但无法批量获取 metadata。")
-        print("请用 --collection <name> 分别查询。")
+        print(f"获取 Chroma collections 失败: {exc}")
         return
 
-    metadatas = payload.get("metadatas", [])
-    ids = payload.get("ids", [])
-
-    collection_counter: Counter = Counter()
-    sample_ids: dict[str, list[str]] = {}
-
-    for chunk_id, meta in zip(ids, metadatas):
-        meta = meta or {}
-        coll = meta.get("collection", "(missing)")
-        collection_counter[coll] += 1
-        if coll not in sample_ids:
-            sample_ids[coll] = []
-        if len(sample_ids[coll]) < 3:
-            sample_ids[coll].append(chunk_id)
+    if not collections:
+        print("Chroma 中没有任何物理向量集合。")
+        return
 
     print("=" * 70)
-    print("Chroma 中所有 metadata.collection 值分布")
+    print("Chroma 中所有物理 collections 分布")
     print("=" * 70)
     print(f"  Chroma persist_path: {getattr(settings.vector_store, 'persist_path', 'N/A')}")
-    print(f"  Total chunks scanned: {len(ids)} / {total}")
+    print(f"  Total collections: {len(collections)}")
     print()
 
-    for coll, count in collection_counter.most_common():
-        samples = sample_ids.get(coll, [])
-        sample_str = ", ".join(samples[:3])
-        print(f"  {coll}")
+    for col in collections:
+        col_name = str(col)
+        try:
+            col_obj = store._client.get_collection(name=col_name)
+            count = col_obj.count()
+        except Exception:
+            count = "N/A"
+        print(f"  Collection: {col_name}")
         print(f"    chunks: {count}")
-        print(f"    sample_ids: [{sample_str}]")
         print()
-
-    if len(ids) < total:
-        print(f"  [WARN] 仅扫描了 {len(ids)}/{total} 条，结果可能不完整。")
 
 
 def cmd_query_collection(collection: str, video_id: str | None = None,
                          limit: int = 50, full_text: bool = False):
     """查询指定 collection 的向量数据。"""
-    store, settings = _build_chroma_store()
+    store, settings = _build_chroma_store(collection=collection)
     chroma_path = getattr(settings.vector_store, "persist_path", "N/A")
     stats = store.get_collection_stats()
 

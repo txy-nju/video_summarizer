@@ -36,12 +36,15 @@ start_prod.bat
 
 # Code intelligence & spec tools
 .codegraph/
+.codegraph/daemon.pid
+
+# OpenSpec
 openspec/
+.github/prompts/opsx-*.prompt.md
+.github/skills/openspec-*/
 
 # Claude Code
 .claude/
-.github/prompts/opsx-*.prompt.md
-.github/skills/openspec-*/
 
 # data
 data/db/*

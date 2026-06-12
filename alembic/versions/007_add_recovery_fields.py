@@ -24,15 +24,21 @@ depends_on: Union[str, None] = None
 
 
 def upgrade() -> None:
-    # 1. 新增恢复追踪字段
-    op.add_column(
-        "video_resources",
-        sa.Column("recovery_attempts", sa.Integer(), nullable=False, server_default="0"),
-    )
-    op.add_column(
-        "video_resources",
-        sa.Column("last_recovery_at", sa.DateTime(timezone=True), nullable=True),
-    )
+    # 1. 新增恢复追踪字段（幂等：跳过已存在的列）
+    from sqlalchemy import inspect
+    conn = op.get_bind()
+    inspector = inspect(conn)
+    existing = {c["name"] for c in inspector.get_columns("video_resources")}
+    if "recovery_attempts" not in existing:
+        op.add_column(
+            "video_resources",
+            sa.Column("recovery_attempts", sa.Integer(), nullable=False, server_default="0"),
+        )
+    if "last_recovery_at" not in existing:
+        op.add_column(
+            "video_resources",
+            sa.Column("last_recovery_at", sa.DateTime(timezone=True), nullable=True),
+        )
 
     # 2. 为 transcribe_status 和 frame_extraction_status 枚举新增 IRRECOVERABLE 值
     #    使用 IF NOT EXISTS 保证幂等（已在 Python enum 中定义，此处同步 PG 类型）

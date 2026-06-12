@@ -13,7 +13,7 @@ class VideoQARecordCreateRequest(BaseModel):
     task_id: str = Field(min_length=1, max_length=64)
     start_time: str = Field(min_length=1, max_length=20)  # HH:MM:SS format
     end_time: str = Field(min_length=1, max_length=20)
-    question_content: str = Field(min_length=1, max_length=5000)
+    question_content: str = Field(min_length=0, max_length=5000)
     attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=10)
 
 
@@ -32,13 +32,13 @@ class TimeTravelQAStreamRequest(BaseModel):
 
     timestamp: str = Field(pattern=r"^\d{2}:\d{2}:\d{2}$", description="Target timestamp (HH:MM:SS)")
     question_content: str = Field(
-        min_length=1,
+        min_length=0,
         max_length=5000,
         validation_alias=AliasChoices("question", "question_content"),
     )
     attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=10)
     # window_seconds omitted => route falls back to RAG streaming path
-    window_seconds: int | None = Field(default=None, ge=5, le=300, description="Evidence window in seconds")
+    window_seconds: int | None = Field(default=None, ge=5, le=86400, description="Evidence window in seconds")
 
 
 class VideoQARecordView(BaseModel):

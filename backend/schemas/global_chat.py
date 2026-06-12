@@ -77,7 +77,7 @@ class GlobalChatSessionDeleteResponse(BaseModel):
 
 class GlobalQARecordCreateRequest(BaseModel):
     """提问请求"""
-    question_content: str = Field(min_length=1, max_length=5000)
+    question_content: str = Field(min_length=0, max_length=5000)
     attachments: list[AttachmentInfo] = Field(default_factory=list, max_length=10)
 
 

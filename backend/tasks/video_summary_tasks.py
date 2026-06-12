@@ -38,6 +38,7 @@ def _mark_video_resource_ready(video_id: str) -> bool:
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.video_summary_tasks.async_mark_video_resource_ready",
     acks_late=True,
     max_retries=3,
@@ -72,6 +73,7 @@ def async_mark_video_resource_ready(self, results: list, video_id: str, trace_id
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.video_summary_tasks.async_process_video",
     acks_late=True,
     max_retries=2,
