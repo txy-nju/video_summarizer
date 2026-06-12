@@ -42,8 +42,8 @@ class RagStreamLLM:
     def from_rag_settings(cls, settings: Any) -> "RagStreamLLM":
         """从 modular_rag settings 对象构造。
 
-        优先使用 settings.llm.{api_key, api_url, model} 字段直接创建
-        OpenAIModel；若字段缺失则回退到 ``from_env()``（读环境变量）。
+        优先使用 settings.llm.{api_key, api_url, model} 字段通过工厂创建
+        对应的 BaseModel；若字段缺失则回退到 ``from_env()``（读环境变量）。
         """
         llm_cfg = getattr(settings, "llm", None)
         api_key = getattr(llm_cfg, "api_key", None)
@@ -51,23 +51,28 @@ class RagStreamLLM:
         model_name = getattr(llm_cfg, "model", None)
 
         if api_key and model_name:
-            from core.llm.openai_model import OpenAIModel
+            from core.llm.factory import get_model_for_capability
 
-            return cls(
-                model=OpenAIModel(api_key=api_key, base_url=api_url or None),
-                model_name=model_name,
-            )
+            try:
+                model = get_model_for_capability("rag")
+            except Exception:
+                logger.debug("RagStreamLLM: 工厂创建失败，回退到 OpenAIModel")
+                from core.llm.openai_model import OpenAIModel
+
+                model = OpenAIModel(api_key=api_key, base_url=api_url or None)
+            return cls(model=model, model_name=model_name)
+
         logger.debug("RagStreamLLM: rag settings 中未找到 api_key/model，回退到环境变量")
         return cls.from_env()
 
     @classmethod
     def from_env(cls) -> "RagStreamLLM":
-        """从环境变量构造（使用 CHAT 能力配置）。"""
+        """从环境变量构造（使用 RAG 能力配置）。"""
         from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
         return cls(
-            model=get_model_for_capability("chat"),
-            model_name=get_model_name_for_capability("chat"),
+            model=get_model_for_capability("rag"),
+            model_name=get_model_name_for_capability("rag"),
         )
 
     # ── 公开流式接口 ──────────────────────────────────────────────────

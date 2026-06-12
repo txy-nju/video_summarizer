@@ -64,13 +64,16 @@ def build_rag_settings(
     persist_path / BM25 index 使用绝对路径从项目根目录推导，
     避免不同进程 CWD 不同导致访问不同的向量库文件。
     """
-    api_key = os.environ.get("OPENAI_API_KEY", "")
-    base_url = os.environ.get("OPENAI_BASE_URL") or None
-    model_name = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
+    from core.llm.config import resolve_api_key, resolve_base_url, resolve_model_name, resolve_provider
+
+    api_key = resolve_api_key("rag")
+    base_url = resolve_base_url("rag")
+    model_name = resolve_model_name("rag")
+    provider = resolve_provider("rag")
     embedding_model = os.environ.get("RAG_EMBEDDING_MODEL", "text-embedding-3-small")
 
     llm = LLMSettings(
-        provider="openai",
+        provider=provider,
         model=model_name,
         api_key=api_key,
         api_url=base_url,
@@ -78,8 +81,8 @@ def build_rag_settings(
     embedding = EmbeddingSettings(
         provider="openai",
         model=embedding_model,
-        api_key=api_key,
-        api_url=base_url,
+        api_key=os.environ.get("OPENAI_API_KEY", ""),
+        api_url=os.environ.get("OPENAI_BASE_URL") or None,
     )
     splitter = SplitterSettings(
         provider="recursive",
@@ -96,7 +99,7 @@ def build_rag_settings(
         bm25_index_dir=bm25_index_dir,
     )
     retrieval = RetrievalSettings(top_k=6)
-    rerank = RerankSettings(provider="llm")
+    rerank = RerankSettings(provider="none")
     evaluation = EvaluationSettings(backend="none")
     observability = ObservabilitySettings(
         log_level="INFO",

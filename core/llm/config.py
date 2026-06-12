@@ -16,6 +16,8 @@ def _first_non_empty(*values: str, default: str = "") -> str:
 
 def resolve_provider(capability: str) -> str:
     cap = capability.strip().lower()
+    if cap == "rag":
+        return _first_non_empty(_read_env("RAG_PROVIDER"), _read_env("CHAT_PROVIDER"), default="openai").lower()
     if cap == "chat":
         return _first_non_empty(_read_env("CHAT_PROVIDER"), default="openai").lower()
     if cap == "vision":
@@ -36,6 +38,13 @@ _TRANSCRIBE_DEFAULT_MODELS: dict[str, str] = {
 
 def resolve_model_name(capability: str) -> str:
     cap = capability.strip().lower()
+    if cap == "rag":
+        return _first_non_empty(
+            _read_env("RAG_MODEL_NAME"),
+            _read_env("CHAT_MODEL_NAME"),
+            _read_env("OPENAI_MODEL_NAME"),
+            default="gpt-4o",
+        )
     if cap == "chat":
         return _first_non_empty(
             _read_env("CHAT_MODEL_NAME"),
@@ -63,6 +72,17 @@ def resolve_model_name(capability: str) -> str:
 
 def resolve_api_key(capability: str) -> str:
     cap = capability.strip().lower()
+    if cap == "rag":
+        return _first_non_empty(
+            _read_env("RAG_API_KEY"),
+            _read_env("CHAT_API_KEY"),
+            _read_env("AIGC_API_KEY"),
+            _read_env("GEMINI_API_KEY"),
+            _read_env("QWEN_API_KEY"),
+            _read_env("DEEPSEEK_API_KEY"),
+            _read_env("LOCAL_API_KEY"),
+            _read_env("OPENAI_API_KEY"),
+        )
     if cap == "chat":
         return _first_non_empty(
             _read_env("CHAT_API_KEY"),
@@ -98,6 +118,18 @@ def resolve_api_key(capability: str) -> str:
 
 def resolve_base_url(capability: str) -> str | None:
     cap = capability.strip().lower()
+    if cap == "rag":
+        base_url = _first_non_empty(
+            _read_env("RAG_BASE_URL"),
+            _read_env("CHAT_BASE_URL"),
+            _read_env("AIGC_BASE_URL"),
+            _read_env("GEMINI_BASE_URL"),
+            _read_env("QWEN_BASE_URL"),
+            _read_env("DEEPSEEK_BASE_URL"),
+            _read_env("LOCAL_BASE_URL"),
+            _read_env("OPENAI_BASE_URL"),
+        )
+        return base_url or None
     if cap == "chat":
         base_url = _first_non_empty(
             _read_env("CHAT_BASE_URL"),
