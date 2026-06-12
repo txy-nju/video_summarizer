@@ -59,13 +59,38 @@ for dir_path in [TEMP_VIDEO_DIR, TEMP_AUDIO_DIR, TEMP_FRAMES_DIR]:
 DEFAULT_FRAME_INTERVAL = 2  # 默认每2秒抽一帧
 MAX_IMAGE_SIZE = 768        # 图片长边限制
 
-# 转文本模型配置
-TRANSCRIBER_MODEL = os.getenv("TRANSCRIBER_MODEL", "whisper-1")  # 语音转文本模型
+# ── 转文本模型配置 ────────────────────────────────────────────────────
+# TRANSCRIBER_MODEL: (已废弃，优先使用 TRANSCRIBE_MODEL_NAME) 语音转文本模型
+TRANSCRIBER_MODEL = os.getenv("TRANSCRIBER_MODEL", "whisper-1")
 
-# LLM provider 路由配置（按能力拆分）
+# TRANSCRIBE_MODEL_NAME: 转录模型名称。不同 provider 有不同默认值：
+#   openai → whisper-1
+#   aigc  → fileasrrecorder (vivo 长语音转写)
+#   qwen  → paraformer-v2 (DashScope Paraformer)
+#   groq  → whisper-large-v3-turbo
+#   local → whisper-1
+TRANSCRIBE_MODEL_NAME = os.getenv("TRANSCRIBE_MODEL_NAME", "").strip() or ""
+
+# ── LLM provider 路由配置（按能力拆分） ──────────────────────────────
 CHAT_PROVIDER = os.getenv("CHAT_PROVIDER", "openai").strip().lower() or "openai"
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", "openai").strip().lower() or "openai"
+
+# TRANSCRIBE_PROVIDER: 转录 provider。可选值：
+#   openai (默认) — OpenAI Whisper API
+#   aigc — vivo 长语音转写 REST API (/lasr/*)，5阶段流程，5MB分片，支持说话人分离
+#   qwen — DashScope Paraformer/SenseVoice
+#   groq — Groq whisper-large-v3-turbo (OpenAI 兼容)
+#   local — 本地 whisper.cpp / vLLM+whisper / faster-whisper server
 TRANSCRIBE_PROVIDER = os.getenv("TRANSCRIBE_PROVIDER", "openai").strip().lower() or "openai"
+
+# ── AIGC 长语音转写配置 ──────────────────────────────────────────────
+# AIGC_USER_ID: vivo lasr API 所需的 32 位用户标识（小写字母+数字）
+#   未设置时自动生成（基于 uuid4 hex）
+AIGC_USER_ID = os.getenv("AIGC_USER_ID", "").strip()
+# AIGC_PACKAGE: vivo lasr API 所需的 package 名
+AIGC_PACKAGE = os.getenv("AIGC_PACKAGE", "video_summarizer").strip()
+# AIGC_CLIENT_VERSION: vivo lasr API 所需的 client_version
+AIGC_CLIENT_VERSION = os.getenv("AIGC_CLIENT_VERSION", "1.0.0").strip()
 
 # Checkpoint 配置（5.2 第一阶段）
 CHECKPOINT_BACKEND = os.getenv("CHECKPOINT_BACKEND", "memory")

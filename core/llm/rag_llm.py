@@ -17,7 +17,8 @@ from core.llm.base import BaseModel
 
 logger = logging.getLogger(__name__)
 
-_NO_RESULTS_MSG = "未找到相关的视频内容，请确认视频已完成转录与向量化。"
+# _NO_RESULTS_MSG = "未找到相关的视频内容，请确认视频已完成转录与向量化。"
+_NO_RESULTS_MSG = "视频转录与向量化正在进行中，请稍后重试。"
 
 
 class RagStreamLLM:
@@ -41,8 +42,8 @@ class RagStreamLLM:
     def from_rag_settings(cls, settings: Any) -> "RagStreamLLM":
         """从 modular_rag settings 对象构造。
 
-        优先使用 settings.llm.{api_key, api_url, model} 字段直接创建
-        OpenAIModel；若字段缺失则回退到 ``from_env()``（读环境变量）。
+        优先使用 settings.llm.{api_key, api_url, model} 字段通过工厂创建
+        对应的 BaseModel；若字段缺失则回退到 ``from_env()``（读环境变量）。
         """
         llm_cfg = getattr(settings, "llm", None)
         api_key = getattr(llm_cfg, "api_key", None)
@@ -50,23 +51,28 @@ class RagStreamLLM:
         model_name = getattr(llm_cfg, "model", None)
 
         if api_key and model_name:
-            from core.llm.openai_model import OpenAIModel
+            from core.llm.factory import get_model_for_capability
 
-            return cls(
-                model=OpenAIModel(api_key=api_key, base_url=api_url or None),
-                model_name=model_name,
-            )
+            try:
+                model = get_model_for_capability("rag")
+            except Exception:
+                logger.debug("RagStreamLLM: 工厂创建失败，回退到 OpenAIModel")
+                from core.llm.openai_model import OpenAIModel
+
+                model = OpenAIModel(api_key=api_key, base_url=api_url or None)
+            return cls(model=model, model_name=model_name)
+
         logger.debug("RagStreamLLM: rag settings 中未找到 api_key/model，回退到环境变量")
         return cls.from_env()
 
     @classmethod
     def from_env(cls) -> "RagStreamLLM":
-        """从环境变量构造（使用 CHAT 能力配置）。"""
+        """从环境变量构造（使用 RAG 能力配置）。"""
         from core.llm.factory import get_model_for_capability, get_model_name_for_capability
 
         return cls(
-            model=get_model_for_capability("vision"),
-            model_name=get_model_name_for_capability("vision"),
+            model=get_model_for_capability("rag"),
+            model_name=get_model_name_for_capability("rag"),
         )
 
     # ── 公开流式接口 ──────────────────────────────────────────────────
@@ -159,33 +165,58 @@ class RagStreamLLM:
         max_tokens:
             最大生成 token 数，默认 1024。
         """
-        if messages is not None:
-            yield from self._model.stream_chat_completion(
-                model=self._model_name,
-                messages=messages,
-                max_tokens=max_tokens,
-            )
-            return
+        text_context = "\n\n".join(r.text for r in results if r.text)
 
-        # 便捷接口：自行构建多模态 messages
-        text_context = "\n\n".join(r.text for r in results if r.text) if results else ""
-        content: list[dict] = [
-            {
+        # 分离用户上传图片与知识库参考帧
+        user_frames = [f for f in frames if f.get("source") == "user_upload"]
+        kb_frames = [f for f in frames if f.get("source") != "user_upload"]
+
+        content: list[dict] = []
+        valid_frames = 0
+
+        # ── Prompt ──
+        if user_frames:
+            content.append({
+                "type": "text",
+                "text": (
+                    "用户上传了以下图片，请**仅针对用户上传的图片内容**直接回答问题。\n"
+                    f"知识库文本参考资料：\n{text_context}" if text_context else ""
+                ),
+            })
+        else:
+            content.append({
                 "type": "text",
                 "text": (
                     f"请基于以下视频转录内容和对应视频帧回答问题。\n\n"
                     f"转录内容：\n{text_context}"
                 ),
-            }
-        ]
+            })
 
-        valid_frames = 0
-        if frames:
-            for f in frames:
+        # ── 用户上传图片 ──
+        for f in user_frames:
+            try:
+                with open(f["frame_path"], "rb") as img_file:
+                    b64 = base64.b64encode(img_file.read()).decode()
+                name = f.get("time_range", "图片")
+                content.append({"type": "text", "text": f"【用户上传图片】{name}"})
+                mime = f.get("mime_type", "image/jpeg")
+                content.append(
+                    {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+                )
+                valid_frames += 1
+            except OSError as exc:
+                logger.debug("stream_multimodal: 跳过用户上传图片 %s（%s）", f.get("frame_path"), exc)
+
+        # ── 知识库参考帧：有用户图片时仅文本引用（不发送图像），无用户图片时正常发送 ──
+        for f in kb_frames:
+            label = f.get("time_range", "")
+            if user_frames:
+                if label:
+                    content.append({"type": "text", "text": f"[知识库文本参考] 视频帧时间戳: {label}"})
+            else:
                 try:
                     with open(f["frame_path"], "rb") as img_file:
                         b64 = base64.b64encode(img_file.read()).decode()
-                    label = f.get("time_range", "")
                     if label:
                         content.append({"type": "text", "text": f"视频帧（{label}）："})
                     mime = f.get("mime_type", "image/jpeg")
@@ -194,7 +225,7 @@ class RagStreamLLM:
                     )
                     valid_frames += 1
                 except OSError as exc:
-                    logger.debug("stream_multimodal: 跳过帧 %s（%s）", f.get("frame_path"), exc)
+                    logger.debug("stream_multimodal: 跳过知识库帧 %s（%s）", f.get("frame_path"), exc)
 
         if valid_frames == 0:
             logger.warning("stream_multimodal: 所有帧读取失败，降级为纯文本模式")

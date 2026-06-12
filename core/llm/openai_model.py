@@ -6,10 +6,15 @@ from typing import Any, Dict, Iterator, List
 from openai import OpenAI
 
 from core.llm.base import BaseModel
+from core.llm.transcription_result import TranscriptionResult
 
 
 class OpenAIModel(BaseModel):
     """OpenAI-compatible provider implementation."""
+
+    supports_transcribe = True
+    max_audio_upload_bytes = 25 * 1024 * 1024  # Whisper API 硬限制 25MB
+    audio_chunk_size_bytes = None  # 单次上传，不分片
 
     def __init__(self, api_key: str, base_url: str | None = None):
         if not api_key:
@@ -67,7 +72,8 @@ class OpenAIModel(BaseModel):
         model: str,
         audio_path: Path,
         response_format: str = "verbose_json",
-    ) -> str:
+    ) -> TranscriptionResult:
+        """调用 OpenAI Whisper API 并返回标准化 TranscriptionResult。"""
         with open(audio_path, "rb") as audio_file:
             transcript = self._client.audio.transcriptions.create(
                 model=model,
@@ -75,4 +81,6 @@ class OpenAIModel(BaseModel):
                 response_format=response_format,
                 timeout=120.0,
             )
-        return transcript.model_dump_json(indent=2)
+        raw_json = transcript.model_dump_json(indent=2)
+        import json
+        return TranscriptionResult.from_whisper_verbose_json(json.loads(raw_json))

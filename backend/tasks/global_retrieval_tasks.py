@@ -21,6 +21,7 @@ def _kb_bm25_dir(kbid: str) -> str:
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_rebuild_vector_collection",
     acks_late=True,
     max_retries=2,
@@ -131,9 +132,10 @@ def async_rebuild_vector_collection(self, kbid: str) -> dict:
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_add_video_to_vector_collection",
     acks_late=True,
-    max_retries=2,
+    max_retries=5,
     default_retry_delay=30,
     task_soft_time_limit=600,
     task_time_limit=900,
@@ -167,11 +169,20 @@ def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict
 
         transcript = getattr(video, "full_transcript", None) or ""
         if not transcript.strip():
-            logger.info(
-                "async_add_video_to_vector_collection: kbid=%s video_id=%s empty transcript, skip",
-                kbid, video_id,
+            # 转录未完成时，延迟重试而非永久跳过（兜底 post-transcription hook）
+            if self.request.retries < self.max_retries:
+                logger.info(
+                    "async_add_video_to_vector_collection: kbid=%s video_id=%s empty transcript, "
+                    "retry %d/%d in 60s",
+                    kbid, video_id, self.request.retries + 1, self.max_retries,
+                )
+                raise self.retry(countdown=60)
+            logger.warning(
+                "async_add_video_to_vector_collection: kbid=%s video_id=%s empty transcript after "
+                "%d retries, giving up",
+                kbid, video_id, self.max_retries,
             )
-            return {"kbid": kbid, "video_id": video_id, "status": "SKIPPED", "reason": "empty transcript"}
+            return {"kbid": kbid, "video_id": video_id, "status": "SKIPPED", "reason": "empty transcript after retries"}
 
         if _is_video_indexed_in_collection(collection_name, video_id, kbid=kbid):
             logger.info(
@@ -232,6 +243,7 @@ def async_add_video_to_vector_collection(self, kbid: str, video_id: str) -> dict
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_remove_video_from_vector_collection",
     acks_late=True,
     max_retries=2,
@@ -287,6 +299,7 @@ def async_remove_video_from_vector_collection(self, kbid: str, video_id: str) ->
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.global_retrieval_tasks.async_purge_vector_collection",
     acks_late=True,
     max_retries=2,

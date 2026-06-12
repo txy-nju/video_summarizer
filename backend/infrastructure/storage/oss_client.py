@@ -81,13 +81,17 @@ class ObjectStorageClient:
         return deleted
 
     def get_presigned_url(self, *, object_key: str, expires_in_seconds: int | None = None) -> str:
-        """Return a local development URL-like path for consumers.
+        """Return an HTTP URL for the given object key.
 
-        In local mode this is a file path with an expiry hint query parameter.
+        In local mode, delegates to the ``/api/v1/files/stream`` endpoint so that
+        mobile clients (Android emulator, physical devices) can access the file
+        over HTTP instead of the ``file://`` protocol.
         """
-        ttl = expires_in_seconds or self._default_ttl_seconds
-        path = (self._local_root / self._normalize_key(object_key)).resolve().as_posix()
-        return f"file://{path}?ttl={ttl}"
+        from backend.config import get_settings
+        settings = get_settings()
+        base = settings.public_api_base_url.rstrip("/")
+        normalized = self._normalize_key(object_key)
+        return f"{base}/api/v1/files/stream?object_key={normalized}"
 
     @staticmethod
     def _normalize_key(object_key: str) -> str:

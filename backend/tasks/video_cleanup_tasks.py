@@ -124,6 +124,7 @@ def _create_video_resource_service():
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.video_cleanup_tasks.async_cascade_delete_video",
     max_retries=3,
     default_retry_delay=60,

@@ -453,6 +453,7 @@ class WorkflowOrchestrationService:
         question: str,
         window_seconds: int = 20,
         trace_id: str = "",
+        attachments: list[dict] | None = None,
     ) -> str:
         """Execute time travel Q&A at specific timestamp within video.
 
@@ -502,6 +503,7 @@ class WorkflowOrchestrationService:
                     window_seconds=window_seconds,
                     status_callback=callback,
                     trace_id=trace_id,
+                    attachments=attachments,
                 ),
             )
 

@@ -34,7 +34,7 @@ Z/
 start_dev.bat
 start_prod.bat
 
-# Code intelligence & spec tools
+# OpenSpec & code intelligence
 .codegraph/
 openspec/
 

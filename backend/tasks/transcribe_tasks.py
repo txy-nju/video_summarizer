@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 
 from backend.db.session import SessionLocal
 from backend.infrastructure.storage.oss_client import get_object_storage_client
@@ -68,9 +67,9 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
         segments = None
         duration = None
         if audio_path:
-            api_key = os.getenv("OPENAI_API_KEY", "")
-            base_url = os.getenv("OPENAI_BASE_URL") or None
-            transcriber = AudioTranscriber(api_key=api_key, base_url=base_url)
+            # API key / base_url 由 AudioTranscriber 内部通过工厂路由解析，
+            # 按 TRANSCRIBE_PROVIDER 环境变量选择 provider
+            transcriber = AudioTranscriber()
             raw = transcriber.transcribe(audio_path)
             try:
                 parsed = json.loads(raw)
@@ -98,6 +97,39 @@ def async_transcribe_video(self, video_id: str, trace_id: str = "") -> dict:
             kwargs={"trace_id": trace_id},
             queue="low_priority",
         )
+
+        # ── 转录完成后，触发该视频所属所有知识库的向量化 ──
+        # 解决竞态问题：用户在视频转录完成前将其加入 KB 时，
+        # KB 向量化任务会因 transcript 为空而 SKIPPED。
+        # 此处作为兜底，在转录完成后重新触发。
+        try:
+            from backend.db.session import SessionLocal as _SessionLocal
+            from backend.repositories.kb_repository import KnowledgeBaseRepository as _KBRepo
+
+            _db = _SessionLocal()
+            try:
+                _kbids = _KBRepo(db_session=_db).get_linked_kbid_by_video_system(video_id)
+            finally:
+                _db.close()
+
+            if _kbids:
+                from backend.tasks.global_retrieval_tasks import async_add_video_to_vector_collection
+
+                for _kbid in _kbids:
+                    async_add_video_to_vector_collection.apply_async(
+                        args=[_kbid, video_id],
+                        queue="low_priority",
+                    )
+                logger.info(
+                    "async_transcribe_video: dispatched KB vectorization for video_id=%s, kbids=%s",
+                    video_id, _kbids,
+                )
+        except Exception:
+            logger.exception(
+                "async_transcribe_video: failed to dispatch KB vectorization for video_id=%s",
+                video_id,
+            )
+
         logger.info(
             "async_transcribe_video completed: video_id=%s, trace_id=%s, transcript_length=%d",
             video_id,

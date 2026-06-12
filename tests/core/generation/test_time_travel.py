@@ -81,6 +81,74 @@ class TestTimeTravelUtils(unittest.TestCase):
         window = extract_transcript_window(transcript, target_seconds=10, window_seconds=5)
         self.assertIn("plain transcript", window)
 
+    # ── 12.5: AIGC 来源 segments 兼容性测试 ─────────────────────────────
+
+    def test_extract_transcript_window_aigc_format_compatible(self):
+        """AIGC 转录结果（language=""、segments 由 bg/ed 毫秒转 start/end 秒）
+        应被 extract_transcript_window 正确解析。"""
+        # 模拟 TranscriptionResult.to_json() 输出的 AIGC 格式结果
+        transcript = """
+        {
+          "text": "第一段内容。 第二段内容。 第三段内容。",
+          "language": "",
+          "duration": 30.0,
+          "segments": [
+            {"id": 0, "start": 0.0, "end": 5.0, "text": "第一段内容。"},
+            {"id": 1, "start": 12.0, "end": 18.0, "text": "第二段内容。"},
+            {"id": 2, "start": 25.0, "end": 30.0, "text": "第三段内容。"}
+          ]
+        }
+        """
+        # 时间窗 [3, 8] 只命中第一段的尾部，不应包含第二段
+        window = extract_transcript_window(transcript, target_seconds=3, window_seconds=5)
+        self.assertIn("第一段内容", window)
+        self.assertNotIn("第二段内容", window)
+        self.assertNotIn("第三段内容", window)
+
+    def test_extract_transcript_window_aigc_empty_language(self):
+        """language 为空字符串不应导致解析失败。"""
+        transcript = """
+        {
+          "text": "content",
+          "language": "",
+          "duration": 10.0,
+          "segments": [
+            {"id": 0, "start": 0.0, "end": 10.0, "text": "content"}
+          ]
+        }
+        """
+        window = extract_transcript_window(transcript, target_seconds=5, window_seconds=10)
+        self.assertIn("content", window)
+
+    def test_extract_transcript_window_empty_segments_with_text_fallback(self):
+        """segments 为空但有 text 字段时应回退到 text。"""
+        transcript = """
+        {
+          "text": "fallback text here",
+          "language": "en",
+          "duration": 5.0,
+          "segments": []
+        }
+        """
+        window = extract_transcript_window(transcript, target_seconds=0, window_seconds=10)
+        self.assertIn("fallback text here", window)
+
+    def test_extract_transcript_window_overlap_boundary(self):
+        """segment 与时间窗有重叠时（非完全包含），也应被纳入。"""
+        transcript = """
+        {
+          "text": "overlap test",
+          "language": "en",
+          "duration": 20.0,
+          "segments": [
+            {"id": 0, "start": 8.0, "end": 12.0, "text": "overlapping segment"}
+          ]
+        }
+        """
+        # 时间窗 [10, 15]，segment [8, 12] 有重叠
+        window = extract_transcript_window(transcript, target_seconds=10, window_seconds=5)
+        self.assertIn("overlapping segment", window)
+
 
 if __name__ == "__main__":
     unittest.main()

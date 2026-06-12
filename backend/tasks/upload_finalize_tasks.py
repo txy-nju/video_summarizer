@@ -39,6 +39,7 @@ def _create_upload_service():
 
 @celery_app.task(
     bind=True,
+    base=BaseTask,
     name="backend.tasks.upload_finalize_tasks.async_finalize_upload",
     max_retries=2,
     default_retry_delay=30,

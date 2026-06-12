@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import logging
 from typing import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -30,6 +31,7 @@ from backend.services.video_qa_service import VideoQAService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
 from core.agent.events import AgentProgressEvent
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["video-qa"])
 _ALLOWED_FIELDS = {

@@ -394,7 +394,10 @@ def test_transcription() -> bool:
             data = json.loads(response)
             text = data.get("text", response)[:200]
         except Exception:
-            text = response[:200]
+            if hasattr(response, "text"):
+                text = response.text[:200]
+            else:
+                text = str(response)[:200]
         print(f"  转录结果: {text if text else '(空/静音)'}")
         _print_ok("Audio Transcriptions", f"model={model_name}")
         _record("Transcription", True, text[:120])
