@@ -175,8 +175,11 @@ class QAAgent(BaseAgent):
                 len(messages),
             )
 
+
+
+
             # Progress: thinking
-            yield AgentProgressEvent("thinking", "正在分析你的问题")
+            yield AgentProgressEvent("thinking", "正在分析你的问题...")
 
             # Call LLM (streaming)
             full_response = ""
