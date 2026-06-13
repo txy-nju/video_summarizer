@@ -146,6 +146,7 @@ class VideoQAAgent(BaseAgent):
                 owner_id=owner_id,
                 timestamp=timestamp,
                 window_seconds=window_seconds or 20,
+                attachments=attachments,
             )
         else:
             yield from self._answer_rag(
@@ -208,37 +209,70 @@ class VideoQAAgent(BaseAgent):
             return
 
         if all_frames:
-            # Multimodal message
-            content: list[dict[str, Any]] = [
-                {
+            # 分离用户上传图片与知识库参考帧
+            user_frames = [f for f in all_frames if f.get("source") == "user_upload"]
+            kb_frames = [f for f in all_frames if f.get("source") != "user_upload"]
+
+            content: list[dict[str, Any]] = []
+
+            # ── Prompt ──
+            if user_frames:
+                content.append({
                     "type": "text",
                     "text": (
-                        "请基于以下视频转录内容和对应视频帧回答问题。\n\n"
+                        "用户上传了以下图片，请**仅针对用户上传的图片内容**直接回答问题。\n"
+                        f"知识库文本参考资料：\n{text_context}" if text_context else ""
+                    ),
+                })
+            else:
+                content.append({
+                    "type": "text",
+                    "text": (
+                        f"请基于以下视频转录内容和对应视频帧回答问题。\n\n"
                         f"转录内容：\n{text_context}"
                     ),
-                }
-            ]
-            for f in all_frames:
+                })
+
+            # ── 用户上传图片 ──
+            for f in user_frames:
                 try:
                     with open(f["frame_path"], "rb") as img_file:
                         b64 = base64.b64encode(img_file.read()).decode()
-                    label = f.get("time_range", "")
+                    name = f.get("time_range", "图片")
+                    content.append({"type": "text", "text": f"【用户上传图片】{name}"})
                     mime = f.get("mime_type", "image/jpeg")
-                    if label:
-                        content.append(
-                            {"type": "text", "text": f"视频帧（{label}）："}
-                        )
-                    content.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{mime};base64,{b64}"},
-                        }
-                    )
+                    content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    })
                 except OSError:
                     logger.debug(
-                        "_answer_rag: skipping unreadable frame %s",
+                        "_answer_rag: skipping user uploaded image %s",
                         f.get("frame_path"),
                     )
+
+            # ── 知识库参考帧：有用户图片时仅文本引用（不发送图像），无用户图片时正常发送 ──
+            for f in kb_frames:
+                label = f.get("time_range", "")
+                if user_frames:
+                    if label:
+                        content.append({"type": "text", "text": f"[知识库文本参考] 视频帧时间戳: {label}"})
+                else:
+                    try:
+                        with open(f["frame_path"], "rb") as img_file:
+                            b64 = base64.b64encode(img_file.read()).decode()
+                        mime = f.get("mime_type", "image/jpeg")
+                        if label:
+                            content.append({"type": "text", "text": f"视频帧（{label}）："})
+                        content.append({
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{b64}"},
+                        })
+                    except OSError:
+                        logger.debug(
+                            "_answer_rag: skipping KB frame %s",
+                            f.get("frame_path"),
+                        )
 
             content.append({"type": "text", "text": f"\n问题：{question}"})
             messages.append({"role": "user", "content": content})
@@ -276,6 +310,7 @@ class VideoQAAgent(BaseAgent):
         owner_id: str,
         timestamp: str,
         window_seconds: int,
+        attachments: list[dict] | None = None,
     ) -> Iterator[str]:
         """Time-travel QA: checkpoint evidence extraction → LLM."""
         from config.settings import CHECKPOINT_BACKEND, CHECKPOINT_DB_URL
@@ -378,32 +413,63 @@ class VideoQAAgent(BaseAgent):
             f"[历史总结草稿摘要]\n{draft_summary[:1500]}"
         )
 
+        # 下载用户上传的图片附件
+        extra_frames = self._rag_agent_service._download_attachment_frames(
+            attachments or []
+        )
+
         user_content: list[dict[str, Any]] = [
             {"type": "text", "text": evidence_text + f"\n\n[追问问题]\n{question}"}
         ]
 
-        # Encode keyframe images
-        has_images = False
-        for idx, frame in enumerate(representative_frames, 1):
-            if isinstance(frame, dict):
-                frame_image_b64 = resolve_frame_image_base64(
-                    frame, keyframes_base_path
-                )
-                if frame_image_b64:
-                    has_images = True
+        # ── 用户上传图片：物理隔离，LLM 只接收用户图片，视频帧仅文本引用 ──
+        if extra_frames:
+            for f in extra_frames:
+                try:
+                    with open(f["frame_path"], "rb") as img_file:
+                        b64 = base64.b64encode(img_file.read()).decode()
+                    name = f.get("time_range", "图片")
+                    user_content.append({"type": "text", "text": f"【用户上传图片】{name}"})
+                    mime = f.get("mime_type", "image/jpeg")
+                    user_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    })
+                except OSError:
+                    logger.debug(
+                        "_answer_timestamp: skipping user uploaded image %s",
+                        f.get("frame_path"),
+                    )
+
+            # 视频关键帧仅文本引用（不发送图像）
+            for idx, frame in enumerate(representative_frames, 1):
+                if isinstance(frame, dict):
                     frame_time = frame.get("time", "未知")
-                    user_content.append(
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{frame_image_b64}",
-                                "detail": "low",
-                            },
-                        }
+                    user_content.append({
+                        "type": "text",
+                        "text": f"[知识库文本参考] 视频帧时间戳: {frame_time}",
+                    })
+        else:
+            # 无用户上传图片：正常编码视频关键帧为图像
+            for idx, frame in enumerate(representative_frames, 1):
+                if isinstance(frame, dict):
+                    frame_image_b64 = resolve_frame_image_base64(
+                        frame, keyframes_base_path
                     )
-                    user_content[0]["text"] += (
-                        f"\n[视觉证据帧 {idx}] 时间戳: {frame_time}"
-                    )
+                    if frame_image_b64:
+                        frame_time = frame.get("time", "未知")
+                        user_content.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{frame_image_b64}",
+                                    "detail": "low",
+                                },
+                            }
+                        )
+                        user_content[0]["text"] += (
+                            f"\n[视觉证据帧 {idx}] 时间戳: {frame_time}"
+                        )
 
         messages.append({"role": "user", "content": user_content})
 
