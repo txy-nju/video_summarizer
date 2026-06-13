@@ -56,6 +56,7 @@ class GlobalQAService:
             chat_id=chat_id,
             kbid=kbid,
             owner_id=owner_id,
+            attachments=attachments_data,
         )
         cited_sources = getattr(self._qa_agent, "last_cited_sources", [])
 
@@ -109,6 +110,7 @@ class GlobalQAService:
             chat_id=chat_id,
             kbid=kbid,
             owner_id=owner_id,
+            attachments=attachments_data,
         )
         accumulated: list[str] = []
 

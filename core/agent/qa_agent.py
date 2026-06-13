@@ -12,6 +12,7 @@ Max iterations prevent infinite loops.
 
 from __future__ import annotations
 
+import base64
 import logging
 from typing import Any, Iterator
 
@@ -26,7 +27,7 @@ from core.tool.registry import ToolRegistry
 logger = logging.getLogger(__name__)
 
 _DEFAULT_SYSTEM_PROMPT = """\
-你是视频知识库问答助手，请基于提供的视频转录内容，结合对话历史，准确回答用户的问题。
+你是视频知识库问答助手，请基于提供的视频转录内容、用户上传的图片以及对话历史，准确回答用户的问题。
 
 {react_instructions}
 
@@ -35,6 +36,7 @@ _DEFAULT_SYSTEM_PROMPT = """\
 - 检索时使用与问题最相关的关键词
 - 回答请使用中文
 - 引用来源时请注明视频名称和时间段
+- 如果用户上传了图片，请仔细分析图片内容并结合知识库信息回答
 """
 
 _REACT_INSTRUCTIONS = """\
@@ -101,22 +103,29 @@ class QAAgent(BaseAgent):
     # ── BaseAgent interface ───────────────────────────────────────────
 
     def answer(
-        self, *, question: str, chat_id: str, kbid: str, owner_id: str
+        self, *, question: str, chat_id: str, kbid: str, owner_id: str,
+        attachments: list[dict] | None = None,
     ) -> str:
         return "".join(
             t for t in self.answer_stream(
-                question=question, chat_id=chat_id, kbid=kbid, owner_id=owner_id
+                question=question, chat_id=chat_id, kbid=kbid, owner_id=owner_id,
+                attachments=attachments,
             )
             if isinstance(t, str)
         )
 
     def answer_stream(
-        self, *, question: str, chat_id: str, kbid: str, owner_id: str
+        self, *, question: str, chat_id: str, kbid: str, owner_id: str,
+        attachments: list[dict] | None = None,
     ) -> Iterator[str]:
         self.last_cited_sources = []  # Reset for this call
         context = ExecutionContext(owner_id=owner_id, kbid=kbid)
         system_prompt = self._build_system_prompt()
         rag_context = ""
+
+        # Download user-uploaded attachment frames
+        from backend.services.rag_agent_service import RagAgentService
+        extra_frames = RagAgentService._download_attachment_frames(attachments or [])
 
         # Build initial messages with history
         messages = self._memory.build_messages(
@@ -127,6 +136,37 @@ class QAAgent(BaseAgent):
             rag_context=rag_context,
         )
 
+        # If user uploaded images, convert the last user message to multimodal
+        if extra_frames:
+            # Find and replace the last user message
+            for i in range(len(messages) - 1, -1, -1):
+                if messages[i].get("role") == "user":
+                    text_content = messages[i]["content"]
+                    multimodal_content: list[dict[str, Any]] = [
+                        {"type": "text", "text": (
+                            "用户上传了以下图片，请**结合用户上传的图片内容**回答问题。\n"
+                        )},
+                    ]
+                    for f in extra_frames:
+                        try:
+                            with open(f["frame_path"], "rb") as img_file:
+                                b64 = base64.b64encode(img_file.read()).decode()
+                            name = f.get("time_range", "图片")
+                            multimodal_content.append({"type": "text", "text": f"【用户上传图片】{name}"})
+                            mime = f.get("mime_type", "image/jpeg")
+                            multimodal_content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{b64}"},
+                            })
+                        except OSError:
+                            logger.debug(
+                                "QAAgent: skipping user uploaded image %s",
+                                f.get("frame_path"),
+                            )
+                    multimodal_content.append({"type": "text", "text": text_content})
+                    messages[i]["content"] = multimodal_content
+                    break
+
         for iteration in range(1, self._max_iterations + 1):
             logger.debug(
                 "QAAgent: iteration %d/%d, messages_count=%d",
@@ -136,7 +176,7 @@ class QAAgent(BaseAgent):
             )
 
             # Progress: thinking
-            yield AgentProgressEvent("thinking", "正在分析你的问题...")
+            yield AgentProgressEvent("thinking", "正在分析你的问题")
 
             # Call LLM (streaming)
             full_response = ""
