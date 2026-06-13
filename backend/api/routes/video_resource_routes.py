@@ -46,6 +46,17 @@ async def create_video_resource(
     current_user: UserView = Depends(get_current_user),
     video_service: VideoResourceService = Depends(get_video_resource_service),
 ):
+    """Create a VideoResource record directly.
+
+    **Not part of the normal upload flow.**  The upload flow uses
+    ``POST /api/v1/uploads`` → ``PATCH ...chunks...`` → the Celery
+    ``async_finalize_upload`` task, which is the sole VideoResource
+    creator for uploaded files.
+
+    This endpoint is kept for admin / testing / programmatic use cases
+    where a VideoResource row is needed without going through the TUS
+    upload pipeline.
+    """
     video = video_service.create_video_resource(owner_id=current_user.user_id, payload=payload)
     return VideoResourceResponse(data=video, meta=_build_meta(request))
 

@@ -120,6 +120,10 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
                 logger.error("async_finalize_upload: failed to create video_resource for upload_id=%s", upload_id)
                 return {"upload_id": upload_id, "status": "FAILED", "error": "Failed to create video_resource"}
 
+            # Persist video_id to Redis session immediately so Celery retries
+            # can discover the existing row instead of creating a duplicate.
+            _persist_video_id_to_session(upload_id, video_id)
+
             # Step 1.5: Write file_hash on the record
             _set_video_resource_file_hash(video_id, file_hash)
 
@@ -164,6 +168,25 @@ def async_finalize_upload(self, upload_id: str, trace_id: str = "") -> dict:
                 upload_id, trace_id,
             )
         raise self.retry(exc=exc, countdown=self.compute_retry_countdown())
+
+
+def _persist_video_id_to_session(upload_id: str, video_id: str) -> None:
+    """Write video_id into the Redis session immediately after creation.
+
+    Called RIGHT after _create_video_resource() succeeds so that Celery
+    retries can discover the existing VideoResource row via
+    _get_session_video_id() rather than creating duplicates.
+
+    Does NOT change the session state — the session stays in its current
+    state so the retry logic resumes at the correct step.
+    """
+    from backend.repositories.upload_repository import UploadRepository
+    import redis as redis_lib
+    import os
+
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/2")
+    redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
+    UploadRepository(redis_client).set_video_id(upload_id, video_id)
 
 
 def _build_video_object_key(*, owner_id: str, video_id: str, file_name: str, merged_path: str) -> str:
@@ -344,6 +367,9 @@ def _cleanup_upload_session(
     repo.finalize_session(upload_id, video_id=video_id, final_state=final_state)
 
 
+_TERMINAL_STATES: frozenset[str] = frozenset({"done", "dedup_reused", "rejected", "failed", "cancelled"})
+
+
 def _get_session_video_id(upload_id: str) -> str | None:
     """Read the video_id already persisted on the Redis upload session.
 
@@ -351,6 +377,11 @@ def _get_session_video_id(upload_id: str) -> str | None:
     async_finalize_upload created a VideoResource and wrote its id back
     into the session, a retry can skip record creation and resume from
     the oss_key upload step.
+
+    Returns None when the session is in a terminal state — the task
+    short-circuits before reaching this point, but if a spurious
+    re-delivery does, returning None prevents re-processing a finalized
+    video.
     """
     from backend.repositories.upload_repository import UploadRepository
     import redis as redis_lib
@@ -360,6 +391,8 @@ def _get_session_video_id(upload_id: str) -> str | None:
     redis_client = redis_lib.Redis.from_url(redis_url, decode_responses=True)
     state = UploadRepository(redis_client).get_session(upload_id)
     if state is None:
+        return None
+    if state.video_id and state.state in _TERMINAL_STATES:
         return None
     return state.video_id or None
 

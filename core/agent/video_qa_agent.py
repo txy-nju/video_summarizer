@@ -2,6 +2,7 @@
 
 Two modes:
 - ``"rag"``: HybridSearch + Reranker retrieval, then multimodal or text-only LLM.
+  Supports optional two-phase decision (answer vs search) before retrieval.
 - ``"timestamp"``: Checkpoint-based time-travel, extracts evidence window
   around a target timestamp and calls LLM with the evidence.
 
@@ -37,6 +38,33 @@ _DEFAULT_TIMESTAMP_SYSTEM_PROMPT = (
     "请用中文回答。"
 )
 
+_DEFAULT_DECISION_PROMPT = """\
+你是一名视频内容问答助手。根据对话历史和用户问题，判断是否需要从视频中检索信息。
+
+输出格式（二选一，不要输出其他任何内容）：
+- DECISION: answer  （如果对话历史已包含足够信息可直接回答）
+- DECISION: search  （如果需要检索视频转录内容获取新信息）
+
+注意：
+- 追问类问题（如"刚才说的那个"、"你提到的"）通常不需要检索
+- 需要查找视频中的具体内容时才需要检索
+- 不确定时请选择 search
+"""
+
+_DEFAULT_ANSWER_PROMPT = """\
+你是一名视频内容问答助手。请根据以下信息，结合对话历史，准确回答用户的问题。
+
+{retrieval_context}
+
+重要规则：
+- 请直接输出纯文本答案，不要使用任何标签格式（包括但不限于 DECISION、THOUGHT、ACTION、FINAL_ANSWER 等）
+- 如果提供了检索结果，请基于检索结果回答
+- 如果检索结果不足以回答问题，请明确说明
+- 请用中文回答
+"""
+
+_DECISION_MAX_TOKENS = 50
+
 
 class VideoQAAgent(BaseAgent):
     """Agent that answers questions about a specific video.
@@ -55,6 +83,13 @@ class VideoQAAgent(BaseAgent):
     system_prompt_template:
         Optional custom system prompt template. Supports ``{mode}`` placeholder.
         When omitted, defaults are used per mode.
+    decision_prompt_template:
+        Optional custom Phase 1 decision prompt for RAG mode.
+    answer_prompt_template:
+        Optional custom Phase 2 answer prompt for RAG mode.
+    enable_decision_phase:
+        Whether to run the decision phase in RAG mode before retrieval.
+        Default ``True`` — set to ``False`` to always search (legacy behavior).
     """
 
     def __init__(
@@ -65,12 +100,18 @@ class VideoQAAgent(BaseAgent):
         rag_stream_llm: Any,
         workflow_service: Any | None = None,
         system_prompt_template: str | None = None,
+        decision_prompt_template: str | None = None,
+        answer_prompt_template: str | None = None,
+        enable_decision_phase: bool = True,
     ) -> None:
         self._memory = memory
         self._rag_agent_service = rag_agent_service
         self._llm = rag_stream_llm
         self._workflow_service = workflow_service
         self._system_prompt_template = system_prompt_template
+        self._decision_prompt_template = decision_prompt_template or _DEFAULT_DECISION_PROMPT
+        self._answer_prompt_template = answer_prompt_template or _DEFAULT_ANSWER_PROMPT
+        self._enable_decision_phase = enable_decision_phase
         # Mutable: cited sources collected during the most recent answer_stream call
         self.last_cited_sources: list[dict] = []
 
@@ -165,11 +206,72 @@ class VideoQAAgent(BaseAgent):
         owner_id: str,
         attachments: list[dict] | None,
     ) -> Iterator[str]:
-        """RAG-based QA: HybridSearch + Reranker → LLM (multimodal or text)."""
-        system_prompt = self._build_system_prompt(mode="rag")
+        """RAG-based QA with optional two-phase decision.
 
-        # 1. Build messages with conversation history (without current question —
-        #    we'll append a rich user message after retrieval).
+        Phase 1 (optional): Fast decision — answer from history or search video.
+        Phase 2: RAG retrieval (if needed) → streaming LLM answer.
+        """
+        self.last_cited_sources = []
+
+        # ── Phase 1: Decision (optional) ─────────────────────────────
+        if self._enable_decision_phase:
+            yield AgentProgressEvent("deciding", "正在分析是否需要检索视频内容...")
+
+            decision_messages = self._memory.build_messages(
+                chat_id=chat_id,
+                owner_id=owner_id,
+                system_prompt=self._decision_prompt_template,
+                current_question=question,
+                rag_context="",
+            )
+
+            try:
+                decision_raw = self._llm._model.chat_completion(
+                    model=self._llm._model_name,
+                    messages=decision_messages,
+                    temperature=0,
+                    max_tokens=_DECISION_MAX_TOKENS,
+                )
+            except Exception as exc:
+                logger.exception("VideoQAAgent: decision LLM call failed")
+                yield f"\n（回答生成失败: {exc}）"
+                return
+
+            decision = _parse_decision(decision_raw.strip() if decision_raw else "")
+            logger.info("VideoQAAgent: decision=%s (raw=%r)", decision, decision_raw[:80])
+
+            if decision == "answer":
+                # Skip RAG retrieval — answer from conversation history
+                yield AgentProgressEvent("generating", "正在基于对话历史生成回答...")
+                answer_prompt = self._build_answer_prompt(retrieval_context="（基于已有对话知识回答）")
+                answer_messages = self._memory.build_messages(
+                    chat_id=chat_id,
+                    owner_id=owner_id,
+                    system_prompt=answer_prompt,
+                    current_question=question,
+                    rag_context="",
+                )
+                # Guard against Redis cache returning Phase 1's decision prompt
+                if answer_messages and answer_messages[0]["role"] == "system":
+                    answer_messages[0]["content"] = answer_prompt
+                try:
+                    yield from self._llm._model.stream_chat_completion(
+                        model=self._llm._model_name,
+                        messages=answer_messages,
+                    )
+                except Exception as exc:
+                    logger.exception("VideoQAAgent: answer LLM call failed")
+                    yield f"\n（回答生成失败: {exc}）"
+                return
+
+            # "search" or unknown → fall through to retrieval below
+            # (unknown is treated as "search" for video QA — safer to retrieve)
+
+        # ── RAG Retrieval ───────────────────────────────────────────
+        yield AgentProgressEvent("searching", "正在检索视频相关内容...")
+
+        # Build messages with conversation history
+        system_prompt = self._build_system_prompt(mode="rag")
         messages = self._memory.build_messages(
             chat_id=chat_id,
             owner_id=owner_id,
@@ -177,9 +279,10 @@ class VideoQAAgent(BaseAgent):
             current_question="",
             rag_context="",
         )
+        # Guard against Redis cache returning Phase 1's decision prompt
+        if messages and messages[0]["role"] == "system":
+            messages[0]["content"] = system_prompt
 
-        # 2. Resolve video collection and run RAG retrieval
-        yield AgentProgressEvent("searching", "正在检索视频相关内容...")
         collection = self._rag_agent_service._resolve_video_collection(chat_id)
         rag_context = self._rag_agent_service._build_retrieval_context(
             question=question,
@@ -190,13 +293,13 @@ class VideoQAAgent(BaseAgent):
 
         self.last_cited_sources = rag_context.cited_sources
 
-        # 3. Merge system-retrieved frames with user-uploaded attachments
+        # Merge system-retrieved frames with user-uploaded attachments
         extra_frames = self._rag_agent_service._download_attachment_frames(
             attachments or []
         )
         all_frames = list(rag_context.frames) + extra_frames
 
-        # 4. Build current-turn user message
+        # Build current-turn user message
         text_context = (
             "\n\n".join(r.text for r in rag_context.results)
             if rag_context.results
@@ -255,7 +358,7 @@ class VideoQAAgent(BaseAgent):
                 }
             )
 
-        # 5. Stream LLM response
+        # ── Phase 2: Stream answer (token-by-token) ─────────────────
         yield AgentProgressEvent("generating", "正在生成回答...")
         try:
             yield from self._llm._model.stream_chat_completion(
@@ -434,3 +537,35 @@ class VideoQAAgent(BaseAgent):
         if mode == "timestamp":
             return _DEFAULT_TIMESTAMP_SYSTEM_PROMPT
         return _DEFAULT_RAG_SYSTEM_PROMPT
+
+    def _build_decision_prompt(self) -> str:
+        """Build the Phase 1 decision prompt for RAG mode."""
+        return self._decision_prompt_template
+
+    def _build_answer_prompt(self, *, retrieval_context: str) -> str:
+        """Build the Phase 2 answer prompt with retrieval context."""
+        return self._answer_prompt_template.format(
+            retrieval_context=retrieval_context,
+        )
+
+
+def _parse_decision(raw: str) -> str | None:
+    """Parse a Phase 1 decision response.
+
+    Returns ``"answer"``, ``"search"``, or ``None`` if unparseable.
+    """
+    if not raw:
+        return None
+    lowered = raw.lower()
+    if "decision:" in lowered:
+        after = lowered.split("decision:", 1)[1].strip()
+        if after.startswith("answer"):
+            return "answer"
+        if after.startswith("search"):
+            return "search"
+    # Heuristic fallback
+    if "answer" in lowered and "search" not in lowered:
+        return "answer"
+    if "search" in lowered:
+        return "search"
+    return None

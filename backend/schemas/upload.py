@@ -30,20 +30,13 @@ class InitUploadRequest(BaseModel):
     约束：
     - file_name：原始文件名，用于展示与默认 OSS 键生成。
     - total_size：文件总字节数（客户端按实际文件大小上报）。
+
+    VideoResource 不再在此阶段预注册。上传完成后从
+    GET /api/v1/uploads/{upload_id} 的 video_id 字段获取最终结果。
     """
 
     file_name: str = Field(..., min_length=1, max_length=512)
     total_size: int = Field(..., gt=0, le=10 * 1024 * 1024 * 1024)  # 最大 10GB
-    video_id: str | None = Field(
-        default=None,
-        min_length=1,
-        max_length=36,
-        description=(
-            "Deprecated: 不再作为前端导航依据。"
-            "上传完成后请从 GET /api/v1/uploads/{upload_id} 的 video_id 字段获取最终结果。"
-            "此字段仅用于后端内部兼容，将在未来版本移除。"
-        ),
-    )  # 可选：关联的预注册 VideoResource ID（已废弃）
 
     @field_validator("file_name")
     @classmethod

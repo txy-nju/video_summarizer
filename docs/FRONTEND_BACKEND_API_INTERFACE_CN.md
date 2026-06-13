@@ -129,12 +129,31 @@ WebSocket 事件统一信封（WSEventEnvelope）：
   - Content-Type: text/event-stream
   - Cache-Control: no-cache
   - Connection: keep-alive
-- 事件类型：start/delta/done/error
+- 事件类型：start/progress/delta/done/error
+- **注意**：自两阶段流式改造后，`delta` 事件为真正逐 token 流式输出（非一次性发出整段）
+
+#### progress 事件 phase 值
+
+| phase | 含义 | 说明 |
+|-------|------|------|
+| `deciding` | 正在判断是否需要检索 | Phase 1 决策中 |
+| `searching` | 正在检索知识库/视频内容 | RAG 检索执行中 |
+| `retrieved` | 检索完成 | 返回检索结果数量 |
+| `generating` | 正在生成回答 | Phase 2 流式回答中 |
+| `loading` | 正在加载状态 | Timestamp 模式加载 checkpoint |
+
+> **已废弃**: `thinking` phase 已被 `deciding` + `generating` 替代。前端建议兼容两者。
 
 示例（time-travel QA）：
 ```text
 event: start
 data: {"task_id":"task_001","qa_id":"qa_001","timestamp":"2026-05-18T10:00:00Z"}
+
+event: progress
+data: {"phase":"loading","message":"正在加载视频分析状态..."}
+
+event: progress
+data: {"phase":"generating","message":"正在基于证据生成回答..."}
 
 event: delta
 data: {"task_id":"task_001","qa_id":"qa_001","chunk":"这是","sequence":1,"timestamp":"2026-05-18T10:00:01Z"}
@@ -143,10 +162,16 @@ event: done
 data: {"task_id":"task_001","qa_id":"qa_001","answer_content":"这是最终答案","timestamp":"2026-05-18T10:00:02Z"}
 ```
 
-示例（global QA）：
+示例（global QA，两阶段流式）：
 ```text
 event: start
 data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","timestamp":"2026-05-18T10:00:00Z"}
+
+event: progress
+data: {"phase":"deciding","message":"正在分析是否需要检索知识库..."}
+
+event: progress
+data: {"phase":"generating","message":"正在生成回答..."}
 
 event: delta
 data: {"kbid":"kb_001","chat_id":"chat_001","qa_id":"gqa_001","chunk":"这是","sequence":1,"timestamp":"2026-05-18T10:00:01Z"}
@@ -443,12 +468,17 @@ DELETE /api/v1/kbs/{kbid}/videos/{video_id}
 ```
 
 ### 6.4 Video Resource
-POST /api/v1/videos
+
+> **注意**: `POST /api/v1/videos` 不再是上传流程的一部分。
+> VideoResource 的创建现在由 Celery `async_finalize_upload` 任务统一负责。
+> 正常上传流程请使用 `POST /api/v1/uploads`（见 §6.8）。
+
+POST /api/v1/videos（管理/测试用，不参与上传流程）
 ```json
 {"file_name":"demo.mp4"}
 ```
 ```json
-{"status":"success","data":{"video_id":"vid_001","owner_id":"usr_001","file_name":"demo.mp4","oss_key":"","presigned_url":null,"duration":0,"full_transcript":null,"transcribe_status":"UPLOADED","transcript_vector_ids":null,"keyframes":null,"frame_extraction_status":"UPLOADED","keyframes_oss_prefix":null,"extract_completed_at":null,"created_at":"2026-05-18T10:00:00Z"},"meta":{"request_id":"req_001","timestamp":"2026-05-18T10:00:00Z"}}
+{"status":"success","data":{"video_id":"vid_001","owner_id":"usr_001","file_name":"demo.mp4","oss_key":"","presigned_url":null,"duration":0,"full_transcript":null,"transcribe_status":"UPLOADED","transcript_vector_ids":null,"keyframes":null,"frame_extraction_status":"UPLOADED","keyframes_oss_prefix":null,"extract_completed_at":null,"file_hash":null,"task_ref_count":0,"created_at":"2026-05-18T10:00:00Z"},"meta":{"request_id":"req_001","timestamp":"2026-05-18T10:00:00Z"}}
 ```
 
 GET /api/v1/videos
@@ -636,6 +666,16 @@ DELETE /api/v1/kbs/{kbid}/chats/{chat_id}/qa/{qa_id}
 ```
 
 ### 6.8 Upload (TUS)
+
+完整的视频上传流程（TUS 协议，VideoResource 由 Celery 最终化任务统一创建）：
+
+```
+POST /api/v1/uploads     → 初始化上传会话
+PATCH /api/v1/uploads/... → 上传分片（多次）
+HEAD /api/v1/uploads/...  → 查询进度
+GET  /api/v1/uploads/...  → 查询进度（JSON，含 video_id）
+```
+
 POST /api/v1/uploads
 ```json
 {"file_name":"demo.mp4","total_size":524288000}
@@ -655,7 +695,7 @@ PATCH /api/v1/uploads/{upload_id}
 ```
 响应：
 - 204（未完成）
-- 200（全部分片完成）
+- 200（全部分片完成，触发 Celery 最终化）
 
 DELETE /api/v1/uploads/{upload_id}
 ```json
@@ -663,9 +703,25 @@ DELETE /api/v1/uploads/{upload_id}
 ```
 
 GET /api/v1/uploads/{upload_id}
+
+正在进行中：
 ```json
-{"upload_id":"upl_001","uploaded_size":31457280,"total_size":524288000,"uploaded_chunks":[0,1,2]}
+{"upload_id":"upl_001","uploaded_size":31457280,"total_size":524288000,"uploaded_chunks":[0,1,2],"video_id":null,"state":"uploading"}
 ```
+
+最终化完成后（`state: "done"`）：
+```json
+{"upload_id":"upl_001","uploaded_size":524288000,"total_size":524288000,"uploaded_chunks":[0,1,...,49],"video_id":"vid_001","state":"done"}
+```
+
+哈希去重复用时（`state: "dedup_reused"`）：
+```json
+{"upload_id":"upl_002","uploaded_size":524288000,"total_size":524288000,"uploaded_chunks":[0,1,...,49],"video_id":"vid_001","state":"dedup_reused"}
+```
+
+> **前端轮询指引**: 轮询 `GET /api/v1/uploads/{upload_id}`，当 `state` 为 `done` 或
+> `dedup_reused` 时从响应中提取 `video_id`。`state` 为 `rejected`、`failed`、
+> `cancelled` 时显示对应错误，不要使用 `video_id`。
 
 ### 6.10 Attachments
 POST /api/v1/attachments/upload

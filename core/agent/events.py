@@ -17,7 +17,8 @@ class AgentProgressEvent:
     ----------
     phase:
         Fixed label for the current phase. Standard values:
-        ``"thinking"``, ``"searching"``, ``"retrieved"``, ``"loading"``, ``"generating"``.
+        ``"deciding"``, ``"searching"``, ``"retrieved"``, ``"loading"``, ``"generating"``.
+        (``"thinking"`` is deprecated and replaced by ``"deciding"`` / ``"generating"``.)
     message:
         Human-readable status text for frontend display.
     """

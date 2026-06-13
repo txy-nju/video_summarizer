@@ -113,6 +113,9 @@ def test_async_finalize_upload_writes_object_key_in_db(monkeypatch, tmp_path) ->
         def finalize_session(self, upload_id: str, *, video_id=None, final_state="done") -> None:
             return None
 
+        def set_video_id(self, upload_id: str, video_id: str):
+            return None
+
         def get_session(self, upload_id: str):
             return None  # Always return None → no pre-existing video_id in session
 

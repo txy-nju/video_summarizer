@@ -46,7 +46,6 @@ class UploadService:
             file_name=payload.file_name,
             total_size=payload.total_size,
             chunk_size=SERVER_CHUNK_SIZE,
-            video_id=payload.video_id,
         )
         return InitUploadResponse(
             upload_id=state.upload_id,

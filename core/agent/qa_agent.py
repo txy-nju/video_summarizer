@@ -1,11 +1,12 @@
-"""QAAgent — Prompt-driven ReAct agent for video knowledge base Q&A.
+"""QAAgent — Two-phase agent for video knowledge base Q&A.
 
-Implements the ReAct pattern using a text-based prompt format:
+Uses a two-phase decision + streaming answer approach:
 
 1. User asks question
-2. Agent thinks → decides whether to search or answer
-3. If search: executes rag_search tool, injects Observation, loops
-4. If answer: yields FINAL_ANSWER tokens to caller
+2. Phase 1 (non-streaming, fast): LLM decides whether to search or answer
+3. If search: executes rag_search tool, retrieves context
+4. Phase 2 (streaming): LLM generates answer token-by-token
+   (no ReAct text wrapping — tokens are yielded directly to the SSE stream)
 
 Max iterations prevent infinite loops.
 """
@@ -17,13 +18,40 @@ from typing import Any, Iterator
 
 from core.agent.base import BaseAgent
 from core.agent.events import AgentProgressEvent
-from core.agent.parser import parse_react_output
 from core.context.execution_context import ExecutionContext
 from core.memory.base import BaseChatMemory
 from core.tool.executor import ToolExecutor
 from core.tool.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_DECISION_PROMPT = """\
+你是视频知识库问答助手。根据对话历史和用户问题，判断是否需要从知识库检索信息。
+
+输出格式（二选一，不要输出其他任何内容）：
+- DECISION: answer  （如果对话历史已包含足够信息可直接回答）
+- DECISION: search  （如果需要检索知识库获取新信息）
+
+注意：
+- 追问类问题（如"刚才说的那个"、"你提到的"）通常不需要检索
+- 需要查找新知识点的问题才需要检索
+- 不确定时请选择 search
+"""
+
+_DEFAULT_ANSWER_PROMPT = """\
+你是视频知识库问答助手。请根据以下信息，结合对话历史，准确回答用户的问题。
+
+{retrieval_context}
+
+重要规则：
+- 请直接输出纯文本答案，不要使用任何标签格式（包括但不限于 DECISION、THOUGHT、ACTION、FINAL_ANSWER 等）
+- 如果提供了检索结果，请基于检索结果回答
+- 如果检索结果不足以回答问题，请明确说明
+- 回答请使用中文
+- 引用来源时请注明视频名称和时间段
+"""
+
+# ── Legacy prompt templates (kept for backward compatibility) ─────
 
 _DEFAULT_SYSTEM_PROMPT = """\
 你是视频知识库问答助手，请基于提供的视频转录内容，结合对话历史，准确回答用户的问题。
@@ -58,10 +86,11 @@ _OBSERVATION_TEMPLATE = """\
 """
 
 _MAX_ITERATIONS = 3
+_DEFAULT_DECISION_MAX_TOKENS = 50
 
 
 class QAAgent(BaseAgent):
-    """ReAct agent with prompt-driven tool use.
+    """Two-phase agent: fast decision → streaming answer.
 
     Parameters
     ----------
@@ -73,10 +102,16 @@ class QAAgent(BaseAgent):
         ToolExecutor for safe tool execution.
     rag_stream_llm:
         ``RagStreamLLM`` instance for streaming LLM calls.
+    decision_prompt_template:
+        Custom Phase 1 decision prompt (uses default if not provided).
+    answer_prompt_template:
+        Custom Phase 2 answer prompt (uses default if not provided).
     system_prompt_template:
-        Custom system prompt (uses default if not provided).
+        (deprecated) Custom system prompt for legacy ReAct mode.
     max_iterations:
-        Maximum ReAct loop iterations (default 3).
+        Maximum decision loop iterations (default 3).
+    decision_max_tokens:
+        Max tokens for the Phase 1 decision call (default 50).
     """
 
     def __init__(
@@ -86,15 +121,22 @@ class QAAgent(BaseAgent):
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         rag_stream_llm: Any,
+        decision_prompt_template: str | None = None,
+        answer_prompt_template: str | None = None,
         system_prompt_template: str | None = None,
         max_iterations: int = _MAX_ITERATIONS,
+        decision_max_tokens: int = _DEFAULT_DECISION_MAX_TOKENS,
     ) -> None:
         self._memory = memory
         self._tool_registry = tool_registry
         self._tool_executor = tool_executor
         self._llm = rag_stream_llm
+        self._decision_prompt_template = decision_prompt_template or _DEFAULT_DECISION_PROMPT
+        self._answer_prompt_template = answer_prompt_template or _DEFAULT_ANSWER_PROMPT
+        # Legacy — kept for backward compatibility
         self._system_prompt_template = system_prompt_template or _DEFAULT_SYSTEM_PROMPT
         self._max_iterations = max_iterations
+        self._decision_max_tokens = decision_max_tokens
         # Mutable: cited sources collected during the most recent answer_stream call
         self.last_cited_sources: list[dict] = []
 
@@ -112,121 +154,194 @@ class QAAgent(BaseAgent):
 
     def answer_stream(
         self, *, question: str, chat_id: str, kbid: str, owner_id: str
-    ) -> Iterator[str]:
+    ) -> Iterator[str | AgentProgressEvent]:
+        """Two-phase streaming answer.
+
+        Phase 1 (non-streaming, fast): LLM decides answer vs search.
+        Phase 2 (streaming): LLM generates answer token-by-token — each
+        ``str`` token is yielded immediately for real-time SSE delivery.
+        """
         self.last_cited_sources = []  # Reset for this call
         context = ExecutionContext(owner_id=owner_id, kbid=kbid)
-        system_prompt = self._build_system_prompt()
         rag_context = ""
 
-        # Build initial messages with history
-        messages = self._memory.build_messages(
+        # Build decision messages with conversation history
+        decision_messages = self._memory.build_messages(
             chat_id=chat_id,
             owner_id=owner_id,
-            system_prompt=system_prompt,
+            system_prompt=self._decision_prompt_template,
             current_question=question,
-            rag_context=rag_context,
+            rag_context="",
         )
 
         for iteration in range(1, self._max_iterations + 1):
             logger.debug(
-                "QAAgent: iteration %d/%d, messages_count=%d",
+                "QAAgent: iteration %d/%d (decision phase)",
                 iteration,
                 self._max_iterations,
-                len(messages),
             )
 
-            # Progress: thinking
-            yield AgentProgressEvent("thinking", "正在分析你的问题...")
+            # ── Phase 1: Decide ──────────────────────────────────────
+            yield AgentProgressEvent("deciding", "正在分析是否需要检索知识库...")
 
-            # Call LLM (streaming)
-            full_response = ""
             try:
-                for token in self._llm._model.stream_chat_completion(
+                decision_raw = self._llm._model.chat_completion(
                     model=self._llm._model_name,
-                    messages=messages,
-                ):
-                    full_response += token
+                    messages=decision_messages,
+                    temperature=0,
+                    max_tokens=self._decision_max_tokens,
+                )
             except Exception as exc:
-                logger.exception("QAAgent: LLM call failed at iteration %d", iteration)
+                logger.exception("QAAgent: decision LLM call failed at iteration %d", iteration)
                 yield f"\n（回答生成失败: {exc}）"
                 return
 
-            # Parse the response
-            parsed = parse_react_output(full_response)
+            decision = self._parse_decision(decision_raw.strip() if decision_raw else "")
+            logger.info("QAAgent: decision=%s (raw=%r)", decision, decision_raw[:80])
 
-            if parsed.final_answer is not None:
-                # Yield the final answer (token by token for streaming feel)
-                yield parsed.final_answer
-                return
+            if decision == "answer":
+                # Proceed to Phase 2 with empty RAG context
+                break
 
-            if parsed.is_action:
-                # Progress: searching
-                query = parsed.action_params.get("query", "")
-                search_msg = f"正在检索: {query}" if query else "正在从知识库检索相关内容..."
-                yield AgentProgressEvent("searching", search_msg)
+            if decision == "search":
+                # ── Execute RAG search ──────────────────────────────
+                yield AgentProgressEvent("searching", "正在从知识库检索相关内容...")
 
-                # Execute the tool
-                logger.info(
-                    "QAAgent: executing tool '%s' with params %s",
-                    parsed.action,
-                    parsed.action_params,
-                )
                 tool_result = self._tool_executor.execute(
-                    tool_name=parsed.action,
-                    params=parsed.action_params,
+                    tool_name="rag_search",
+                    params={"query": question},
                     context=context,
                 )
 
                 if tool_result.success:
-                    # Progress: retrieved
                     n_cited = len(tool_result.cited_sources) if tool_result.cited_sources else 0
-                    yield AgentProgressEvent("retrieved", f"已找到 {n_cited} 条相关内容" if n_cited else "未找到相关内容")
-                    # Inject observation into messages and continue
-                    observation = _OBSERVATION_TEMPLATE.format(
-                        data=tool_result.data or "（无结果）"
+                    yield AgentProgressEvent(
+                        "retrieved",
+                        f"已找到 {n_cited} 条相关内容" if n_cited else "未找到相关内容",
                     )
+                    rag_context = tool_result.data or ""
                     if tool_result.cited_sources:
                         self.last_cited_sources.extend(tool_result.cited_sources)
-                        rag_context = observation  # Use as RAG context for next round
-                else:
-                    observation = f"工具执行失败: {tool_result.error}"
 
-                # Append assistant thought + observation to messages
-                messages.append({"role": "assistant", "content": full_response})
-                messages.append({"role": "user", "content": observation})
+                    # Append search result as observation for next decision round
+                    observation = _OBSERVATION_TEMPLATE.format(
+                        data=rag_context or "（无结果）"
+                    )
+                    decision_messages.append({"role": "assistant", "content": f"DECISION: search (query: {question})"})
+                    decision_messages.append({"role": "user", "content": observation})
+                else:
+                    logger.warning("QAAgent: RAG search failed: %s", tool_result.error)
+                    observation = f"工具执行失败: {tool_result.error}"
+                    decision_messages.append({"role": "assistant", "content": f"DECISION: search (query: {question})"})
+                    decision_messages.append({"role": "user", "content": observation})
+
                 continue
 
-            # Should not reach here (parser always returns action or final_answer)
-            logger.warning("QAAgent: unexpected parse result at iteration %d", iteration)
-            yield full_response
-            return
+            # Unknown decision — fail-open: treat as answer
+            logger.warning("QAAgent: unparseable decision, falling back to answer. raw=%r", decision_raw[:80])
+            break
 
-        # Max iterations exhausted → force answer
-        logger.warning("QAAgent: max iterations (%d) reached, forcing final answer", self._max_iterations)
-        # Make one more LLM call asking for final answer
-        messages.append({
-            "role": "user",
-            "content": "请基于已有信息直接给出最终回答（FINAL_ANSWER格式）。",
-        })
+        # ── Iteration limit exhausted ────────────────────────────────
+        else:
+            logger.warning(
+                "QAAgent: max iterations (%d) reached, forcing answer phase",
+                self._max_iterations,
+            )
+            # Note: the "else" branch of a for-loop runs when no break occurred.
+            # This means every iteration returned "search" — we force answer.
+            n_searches = self._max_iterations
+            yield AgentProgressEvent(
+                "generating",
+                f"已达到最大搜索次数 ({n_searches})，正在基于已有信息生成回答...",
+            )
+
+        # ── Phase 2: Stream answer (token-by-token) ──────────────────
+        yield AgentProgressEvent("generating", "正在生成回答...")
+
+        retrieval_context_text = rag_context if rag_context else "（基于已有对话知识回答）"
+        answer_prompt = self._answer_prompt_template.format(
+            retrieval_context=retrieval_context_text,
+        )
+
+        answer_messages = self._memory.build_messages(
+            chat_id=chat_id,
+            owner_id=owner_id,
+            system_prompt=answer_prompt,
+            current_question=question,
+            rag_context="",
+        )
+
+        # Guard: ensure the system prompt is correct even when
+        # build_messages returns a Redis-cached list whose system
+        # message was written by Phase 1's decision prompt.
+        if answer_messages and answer_messages[0]["role"] == "system":
+            answer_messages[0]["content"] = answer_prompt
+
         try:
             for token in self._llm._model.stream_chat_completion(
                 model=self._llm._model_name,
-                messages=messages,
+                messages=answer_messages,
             ):
-                full_response = ""
-                full_response += token
-                # Check for FINAL_ANSWER in streaming — best effort
-        except Exception:
-            pass
-        # Yield whatever we got from the last iteration
-        if full_response:
-            parsed = parse_react_output(full_response)
-            yield parsed.final_answer or full_response
+                yield token
+        except Exception as exc:
+            logger.exception("QAAgent: answer LLM call failed")
+            yield f"\n（回答生成失败: {exc}）"
 
     # ── internal ─────────────────────────────────────────────────────
 
+    def _parse_decision(self, raw: str) -> str | None:
+        """Parse a Phase 1 decision response.
+
+        Returns ``"answer"``, ``"search"``, or ``None`` if unparseable.
+        """
+        if not raw:
+            return None
+        lowered = raw.lower()
+        if "decision:" in lowered:
+            after = lowered.split("decision:", 1)[1].strip()
+            if after.startswith("answer"):
+                return "answer"
+            if after.startswith("search"):
+                return "search"
+        # Heuristic fallback for common variations
+        if "answer" in lowered and "search" not in lowered:
+            return "answer"
+        if "search" in lowered:
+            return "search"
+        return None
+
+    def _build_decision_prompt(self) -> str:
+        """Build the Phase 1 decision prompt.
+
+        .. deprecated::
+            The decision prompt template is now used directly via
+            ``self._decision_prompt_template``. This method exists for
+            backward compatibility with subclasses that may override it.
+        """
+        return self._decision_prompt_template
+
+    def _build_answer_prompt(self, retrieval_context: str) -> str:
+        """Build the Phase 2 answer prompt with retrieval context injected.
+
+        .. deprecated::
+            The answer prompt template is now used directly via
+            ``self._answer_prompt_template.format(...)``. This method
+            exists for backward compatibility with subclasses that may
+            override it.
+        """
+        return self._answer_prompt_template.format(
+            retrieval_context=retrieval_context or "（基于已有对话知识回答）",
+        )
+
     def _build_system_prompt(self) -> str:
-        """Build the full system prompt with dynamically injected tool list."""
+        """Build the legacy ReAct system prompt.
+
+        .. deprecated::
+            This method is kept for backward compatibility with
+            VideoQAAgent and other callers that may still use
+            the legacy ReAct prompt format. New code should use
+            ``_build_decision_prompt()`` and ``_build_answer_prompt()``.
+        """
         tool_list = self._tool_registry.list_for_llm()
         react_instructions = _REACT_INSTRUCTIONS.replace(
             "{tool_list}", tool_list

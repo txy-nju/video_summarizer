@@ -48,7 +48,6 @@ class UploadRepository:
         total_size: int,
         chunk_size: int,
         ttl_seconds: int = _DEFAULT_SESSION_TTL_SECONDS,
-        video_id: str | None = None,
     ) -> UploadSessionState:
         """创建新的上传会话，写入 Redis。"""
         now = datetime.now(UTC)
@@ -64,7 +63,7 @@ class UploadRepository:
             state="created",
             expires_at=expires_at.isoformat(),
             created_at=now.isoformat(),
-            video_id=video_id,
+            video_id=None,
         )
 
         self._save(state, ttl_seconds)
@@ -98,6 +97,20 @@ class UploadRepository:
         if state is None:
             return None
         state.state = new_state
+        self._save(state)
+        return state
+
+    def set_video_id(self, upload_id: str, video_id: str) -> UploadSessionState | None:
+        """Write video_id into the session without changing its state.
+
+        Used by the Celery finalize task to immediately persist the created
+        video_id so that retries can discover the existing row instead of
+        creating duplicates. Does NOT alter the session state.
+        """
+        state = self.get_session(upload_id)
+        if state is None:
+            return None
+        state.video_id = video_id
         self._save(state)
         return state
 

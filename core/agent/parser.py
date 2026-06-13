@@ -1,5 +1,11 @@
 """ReAct output parser — extracts actions and final answers from LLM text.
 
+.. deprecated::
+    This module is deprecated as of the two-phase QA refactor.
+    QAAgent and VideoQAAgent no longer use ReAct text parsing;
+    they use a two-phase decision + direct streaming answer approach instead.
+    The module is retained for backward compatibility with existing tests.
+
 Parses the prompt-driven ReAct format:
 
     THOUGHT: <reasoning>
