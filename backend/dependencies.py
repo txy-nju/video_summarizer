@@ -65,11 +65,10 @@ def get_user_repository() -> UserRepository:
 
 @lru_cache(maxsize=1)
 def get_auth_service() -> AuthService:
-    """Create AuthService with UserRepository and KnowledgeBaseRepository dependencies."""
+    """Create AuthService with UserRepository dependency."""
     return AuthService(
         user_repository=get_user_repository(),
         settings=get_settings(),
-        kb_repository=get_kb_repository(),
     )
 
 
