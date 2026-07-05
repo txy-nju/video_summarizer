@@ -185,7 +185,7 @@ def test_workflow_orchestration_slice_analysis_finalize_and_time_travel(monkeypa
     assert phase1_completed[1]["result"]["draft_summary"] == "analysis-content"
 
     phase2_completed = next(
-        evt for evt in completed_events if evt[1].get("message") == "Phase-2 finalization completed. Workflow finished."
+        evt for evt in completed_events if evt[1].get("message") == "第二阶段全篇总结生成已完成，工作流结束"
     )
     assert phase2_completed[1]["result"]["workflow_state"] == "COMPLETED"
     assert phase2_completed[1]["result"]["final_summary"] == "final-summary"

@@ -315,14 +315,14 @@ def finalize_summary(
 
     if status_callback:
         status_callback(f"🧵 [Session] 当前会话 thread_id: {resolved_thread_id}")
-        status_callback("🚀 [Finalization] 审批通过，进入第二阶段全篇总结与质量审查...")
+        status_callback("🚀 [Finalization] 用户审批已通过，即将开始全篇总结生成...")
 
     workflow_app = build_finalization_graph(checkpointer=checkpointer)
     current_state: Dict[str, Any] = dict(initial_state)
     node_msg_map = {
-        "fusion_drafter_node": "🧩 [Synthesizer Agent] 正在根据人类审批稿生成全篇总结...",
-        "hallucination_grader_node": "⚖️ [Hallucination Guard] 正在进行事实一致性审查...",
-        "usefulness_grader_node": "🎯 [Usefulness Guard] 正在进行需求命中审查...",
+        "fusion_drafter_node": "🧩 [Synthesizer Agent] 全篇总结已生成，即将进行事实一致性审查",
+        "hallucination_grader_node": "⚖️ [Hallucination Guard] 事实一致性审查已完成，即将进行需求命中审查",
+        "usefulness_grader_node": "🎯 [Usefulness Guard] 需求命中审查已完成，最终总结即将输出",
     }
 
     with start_span(

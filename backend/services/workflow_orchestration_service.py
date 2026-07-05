@@ -91,6 +91,7 @@ class WorkflowOrchestrationService:
         user_id: str,
         task_id: str,
         trace_id: str,
+        stage: WSStage = WSStage.ANALYSIS,
     ) -> Callable[[str], None]:
         """Build a callback function to intercept workflow progress messages.
 
@@ -98,6 +99,7 @@ class WorkflowOrchestrationService:
             user_id: User owning the task
             task_id: Task ID being executed
             trace_id: Request trace ID for correlation
+            stage: WSStage for progress events (ANALYSIS for Phase 1, SYNTHESIS for Phase 2)
 
         Returns:
             Callback function that parses status_callback messages from LangGraph
@@ -133,18 +135,19 @@ class WorkflowOrchestrationService:
                     }
 
                     # Build readable Chinese message based on stage
+                    # Each message follows "已完成X + 即将进行Y" pattern
                     if chunk_stage == "starting":
-                        msg_text = f"共 {total_chunks} 个分片，即将开始并行分析"
+                        msg_text = f"分片规划已完成，共 {total_chunks} 个分片，即将开始并行分析"
                     elif chunk_stage == "running":
-                        msg_text = f"分片 {done_count}/{total_chunks} 分析完成"
+                        msg_text = f"分片分析已完成 {done_count}/{total_chunks}，即将处理下一分片"
                     else:  # "finished"
-                        msg_text = f"全部分片分析完成：共 {total_chunks} 个分片"
+                        msg_text = f"全部分片分析已完成（共 {total_chunks} 个分片），即将进入全局聚合与审批"
 
                     self._progress_publisher.publish_progress(
                         user_id=user_id,
                         scope=WSScope.VIDEO_SUMMARY_TASK,
                         scope_id=task_id,
-                        stage=WSStage.ANALYSIS,
+                        stage=stage,
                         substage="chunk_processing",
                         status="RUNNING",
                         progress=overall_percent,
@@ -160,7 +163,7 @@ class WorkflowOrchestrationService:
                     user_id=user_id,
                     scope=WSScope.VIDEO_SUMMARY_TASK,
                     scope_id=task_id,
-                    stage=WSStage.ANALYSIS,
+                    stage=stage,
                     status="RUNNING",
                     message=message[:200],  # Truncate long messages
                     trace_id=trace_id,
@@ -360,13 +363,13 @@ class WorkflowOrchestrationService:
             scope=WSScope.VIDEO_SUMMARY_TASK,
             scope_id=task_id,
             status="FINAL_GENERATING",
-            message="Phase-2 finalization started",
+            message="第一阶段分析已完成，用户审批已通过，即将开始第二阶段全篇总结生成",
             trace_id=trace_id,
         )
 
         # Run workflow in executor
         loop = asyncio.get_event_loop()
-        callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id)
+        callback = self._build_workflow_callback(user_id=owner_id, task_id=task_id, trace_id=trace_id, stage=WSStage.SYNTHESIS)
 
         try:
             final_summary = await loop.run_in_executor(
@@ -401,7 +404,7 @@ class WorkflowOrchestrationService:
                     "workflow_state": "COMPLETED",
                     "final_summary": final_summary,
                 },
-                message="Phase-2 finalization completed. Workflow finished.",
+                message="第二阶段全篇总结生成已完成，工作流结束",
                 trace_id=trace_id,
             )
 
