@@ -184,7 +184,7 @@ class AnalyzeState(TypedDict):
 **学习建议**：
 - 建议：区分两个场景：(1) **生产时 hallucination check**——输入是"最终稿 + 对应分片的转录文本/关键帧描述"，不依赖人工标注 ground truth，模型判断总结内容能否从原始证据中找到支撑；(2) **离线 eval**——输入是"最终稿 + 人工标注答案"，用于测量系统整体质量。简历描述的是生产时场景，但回答变成了 eval 场景。
 - 建议：对简历上的每个量化指标，准备好"测量方法论"一句话：5% 是"以分片转录文本为 ground truth，统计最终稿中被标记为 `FABRICATED`（权重 1.0）的原子事实占总事实数的比例，在 N 个测试视频上的平均值"。
-- 建议：阅读 `evaluation/llm_as_a_judge.py` 和 `evaluation/reports/` 中的 eval 报告，确保能讲清 eval 脚本的计算逻辑。
+- 建议：阅读 `evaluation/llm_as_a_judge.py` 和 `docs/evaluation/reports/` 中的 eval 报告，确保能讲清 eval 脚本的计算逻辑。
 
 **参考答案**：
 生产环境 hallucination_guard 节点：  

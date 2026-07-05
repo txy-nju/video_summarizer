@@ -1,0 +1,254 @@
+{
+  "sample_id": "eval-agent-context-2026-001",
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/面试官问：如何设计Agent上下文维护方案？.mp4",
+  "review_package": {
+    "thread_id": "eval-eval_20260427_192837-eval-agent-context-2026-001",
+    "stage": "pending_human_review",
+    "human_gate_status": "pending",
+    "human_gate_reason": "human_review_required",
+    "aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 2\n- user_focus: 请总结视频中关于Agent上下文维护方案的核心内容。结构要求：1. 先阐述长上下文面临的本质问题；2. 介绍业界的四象限框架及优先级；3. 详述开源记忆生态与上下文污染的四层防御机制；4. 总结2026年前沿技术信号与最终结论。\n\n## chunk-000 [00:00 - 05:00]\n### chunk_summary\n**长上下文维护方案核心内容总结：**\n\n1. **长上下文的本质问题**  \n   长上下文面临的核心挑战在于Transformer架构的数学约束（如n²复杂度）和Attention Budget的分配限制，这导致上下文越长，模型性能越差。此外，实际可靠的上下文容量通常低于理论宣传值，且模型在调用和维护上下文时容易出现“Context Rot”现象，即上下文变动和复杂性增加，进一步引发性能下降和资源浪费。\n\n2. **业界的四象限框架及优先级**  \n   为解决上下文维护问题，业界提出了“Write、Select、Compress、Isolate”四象限框架作为主流的Context Engineering方法。其中，“Select”层被认为是2026年性价比最高的优化方向，尤其在Agent技能的应用中表现突出。这一框架正在推动上下文维护技术的方向性收敛。\n\n3. **开源记忆生态与上下文污染的四层防御机制**  \n   开源记忆生态主要分为File System Pie、Graph Pie和Bitter Lesson Pie三大阵营。Graph Pie的代表性项目Graffiti通过时间戳和因果边管理事实，优化目标从“Tokens per request”转向“Tokens per task”，减少重复读取和搜索。此外，开源生态采用四层防御机制应对上下文污染，包括git-backed memory和bi-temporal时间戳机制，确保上下文的精准性和稳定性。\n\n4. **2026年前沿技术信号与最终结论**  \n   未来技术信号包括Leta公司从MemGPT核心记忆转向File System范式的产品迭代，以及Anthropic的Progressive Disclosure方法的扩展应用。这些趋势表明记忆系统正向高效、精准和可扩展方向发展，但不同阵营仍在探索最佳实践。最终结论是，长上下文维护需要在架构、框架和记忆系统层面进行综合优化，以实现性能与资源利用的平衡。\n### audio_insights\n{'1': '长上下文的本质问题在于Transformer架构的数学约束（n平方复杂度）和Attention Budget的分配限制，导致上下文越长模型性能越差。此外，实际可靠的上下文容量通常低于宣传值，长上下文的Recall表现未因架构升级而自动改善。', '2': '业界提出的四象限框架（Write、Select、Compress、Isolate）是主流Agent进行Context Engineering的核心步骤，其中Select被认为是2026年性价比最高的一层。', '3': '开源记忆生态分为File System Pie、Graph Pie和Bitter Lesson Pie三大阵营。Graph Pie的代表性项目Graffiti通过时间戳和因果边管理事实，优化目标从Tokens per request转向Tokens per task，强调减少重复读取和搜索。', '4': '2026年前沿技术信号包括Leta公司从MemGPT核心记忆转向File System范式的产品迭代，以及Anthropic的Progressive Disclosure方法。这些趋势表明记忆系统的方向正在收敛，但不同阵营仍在探索最佳实践。最终结论是，长上下文维护需要在架构、框架和记忆系统层面进行综合优化。'}\n### vision_insights\n{'core_issues': '长上下文面临的本质问题在于 Context Rot，即模型在调用和维护上下文时的变动和复杂性，导致性能下降和资源浪费。', 'industry_framework': '业界采用四象限框架来解决上下文维护问题，优先级包括 Select 层的性价比最高的 Agent 技能，以及方向性收敛的 Letta 技术。', 'open_source_defense': '开源记忆生态通过四层防御机制应对上下文污染，包括 git-backed memory 和 bi-temporal 时间戳机制（如 Graphiti）。', 'future_tech_signals': '2026 年前沿技术信号包括 MemGPT 技术的商业化和 Anthropic 的 Agent 技能扩展，最终结论是上下文维护方案将继续向高效、精准和可扩展方向发展。'}\n\n## chunk-001 [05:00 - 07:43]\n### chunk_summary\n**总结：Agent上下文维护方案**\n\n1. **长上下文面临的本质问题**  \n   长上下文的核心挑战在于如何在有限的注意力预算（Attention Budget）下维持任务连贯性，同时应对信息冗余、污染和陈旧性问题。这些问题限制了模型对上下文信息的有效利用，并与人类工作记忆的认知约束类似。\n\n2. **业界的四象限框架及优先级**  \n   业界采用LangChain的四象限框架，优先级依次为选择（Select）、写作（Write DR）、压缩（Compress）和隔离（Isolate）。这一框架综合了实践经验，旨在优化上下文的选择与管理。\n\n3. **开源记忆生态与上下文污染的四层防御机制**  \n   开源记忆生态提供了多层次的防御机制以应对上下文污染：  \n   - **数据结构层**：通过Mem0和Graphhi双时间轴进行数据清理和更新。  \n   - **Contract层**：利用Claude代码编辑保护上下文读取。  \n   - **版本化层**：通过Letta上下文库的Git支持实现存储校验和版本管理。  \n   - **心理模型层**：通过可视化提示接受陈旧性并鼓励过度重读（Reread），以保护用户的认知模型。\n\n4. **2026年前沿技术信号与最终结论**  \n   未来的技术信号包括Opus 4.7的Task Budgets机制、Agent Skills、Letta Context Repositories和Graphhi等。这些技术将通过优化Token预算管理和上下文调度，进一步提升上下文维护能力。最终，Agent的上下文维护将从容量问题转向认知选择问题，与人类工作记忆的本质约束保持一致，为Agent能力的持续提升奠定基础。\n### audio_insights\n{'1. 长上下文面临的本质问题': '上下文维护的核心挑战在于如何在有限的Attention Budget下维持任务的连贯性，这是认知层面的限制。', '2. 业界的四象限框架及优先级': '业界采用Langchain的四象限框架，按优先级排序为Select、Write DR、Compress、Isolate，综合了实践经验。', '3. 开源记忆生态与上下文污染的四层防御机制': '上下文污染的防御机制包括：数据结构层（Mem0、Graffiti）、Contract层（Cloud Code）、版本化层（Letter Context）、心理模型层（接受Staleness并过度Reread）。', '4. 2026年前沿技术信号与最终结论': '2026年的前沿技术信号如Opus 4.7的Task Budgets机制，通过模型内建调度优化Token预算管理。最终结论是，Context维护从容量问题转变为认知选择问题，与人类工作记忆的本质约束一致。'}\n### vision_insights\n{'core_issues': '长上下文面临的本质问题在于信息冗余、污染及陈旧性，导致模型无法有效利用上下文信息。', 'industry_framework': '业界提出了四象限框架，优先级依次为选择、写作、压缩、隔离（LangChain）。', 'defense_mechanisms': '开源记忆生态提供了上下文污染的四层防御机制：数据清理（Memo更新/删除，Graphhi双时间轴）、读取保护（Claude代码编辑保护）、存储校验（Letta上下文库git支持）、心理模型保护（可视化提示避免陈旧）。', 'future_signals': '2026年前沿技术信号包括Agent Skills、Letta Context Repositories、Graphhi、Task Budgets，表明上下文维护方案将进一步优化。', 'conclusion': '上下文维护方案的演进将依托开源生态与技术创新，解决长上下文的污染与冗余问题，为Agent能力提升提供支持。'}",
+    "editable_aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 2\n- user_focus: 请总结视频中关于Agent上下文维护方案的核心内容。结构要求：1. 先阐述长上下文面临的本质问题；2. 介绍业界的四象限框架及优先级；3. 详述开源记忆生态与上下文污染的四层防御机制；4. 总结2026年前沿技术信号与最终结论。\n\n## chunk-000 [00:00 - 05:00]\n### chunk_summary\n**长上下文维护方案核心内容总结：**\n\n1. **长上下文的本质问题**  \n   长上下文面临的核心挑战在于Transformer架构的数学约束（如n²复杂度）和Attention Budget的分配限制，这导致上下文越长，模型性能越差。此外，实际可靠的上下文容量通常低于理论宣传值，且模型在调用和维护上下文时容易出现“Context Rot”现象，即上下文变动和复杂性增加，进一步引发性能下降和资源浪费。\n\n2. **业界的四象限框架及优先级**  \n   为解决上下文维护问题，业界提出了“Write、Select、Compress、Isolate”四象限框架作为主流的Context Engineering方法。其中，“Select”层被认为是2026年性价比最高的优化方向，尤其在Agent技能的应用中表现突出。这一框架正在推动上下文维护技术的方向性收敛。\n\n3. **开源记忆生态与上下文污染的四层防御机制**  \n   开源记忆生态主要分为File System Pie、Graph Pie和Bitter Lesson Pie三大阵营。Graph Pie的代表性项目Graffiti通过时间戳和因果边管理事实，优化目标从“Tokens per request”转向“Tokens per task”，减少重复读取和搜索。此外，开源生态采用四层防御机制应对上下文污染，包括git-backed memory和bi-temporal时间戳机制，确保上下文的精准性和稳定性。\n\n4. **2026年前沿技术信号与最终结论**  \n   未来技术信号包括Leta公司从MemGPT核心记忆转向File System范式的产品迭代，以及Anthropic的Progressive Disclosure方法的扩展应用。这些趋势表明记忆系统正向高效、精准和可扩展方向发展，但不同阵营仍在探索最佳实践。最终结论是，长上下文维护需要在架构、框架和记忆系统层面进行综合优化，以实现性能与资源利用的平衡。\n### audio_insights\n{'1': '长上下文的本质问题在于Transformer架构的数学约束（n平方复杂度）和Attention Budget的分配限制，导致上下文越长模型性能越差。此外，实际可靠的上下文容量通常低于宣传值，长上下文的Recall表现未因架构升级而自动改善。', '2': '业界提出的四象限框架（Write、Select、Compress、Isolate）是主流Agent进行Context Engineering的核心步骤，其中Select被认为是2026年性价比最高的一层。', '3': '开源记忆生态分为File System Pie、Graph Pie和Bitter Lesson Pie三大阵营。Graph Pie的代表性项目Graffiti通过时间戳和因果边管理事实，优化目标从Tokens per request转向Tokens per task，强调减少重复读取和搜索。', '4': '2026年前沿技术信号包括Leta公司从MemGPT核心记忆转向File System范式的产品迭代，以及Anthropic的Progressive Disclosure方法。这些趋势表明记忆系统的方向正在收敛，但不同阵营仍在探索最佳实践。最终结论是，长上下文维护需要在架构、框架和记忆系统层面进行综合优化。'}\n### vision_insights\n{'core_issues': '长上下文面临的本质问题在于 Context Rot，即模型在调用和维护上下文时的变动和复杂性，导致性能下降和资源浪费。', 'industry_framework': '业界采用四象限框架来解决上下文维护问题，优先级包括 Select 层的性价比最高的 Agent 技能，以及方向性收敛的 Letta 技术。', 'open_source_defense': '开源记忆生态通过四层防御机制应对上下文污染，包括 git-backed memory 和 bi-temporal 时间戳机制（如 Graphiti）。', 'future_tech_signals': '2026 年前沿技术信号包括 MemGPT 技术的商业化和 Anthropic 的 Agent 技能扩展，最终结论是上下文维护方案将继续向高效、精准和可扩展方向发展。'}\n\n## chunk-001 [05:00 - 07:43]\n### chunk_summary\n**总结：Agent上下文维护方案**\n\n1. **长上下文面临的本质问题**  \n   长上下文的核心挑战在于如何在有限的注意力预算（Attention Budget）下维持任务连贯性，同时应对信息冗余、污染和陈旧性问题。这些问题限制了模型对上下文信息的有效利用，并与人类工作记忆的认知约束类似。\n\n2. **业界的四象限框架及优先级**  \n   业界采用LangChain的四象限框架，优先级依次为选择（Select）、写作（Write DR）、压缩（Compress）和隔离（Isolate）。这一框架综合了实践经验，旨在优化上下文的选择与管理。\n\n3. **开源记忆生态与上下文污染的四层防御机制**  \n   开源记忆生态提供了多层次的防御机制以应对上下文污染：  \n   - **数据结构层**：通过Mem0和Graphhi双时间轴进行数据清理和更新。  \n   - **Contract层**：利用Claude代码编辑保护上下文读取。  \n   - **版本化层**：通过Letta上下文库的Git支持实现存储校验和版本管理。  \n   - **心理模型层**：通过可视化提示接受陈旧性并鼓励过度重读（Reread），以保护用户的认知模型。\n\n4. **2026年前沿技术信号与最终结论**  \n   未来的技术信号包括Opus 4.7的Task Budgets机制、Agent Skills、Letta Context Repositories和Graphhi等。这些技术将通过优化Token预算管理和上下文调度，进一步提升上下文维护能力。最终，Agent的上下文维护将从容量问题转向认知选择问题，与人类工作记忆的本质约束保持一致，为Agent能力的持续提升奠定基础。\n### audio_insights\n{'1. 长上下文面临的本质问题': '上下文维护的核心挑战在于如何在有限的Attention Budget下维持任务的连贯性，这是认知层面的限制。', '2. 业界的四象限框架及优先级': '业界采用Langchain的四象限框架，按优先级排序为Select、Write DR、Compress、Isolate，综合了实践经验。', '3. 开源记忆生态与上下文污染的四层防御机制': '上下文污染的防御机制包括：数据结构层（Mem0、Graffiti）、Contract层（Cloud Code）、版本化层（Letter Context）、心理模型层（接受Staleness并过度Reread）。', '4. 2026年前沿技术信号与最终结论': '2026年的前沿技术信号如Opus 4.7的Task Budgets机制，通过模型内建调度优化Token预算管理。最终结论是，Context维护从容量问题转变为认知选择问题，与人类工作记忆的本质约束一致。'}\n### vision_insights\n{'core_issues': '长上下文面临的本质问题在于信息冗余、污染及陈旧性，导致模型无法有效利用上下文信息。', 'industry_framework': '业界提出了四象限框架，优先级依次为选择、写作、压缩、隔离（LangChain）。', 'defense_mechanisms': '开源记忆生态提供了上下文污染的四层防御机制：数据清理（Memo更新/删除，Graphhi双时间轴）、读取保护（Claude代码编辑保护）、存储校验（Letta上下文库git支持）、心理模型保护（可视化提示避免陈旧）。', 'future_signals': '2026年前沿技术信号包括Agent Skills、Letta Context Repositories、Graphhi、Task Budgets，表明上下文维护方案将进一步优化。', 'conclusion': '上下文维护方案的演进将依托开源生态与技术创新，解决长上下文的污染与冗余问题，为Agent能力提升提供支持。'}",
+    "human_guidance": "",
+    "chunk_count": 2
+  },
+  "judge": {
+    "fact": {
+      "label": "fail",
+      "score": 0.4298,
+      "details": "",
+      "metrics": {
+        "score": 0.4298,
+        "label": "fail",
+        "details": "",
+        "claim_count": 11,
+        "total_claim_importance": 47,
+        "supported_claim_count": 7,
+        "contradicted_claim_count": 1,
+        "not_mentioned_claim_count": 3,
+        "supported_claim_importance": 32,
+        "contradicted_claim_importance": 4,
+        "not_mentioned_claim_importance": 11,
+        "support_ratio": 0.6809,
+        "judge_confidence": 0.9682,
+        "hallucination_density": 0.3636,
+        "weighted_hallucination_density": 0.2511,
+        "weighted_penalty": 11.8,
+        "hallucination_breakdown": {
+          "entity": 1,
+          "relation_action": 0,
+          "fabrication": 3
+        },
+        "weighted_hallucination_penalty_breakdown": {
+          "entity": 0.8,
+          "relation_action": 0,
+          "fabrication": 11.0
+        },
+        "claims": [
+          {
+            "claim_id": "1",
+            "claim_text": "Transformer架构的计算复杂度呈现 O(n^2)，Attention Budget的分配效率随上下文长度增加而下降。",
+            "claim_type": "technical",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料明确指出，Transformer架构的$n^2$复杂度限制导致长上下文的注意力被稀释。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          },
+          {
+            "claim_id": "2",
+            "claim_text": "模型实际能处理的可靠上下文容量通常低于理论宣传值。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 90,
+            "evidence": "参考资料未提及模型实际处理的上下文容量低于理论值。",
+            "reason": "该声明未在参考资料中找到相关信息，且属于重要事实的捏造。"
+          },
+          {
+            "claim_id": "3",
+            "claim_text": "业界提出了四象限框架作为主流的Context Engineering方法，包括Write、Select、Compress和Isolate四个层次。",
+            "claim_type": "technical",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料明确列出了四象限框架（Write、Select、Compress、Isolate）作为主流方法。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          },
+          {
+            "claim_id": "4",
+            "claim_text": "Select层被认为是2026年性价比最高的优化方向。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料指出Select层是性价比最高的一层。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          },
+          {
+            "claim_id": "5",
+            "claim_text": "开源记忆生态提供了四层防御机制以应对上下文污染问题，包括数据结构层、Contract层、版本化层和心理模型层。",
+            "claim_type": "technical",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到四层防御机制包括数据结构层、契约层、版本化层和心理模型层。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          },
+          {
+            "claim_id": "6",
+            "claim_text": "Graph Pie中的Graffiti通过时间戳和因果边管理事实，优化目标从“Tokens per request”转向“Tokens per task”。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "contradicted",
+            "hallucination_type": "entity",
+            "confidence": 95,
+            "evidence": "参考资料提到Graphiti（Graph派）而非Graffiti，且未提到“Tokens per task”的优化目标。",
+            "reason": "声明中的实体名称和优化目标与参考资料不符。"
+          },
+          {
+            "claim_id": "7",
+            "claim_text": "Git-backed memory实现上下文存储校验和版本管理。",
+            "claim_type": "technical",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 90,
+            "evidence": "参考资料未提及Git-backed memory的上下文存储校验和版本管理。",
+            "reason": "该声明未在参考资料中找到相关信息，且属于重要事实的捏造。"
+          },
+          {
+            "claim_id": "8",
+            "claim_text": "Leta公司从MemGPT核心记忆转向File System范式的产品迭代。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到Letta（Filesystem派）作为开源记忆生态的一部分。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          },
+          {
+            "claim_id": "9",
+            "claim_text": "Anthropic的Progressive Disclosure方法通过逐步披露信息优化Agent技能的上下文维护能力。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 90,
+            "evidence": "参考资料未提及Anthropic的Progressive Disclosure方法。",
+            "reason": "该声明未在参考资料中找到相关信息，且属于重要事实的捏造。"
+          },
+          {
+            "claim_id": "10",
+            "claim_text": "Opus 4.7的Task Budgets机制内建调度优化Token预算管理。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到Opus 4.7引入了Task Budgets机制。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          },
+          {
+            "claim_id": "11",
+            "claim_text": "上下文维护方案的演进将从容量问题转向认知选择问题。",
+            "claim_type": "technical",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料总结指出上下文维护的演进将从容量问题转向认知管理问题。",
+            "reason": "参考资料直接支持了该声明的内容。"
+          }
+        ]
+      }
+    },
+    "task": {
+      "label": "pass",
+      "score": 1.0,
+      "details": "",
+      "metrics": {
+        "score": 1.0,
+        "label": "pass",
+        "details": "",
+        "requirement_count": 6,
+        "total_requirement_importance": 28,
+        "satisfied_requirement_count": 6,
+        "partial_requirement_count": 0,
+        "unsatisfied_requirement_count": 0,
+        "satisfied_requirement_importance": 28,
+        "partial_requirement_importance": 0,
+        "unsatisfied_requirement_importance": 0,
+        "coverage_ratio": 1.0,
+        "judge_confidence": 0.9083,
+        "requirements": [
+          {
+            "requirement_id": "1",
+            "requirement_text": "总结视频中关于长上下文面临的本质问题，并明确阐述其核心挑战。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 95,
+            "evidence": "总结中明确提到长上下文的核心挑战，包括数学约束与复杂性、Context Rot现象以及实际性能与理论值的差距。",
+            "reason": "生成总结清晰地阐述了长上下文面临的本质问题，并详细说明了核心挑战，符合要求。"
+          },
+          {
+            "requirement_id": "2",
+            "requirement_text": "介绍业界的四象限框架及其优先级，确保包含具体的英文名称。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "总结中介绍了四象限框架的结构（Write、Select、Compress、Isolate）及其优先级排序，且包含具体的英文名称。",
+            "reason": "生成总结完整地介绍了四象限框架及其优先级，包含具体的英文名称，满足要求。"
+          },
+          {
+            "requirement_id": "3",
+            "requirement_text": "详述开源记忆生态与上下文污染的四层防御机制，确保包含具体的层级名称。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 95,
+            "evidence": "总结中详述了开源记忆生态的四层防御机制，包括数据结构层、Contract层、版本化层和心理模型层，并提供了具体的层级名称。",
+            "reason": "生成总结详细描述了四层防御机制及其具体层级名称，完全满足要求。"
+          },
+          {
+            "requirement_id": "4",
+            "requirement_text": "总结2026年前沿技术信号，并给出最终结论，强调‘上下文维护是认知问题而非容量问题’的观点。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "总结中提到2026年前沿技术信号（如Leta公司、Anthropic的Progressive Disclosure方法等）并给出最终结论，强调‘上下文维护是认知问题而非容量问题’的观点。",
+            "reason": "生成总结准确总结了前沿技术信号并明确给出结论，符合要求。"
+          },
+          {
+            "requirement_id": "5",
+            "requirement_text": "确保摘要中不遗漏核心的专有名词和关键术语。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 85,
+            "evidence": "总结中提到的专有名词和关键术语包括Transformer架构、Attention Budget、Context Rot、四象限框架、Graph Pie、MemGPT等。",
+            "reason": "生成总结未遗漏核心专有名词和关键术语，满足要求。"
+          },
+          {
+            "requirement_id": "6",
+            "requirement_text": "准确传达视频中关于上下文维护的核心思想和逻辑关系。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "总结中清晰传达了上下文维护的核心思想（如从容量问题转向认知选择问题）及其逻辑关系（如四象限框架的优先级排序和开源生态的防御机制）。",
+            "reason": "生成总结准确传达了上下文维护的核心思想和逻辑关系，符合要求。"
+          }
+        ]
+      }
+    }
+  },
+  "timing": {
+    "analyze_ms": 108785,
+    "finalize_ms": 59151,
+    "total_ms": 189482
+  }
+}

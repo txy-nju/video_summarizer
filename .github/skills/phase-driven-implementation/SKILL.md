@@ -291,7 +291,7 @@ When implementing backend steps here, preserve these rules:
 ## Example Prompts
 
 - `/phase-driven-implementation 按项目修改计划先实现步骤1，搭好 FastAPI 骨架`
-- `/phase-driven-implementation 根据 analysis/项目修改计划 实现步骤3 的数据库模型和 Alembic 迁移`
+- `/phase-driven-implementation 根据 docs/analysis/项目修改计划 实现步骤3 的数据库模型和 Alembic 迁移`
 - `/phase-driven-implementation 严格按计划推进，只做步骤4里的知识库 API 和对应 schema`
 - `/phase-driven-implementation 实现当前计划里下一步最小可执行切片，并完成验证`
 - `/phase-driven-implementation 继续实现下一步` (user explicitly requests next step after previous completion)

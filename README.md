@@ -147,7 +147,13 @@ video_summarizer/
 ├── tests/
 │   ├── core/
 │   └── integration/
-├── analysis/
+├── docs/
+│   ├── analysis/
+│   ├── evaluation/
+│   │   └── reports/
+│   ├── DEV_SPEC.md
+│   ├── OBSERVABILITY_RUNBOOK_CN.md
+│   └── FRONTEND_BACKEND_API_INTERFACE_CN.md
 ├── temp/
 ├── test_output/
 ├── cookies.txt
@@ -416,27 +422,27 @@ print(answer)
 ### 2. 运行离线批量评估
 
 ```bash
-python scripts/run_eval.py --dataset evaluation/datasets/core_set.json --output-dir evaluation/reports
+python scripts/run_eval.py --dataset evaluation/datasets/core_set.json --output-dir docs/evaluation/reports
 ```
 
 常用参数：
 
 - `--max-samples 5`：只跑前 5 个启用样本
 - `--sample-ids id1,id2`：只跑指定样本
-- `--baseline-report evaluation/reports/<baseline_run>/report.json`：生成基础分数对比
+- `--baseline-report docs/evaluation/reports/<baseline_run>/report.json`：生成基础分数对比
 
 运行后将生成：
 
-- `evaluation/reports/<run_id>/report.json`
-- `evaluation/reports/<run_id>/report.md`
-- `evaluation/reports/<run_id>/samples/<sample_id>/final_summary.md`
+- `docs/evaluation/reports/<run_id>/report.json`
+- `docs/evaluation/reports/<run_id>/report.md`
+- `docs/evaluation/reports/<run_id>/samples/<sample_id>/final_summary.md`
 
 ### 3. 对比两次评估结果
 
 ```bash
 python scripts/compare_eval_reports.py \
-    --current evaluation/reports/<current_run>/report.json \
-    --baseline evaluation/reports/<baseline_run>/report.json
+    --current docs/evaluation/reports/<current_run>/report.json \
+    --baseline docs/evaluation/reports/<baseline_run>/report.json
 ```
 
 默认会在当前报告目录输出：

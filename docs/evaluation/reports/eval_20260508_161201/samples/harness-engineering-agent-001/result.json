@@ -1,0 +1,332 @@
+{
+  "sample_id": "harness-engineering-agent-001",
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/专业祛魅：Harness是什么，怎么学.mp4",
+  "review_package": {
+    "thread_id": "eval-eval_20260508_161201-harness-engineering-agent-001",
+    "stage": "pending_human_review",
+    "human_gate_status": "pending",
+    "human_gate_reason": "human_review_required",
+    "aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 3\n- user_focus: 请总结视频中关于 Harness Engineering 的核心定义、大厂实践案例（特别是 LangChain 和 Anthropic 的架构设计），并结合我们日常构建的多智能体工作流（如基于 LangGraph）提出相关的进阶追问探讨。\n\n## chunk-000 [00:00 - 03:35]\n### chunk_summary\nHarness Engineering 是一种提升 AI Agent 可靠性的工程方法，旨在通过机制设计避免重复错误。视频提到 Anthropic 的实践案例，通过任务分解和多个 Coding Agent 接力完成复杂任务，解决上下文长度限制问题，但增加了 token 消耗。视觉内容补充了该概念的背景，强调其与 Prompt Engineering 和 Context Engineering 的关系，但未具体涉及 LangChain 或 Anthropic 的架构设计。\n\n结合日常基于 LangGraph 的多智能体工作流，可提出以下进阶探讨：\n1. 如何优化任务分解策略以减少 token 消耗？\n2. 是否能通过共享上下文或缓存机制提升 Agent 协作效率？\n3. 在 Harness Engineering 框架下，如何动态调整 Agent 的任务分配以适应实时需求？\n### audio_insights\n{'harness_engineering_definition': 'Harness Engineering 是一种提升 AI Agent 可靠性的工程思维，包含多种技巧，旨在通过机制设计避免重复错误。', 'examples_from_large_companies': [{'company': 'Anthropic', 'practice': '通过任务分解和多个 Coding Agent 接力完成大任务，解决上下文长度限制问题，但增加了 token 消耗。'}], 'advanced_questions': ['在基于 LangGraph 的多智能体工作流中，如何优化任务分解策略以减少 token 消耗？', '是否可以通过共享上下文或缓存机制，进一步提升多个 Agent 协作的效率？', '如何在 Harness Engineering 的框架下，动态调整 Agent 的任务分配以适应实时变化的需求？']}\n### vision_insights\nThe video introduces 'Harness Engineering' as a new concept related to 'Prompt Engineering' and 'Context Engineering'. The presenter highlights its novelty and potential unfamiliarity to the audience. Additionally, the video references an article discussing the use of agents, with a webpage titled 'My AI Adoption Journey' providing further insights. Specific practices or architectural designs from LangChain and Anthropic are not mentioned in this segment, and there is insufficient evidence to address the user's query about multi-agent workflows or advanced discussions.\n\n## chunk-001 [03:35 - 07:08]\n### chunk_summary\nHarness Engineering 是一种通过优化架构设计和技术手段提升智能体任务完成质量和可靠性的工程方法。其核心理念可类比为“运动员 + 裁判”的架构设计，强调生成与评估的协同作用。\n\n### 核心定义与大厂实践案例：\n1. **定义**：\n   - 强调通过生成器（运动员）和评估器（裁判）的协作，提升任务完成度和内容质量。\n   - 适用于长期运行的智能体应用。\n\n2. **大厂实践**：\n   - **Anthropic**：\n     - 采用生成器评估器架构，强调多轮对抗和循环提升质量。\n     - 裁判器包含多种评估指标（如准确性和工程效力）及规则工具，适合探索性和创新性任务。\n   - **OpenAI**：\n     - 利用 AI 生成代码并优化代码管理流程，适合大规模代码生成和生产应用。\n   - **LangChain**：\n     - 通过记录执行轨迹和中间件优化任务完成度，适合多智能体工作流的任务优化。\n\n### 进阶探讨问题：\n1. 在多智能体工作流中，如何平衡生成器和评估器的资源分配以避免性能瓶颈？\n2. LangChain 的中间件设计是否可以扩展为动态调整任务优先级的机制？\n3. Anthropic 的生成器评估器架构是否适用于实时性要求较高的任务场景？\n4. 如何在基于 LangGraph 的工作流中集成 Anthropic 的裁判器设计以优化智能体协作效率？\n### audio_insights\n{'Harness Engineering': {'definition': '使用各种方法和技巧提升智能体（Agent）的可靠性和任务完成质量。', 'Anthropic_case': {'approach': '生成器评估器架构，强调多轮对抗和循环提升质量。', 'suitability': '适合探索性和创新性任务。'}, 'OpenAI_case': {'approach': '通过AI生成代码并优化代码管理和问题排查流程。', 'suitability': '适合大规模代码生成和生产应用。'}, 'LangChain_case': {'approach': '通过记录执行轨迹和中间件优化任务完成度。', 'suitability': '适合多智能体工作流的任务优化。'}}, 'advanced_questions': ['在多智能体工作流中，如何平衡生成器和评估器的资源分配以避免性能瓶颈？', 'LangChain的中间件设计是否可以进一步扩展为动态调整任务优先级的机制？', 'Anthropic的生成器评估器架构是否适用于实时性要求较高的任务场景？']}\n### vision_insights\n{'definition': \"Harness Engineering 是一种专注于长期运行应用开发的设计方法，强调通过 '运动员 + 裁判' 的架构设计来实现高效的内容生成与评估。\", 'practice_cases': {'LangChain': '未在当前分片中提及。', 'Anthropic': \"提出了基于 '运动员 + 裁判' 原理的架构设计，裁判器的设置包括多种评估指标（如准确性、工程效力）、Playwright 工具、以及面向方向的规则。\"}, 'advanced_questions': [\"如何在多智能体工作流中有效实现 '运动员 + 裁判' 的架构设计？\", '裁判器的评估指标是否可以动态调整以适应不同任务需求？', '如何在基于 LangGraph 的工作流中集成 Anthropic 的裁判器设计以优化智能体协作效率？']}\n\n## chunk-002 [07:08 - 10:41]\n### chunk_summary\nHarness Engineering 是一种通过分层框架设计提升模型运行效率和可靠性的工程方法，涵盖提示词工程、上下文工程以及更广泛的模块化架构设计（如评估器、Hook、记忆和中间件）。它在使用小模型或过时模型时尤为重要，可弥补模型能力不足，并随着模型能力增强而动态调整以应对新问题。\n\n关于大厂实践案例，Anthropic 的架构设计强调任务分解和多个 Coding Agent 的接力机制，以解决复杂任务和上下文长度限制问题。LangChain 的设计可能结合提示词工程和上下文工程，通过模块化实现多智能体协作，但未明确提供具体细节。\n\n结合日常构建的多智能体工作流（如基于 LangGraph），可进一步探讨以下问题：\n1. 如何设计更高效的 Harness 框架以优化任务分解和上下文管理？\n2. 是否可以通过强化学习优化评估器表现，从而提升 Harness 整体效能？\n3. 随着模型能力增强，如何动态调整 Harness 技巧以避免资源浪费并适应新问题？\n### audio_insights\n{'core_definitions': ['Harness Engineering 是一种围绕模型运行所构建的外层框架，涵盖提示词工程和上下文工程，并进一步扩展到更广泛的框架设计。', '提示词工程、上下文工程和 Harness Engineering 是随着模型应用深入而逐步演进的工程方法。'], 'practical_examples': ['Harness Engineering 在使用小模型或过时模型时尤为重要，能够弥补模型能力的不足。', '尽管模型能力增强可能淘汰部分 Harness 技巧，但整体需求会因新问题的出现而持续存在。'], 'LangChain_and_Anthropic': '本分片未提供新的 LangChain 或 Anthropic 案例细节，仅从 previous_chunk_summaries 中得知 Anthropic 的实践涉及任务分解和 Coding Agent 接力机制。LangChain 尚未明确提及。', 'advanced_questions': ['在多智能体工作流（如基于 LangGraph）中，如何设计更高效的 Harness 框架以应对复杂任务分解和上下文管理的挑战？', '随着模型能力增强，如何动态调整 Harness 技巧以适应新问题，同时避免资源浪费？']}\n### vision_insights\n{'core_definition': 'Harness Engineering 是一种通过分层框架设计提升模型运行效率和可靠性的工程方法，包含评估器、Hook、记忆和中间件等模块。', 'practical_examples': ['LangChain 的架构设计可能涉及提示词工程和上下文工程的结合，通过模块化设计实现多智能体协作。', 'Anthropic 的实践案例强调任务分解和多个 Coding Agent 的接力，解决复杂任务和上下文长度限制问题。'], 'advanced_questions': ['如何在多智能体工作流中有效结合提示词工程和上下文工程以优化任务分配和协作效率？', '在使用 LangGraph 构建工作流时，如何设计和优化 Harness 的分层框架以适应动态任务需求？', '是否可以通过强化学习进一步优化评估器的表现，从而提升 Harness 的整体效能？']}",
+    "editable_aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 3\n- user_focus: 请总结视频中关于 Harness Engineering 的核心定义、大厂实践案例（特别是 LangChain 和 Anthropic 的架构设计），并结合我们日常构建的多智能体工作流（如基于 LangGraph）提出相关的进阶追问探讨。\n\n## chunk-000 [00:00 - 03:35]\n### chunk_summary\nHarness Engineering 是一种提升 AI Agent 可靠性的工程方法，旨在通过机制设计避免重复错误。视频提到 Anthropic 的实践案例，通过任务分解和多个 Coding Agent 接力完成复杂任务，解决上下文长度限制问题，但增加了 token 消耗。视觉内容补充了该概念的背景，强调其与 Prompt Engineering 和 Context Engineering 的关系，但未具体涉及 LangChain 或 Anthropic 的架构设计。\n\n结合日常基于 LangGraph 的多智能体工作流，可提出以下进阶探讨：\n1. 如何优化任务分解策略以减少 token 消耗？\n2. 是否能通过共享上下文或缓存机制提升 Agent 协作效率？\n3. 在 Harness Engineering 框架下，如何动态调整 Agent 的任务分配以适应实时需求？\n### audio_insights\n{'harness_engineering_definition': 'Harness Engineering 是一种提升 AI Agent 可靠性的工程思维，包含多种技巧，旨在通过机制设计避免重复错误。', 'examples_from_large_companies': [{'company': 'Anthropic', 'practice': '通过任务分解和多个 Coding Agent 接力完成大任务，解决上下文长度限制问题，但增加了 token 消耗。'}], 'advanced_questions': ['在基于 LangGraph 的多智能体工作流中，如何优化任务分解策略以减少 token 消耗？', '是否可以通过共享上下文或缓存机制，进一步提升多个 Agent 协作的效率？', '如何在 Harness Engineering 的框架下，动态调整 Agent 的任务分配以适应实时变化的需求？']}\n### vision_insights\nThe video introduces 'Harness Engineering' as a new concept related to 'Prompt Engineering' and 'Context Engineering'. The presenter highlights its novelty and potential unfamiliarity to the audience. Additionally, the video references an article discussing the use of agents, with a webpage titled 'My AI Adoption Journey' providing further insights. Specific practices or architectural designs from LangChain and Anthropic are not mentioned in this segment, and there is insufficient evidence to address the user's query about multi-agent workflows or advanced discussions.\n\n## chunk-001 [03:35 - 07:08]\n### chunk_summary\nHarness Engineering 是一种通过优化架构设计和技术手段提升智能体任务完成质量和可靠性的工程方法。其核心理念可类比为“运动员 + 裁判”的架构设计，强调生成与评估的协同作用。\n\n### 核心定义与大厂实践案例：\n1. **定义**：\n   - 强调通过生成器（运动员）和评估器（裁判）的协作，提升任务完成度和内容质量。\n   - 适用于长期运行的智能体应用。\n\n2. **大厂实践**：\n   - **Anthropic**：\n     - 采用生成器评估器架构，强调多轮对抗和循环提升质量。\n     - 裁判器包含多种评估指标（如准确性和工程效力）及规则工具，适合探索性和创新性任务。\n   - **OpenAI**：\n     - 利用 AI 生成代码并优化代码管理流程，适合大规模代码生成和生产应用。\n   - **LangChain**：\n     - 通过记录执行轨迹和中间件优化任务完成度，适合多智能体工作流的任务优化。\n\n### 进阶探讨问题：\n1. 在多智能体工作流中，如何平衡生成器和评估器的资源分配以避免性能瓶颈？\n2. LangChain 的中间件设计是否可以扩展为动态调整任务优先级的机制？\n3. Anthropic 的生成器评估器架构是否适用于实时性要求较高的任务场景？\n4. 如何在基于 LangGraph 的工作流中集成 Anthropic 的裁判器设计以优化智能体协作效率？\n### audio_insights\n{'Harness Engineering': {'definition': '使用各种方法和技巧提升智能体（Agent）的可靠性和任务完成质量。', 'Anthropic_case': {'approach': '生成器评估器架构，强调多轮对抗和循环提升质量。', 'suitability': '适合探索性和创新性任务。'}, 'OpenAI_case': {'approach': '通过AI生成代码并优化代码管理和问题排查流程。', 'suitability': '适合大规模代码生成和生产应用。'}, 'LangChain_case': {'approach': '通过记录执行轨迹和中间件优化任务完成度。', 'suitability': '适合多智能体工作流的任务优化。'}}, 'advanced_questions': ['在多智能体工作流中，如何平衡生成器和评估器的资源分配以避免性能瓶颈？', 'LangChain的中间件设计是否可以进一步扩展为动态调整任务优先级的机制？', 'Anthropic的生成器评估器架构是否适用于实时性要求较高的任务场景？']}\n### vision_insights\n{'definition': \"Harness Engineering 是一种专注于长期运行应用开发的设计方法，强调通过 '运动员 + 裁判' 的架构设计来实现高效的内容生成与评估。\", 'practice_cases': {'LangChain': '未在当前分片中提及。', 'Anthropic': \"提出了基于 '运动员 + 裁判' 原理的架构设计，裁判器的设置包括多种评估指标（如准确性、工程效力）、Playwright 工具、以及面向方向的规则。\"}, 'advanced_questions': [\"如何在多智能体工作流中有效实现 '运动员 + 裁判' 的架构设计？\", '裁判器的评估指标是否可以动态调整以适应不同任务需求？', '如何在基于 LangGraph 的工作流中集成 Anthropic 的裁判器设计以优化智能体协作效率？']}\n\n## chunk-002 [07:08 - 10:41]\n### chunk_summary\nHarness Engineering 是一种通过分层框架设计提升模型运行效率和可靠性的工程方法，涵盖提示词工程、上下文工程以及更广泛的模块化架构设计（如评估器、Hook、记忆和中间件）。它在使用小模型或过时模型时尤为重要，可弥补模型能力不足，并随着模型能力增强而动态调整以应对新问题。\n\n关于大厂实践案例，Anthropic 的架构设计强调任务分解和多个 Coding Agent 的接力机制，以解决复杂任务和上下文长度限制问题。LangChain 的设计可能结合提示词工程和上下文工程，通过模块化实现多智能体协作，但未明确提供具体细节。\n\n结合日常构建的多智能体工作流（如基于 LangGraph），可进一步探讨以下问题：\n1. 如何设计更高效的 Harness 框架以优化任务分解和上下文管理？\n2. 是否可以通过强化学习优化评估器表现，从而提升 Harness 整体效能？\n3. 随着模型能力增强，如何动态调整 Harness 技巧以避免资源浪费并适应新问题？\n### audio_insights\n{'core_definitions': ['Harness Engineering 是一种围绕模型运行所构建的外层框架，涵盖提示词工程和上下文工程，并进一步扩展到更广泛的框架设计。', '提示词工程、上下文工程和 Harness Engineering 是随着模型应用深入而逐步演进的工程方法。'], 'practical_examples': ['Harness Engineering 在使用小模型或过时模型时尤为重要，能够弥补模型能力的不足。', '尽管模型能力增强可能淘汰部分 Harness 技巧，但整体需求会因新问题的出现而持续存在。'], 'LangChain_and_Anthropic': '本分片未提供新的 LangChain 或 Anthropic 案例细节，仅从 previous_chunk_summaries 中得知 Anthropic 的实践涉及任务分解和 Coding Agent 接力机制。LangChain 尚未明确提及。', 'advanced_questions': ['在多智能体工作流（如基于 LangGraph）中，如何设计更高效的 Harness 框架以应对复杂任务分解和上下文管理的挑战？', '随着模型能力增强，如何动态调整 Harness 技巧以适应新问题，同时避免资源浪费？']}\n### vision_insights\n{'core_definition': 'Harness Engineering 是一种通过分层框架设计提升模型运行效率和可靠性的工程方法，包含评估器、Hook、记忆和中间件等模块。', 'practical_examples': ['LangChain 的架构设计可能涉及提示词工程和上下文工程的结合，通过模块化设计实现多智能体协作。', 'Anthropic 的实践案例强调任务分解和多个 Coding Agent 的接力，解决复杂任务和上下文长度限制问题。'], 'advanced_questions': ['如何在多智能体工作流中有效结合提示词工程和上下文工程以优化任务分配和协作效率？', '在使用 LangGraph 构建工作流时，如何设计和优化 Harness 的分层框架以适应动态任务需求？', '是否可以通过强化学习进一步优化评估器的表现，从而提升 Harness 的整体效能？']}",
+    "human_guidance": "",
+    "chunk_count": 3
+  },
+  "judge": {
+    "fact": {
+      "label": "warn",
+      "score": 0.6369,
+      "details": "",
+      "metrics": {
+        "score": 0.6369,
+        "label": "warn",
+        "details": "",
+        "claim_count": 18,
+        "total_claim_importance": 73,
+        "supported_claim_count": 10,
+        "contradicted_claim_count": 0,
+        "not_mentioned_claim_count": 8,
+        "supported_claim_importance": 42,
+        "contradicted_claim_importance": 0,
+        "not_mentioned_claim_importance": 31,
+        "support_ratio": 0.5753,
+        "judge_confidence": 0.8611,
+        "hallucination_density": 0.4444,
+        "weighted_hallucination_density": 0.4247,
+        "weighted_penalty": 31.0,
+        "capped_weighted_hallucination_density": 0.35,
+        "hallucination_breakdown": {
+          "entity": 0,
+          "relation_action": 0,
+          "fabrication": 8
+        },
+        "weighted_hallucination_penalty_breakdown": {
+          "entity": 0,
+          "relation_action": 0,
+          "fabrication": 31.0
+        },
+        "claims": [
+          {
+            "claim_id": "1",
+            "claim_text": "Harness Engineering 是一种通过分层框架设计提升 AI Agent 运行效率和可靠性的工程方法。",
+            "claim_type": "definition",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 95,
+            "evidence": "参考资料明确指出，Harness Engineering 是通过构建外层脚手架框架提升 AI Agent 运行效率和可靠性的一系列工程技巧的总称。",
+            "reason": "参考资料中对 Harness Engineering 的定义与该 claim 一致。"
+          },
+          {
+            "claim_id": "2",
+            "claim_text": "Harness Engineering 的目标是通过机制设计避免重复错误，优化任务完成质量。",
+            "claim_type": "definition",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 95,
+            "evidence": "参考资料提到，Harness Engineering 的目标是构建机制防止 Agent 重复犯错，优化任务完成质量。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "3",
+            "claim_text": "Harness Engineering 包含生成器与评估器架构、模块化设计和动态调整能力等关键特性。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Harness Engineering 包含模块化设计和动态调整能力等特性。",
+            "reason": "该 claim 中的具体特性未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "4",
+            "claim_text": "生成器与评估器架构类似于“运动员 + 裁判”的协作模式，生成器负责内容生成，评估器负责质量把控。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到生成器与评估器架构的功能分工，生成器负责内容生成，评估器负责质量把控。",
+            "reason": "参考资料中对生成器与评估器的描述与该 claim 一致。"
+          },
+          {
+            "claim_id": "5",
+            "claim_text": "Harness Engineering 的模块化设计涵盖提示词工程、上下文工程、评估器、Hook、记忆和中间件等技术。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Harness Engineering 的模块化设计涵盖提示词工程、上下文工程、评估器、Hook、记忆和中间件等技术。",
+            "reason": "该 claim 中的具体技术范围未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "6",
+            "claim_text": "Harness Engineering 能够根据模型能力和任务需求进行实时优化。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Harness Engineering 能够根据模型能力和任务需求进行实时优化。",
+            "reason": "该 claim 的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "7",
+            "claim_text": "Harness Engineering 是 Prompt Engineering 和 Context Engineering 的延伸。",
+            "claim_type": "definition",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 Harness Engineering 是提示词工程和上下文工程的自然演进。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "8",
+            "claim_text": "Harness Engineering 适用于长期运行的智能体应用。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Harness Engineering 适用于长期运行的智能体应用。",
+            "reason": "该 claim 的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "9",
+            "claim_text": "Harness Engineering 在使用小模型或过时模型时尤为重要，能够弥补模型能力不足。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Harness Engineering 在使用小模型或过时模型时尤为重要。",
+            "reason": "该 claim 的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "10",
+            "claim_text": "Anthropic 采用了生成器与评估器的协作架构，强调多轮对抗和循环提升质量。",
+            "claim_type": "case_study",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 Anthropic 采用生成器与评估器的循环修正架构，强调多轮对抗和质量提升。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "11",
+            "claim_text": "Anthropic 的裁判器（评估器）包含多种评估指标，如准确性和工程效力。",
+            "claim_type": "case_study",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Anthropic 的评估器包含多种评估指标，如准确性和工程效力。",
+            "reason": "该 claim 的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "12",
+            "claim_text": "Anthropic 通过任务分解和多个 Coding Agent 的接力机制，解决复杂任务和上下文长度限制问题。",
+            "claim_type": "case_study",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 Anthropic 通过任务分解和多个小 Agent 的接力机制解决复杂任务和上下文长度限制问题。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "13",
+            "claim_text": "Anthropic 的设计在提升可靠性的同时，也增加了 token 消耗。",
+            "claim_type": "case_study",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 Anthropic 的设计增加了 token 消耗。",
+            "reason": "该 claim 的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "14",
+            "claim_text": "LangChain 通过记录执行轨迹和中间件设计，优化任务完成度。",
+            "claim_type": "case_study",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 LangChain 通过记录执行轨迹和中间件设计优化任务完成度。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "15",
+            "claim_text": "LangChain 的设计适用于动态任务分配和复杂任务优化。",
+            "claim_type": "case_study",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 80,
+            "evidence": "参考资料未提到 LangChain 的设计适用于动态任务分配和复杂任务优化。",
+            "reason": "该 claim 的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "16",
+            "claim_text": "Harness Engineering 的核心在于通过生成器与评估器的协作，结合模块化设计，提升任务完成质量与可靠性。",
+            "claim_type": "conclusion",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 Harness Engineering 的核心是通过生成器与评估器的协作，结合模块化设计，提升任务完成质量与可靠性。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "17",
+            "claim_text": "Anthropic 的生成器评估器架构和任务分解策略，为复杂任务的解决提供了高效方案。",
+            "claim_type": "conclusion",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 Anthropic 的生成器评估器架构和任务分解策略为复杂任务的解决提供了高效方案。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          },
+          {
+            "claim_id": "18",
+            "claim_text": "LangChain 的模块化设计展示了在多智能体工作流中的潜力。",
+            "claim_type": "conclusion",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 90,
+            "evidence": "参考资料提到 LangChain 的模块化设计展示了在多智能体工作流中的潜力。",
+            "reason": "参考资料明确支持该 claim 的内容。"
+          }
+        ]
+      }
+    },
+    "task": {
+      "label": "warn",
+      "score": 0.7163,
+      "details": "",
+      "metrics": {
+        "score": 0.7163,
+        "label": "warn",
+        "details": "",
+        "requirement_count": 6,
+        "total_requirement_importance": 27,
+        "satisfied_requirement_count": 2,
+        "partial_requirement_count": 3,
+        "unsatisfied_requirement_count": 1,
+        "satisfied_requirement_importance": 10,
+        "partial_requirement_importance": 13,
+        "unsatisfied_requirement_importance": 4,
+        "coverage_ratio": 0.7074,
+        "judge_confidence": 0.7667,
+        "requirements": [
+          {
+            "requirement_id": "1",
+            "requirement_text": "总结视频中关于 Harness Engineering 的核心定义。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 95,
+            "evidence": "生成总结中明确定义了 Harness Engineering 的核心概念，包括其目标、关键特性（如生成器与评估器架构、模块化设计、动态调整能力）以及其作为 Prompt Engineering 和 Context Engineering 的延伸。",
+            "reason": "总结清晰地描述了 Harness Engineering 的定义和核心特性，符合任务要求。"
+          },
+          {
+            "requirement_id": "2",
+            "requirement_text": "总结视频中关于大厂实践案例，特别是 LangChain 和 Anthropic 的架构设计。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "总结详细分析了 Anthropic 和 LangChain 的架构设计，包括生成器评估器循环、任务分解与协作、模块化设计和任务优化机制。",
+            "reason": "总结涵盖了大厂实践案例的核心内容，特别是 Anthropic 和 LangChain 的架构设计，满足任务要求。"
+          },
+          {
+            "requirement_id": "3",
+            "requirement_text": "结合日常构建的多智能体工作流（如基于 LangGraph），提出相关的进阶追问探讨。",
+            "importance": 4,
+            "status": "partial",
+            "confidence": 75,
+            "evidence": "总结提出了一些与 LangGraph 相关的进阶探讨问题，如任务分解与资源优化、生成器与评估器的协作优化，但未具体结合日常构建的多智能体工作流进行详细分析。",
+            "reason": "虽然提出了相关探讨问题，但缺乏与日常多智能体工作流的具体结合和深入分析，部分满足任务要求。"
+          },
+          {
+            "requirement_id": "4",
+            "requirement_text": "探讨如何将 Anthropic 的“生成器-评估器”循环迁移到 LangGraph 状态图中，并设计评估节点的 State 以避免 Token 消耗过载。",
+            "importance": 4,
+            "status": "partial",
+            "confidence": 70,
+            "evidence": "总结提到 Anthropic 的生成器评估器循环和裁判器设计，但未具体探讨如何将其迁移到 LangGraph 状态图中，也未设计评估节点的 State 来避免 Token 消耗过载。",
+            "reason": "总结未提供具体的迁移方案和评估节点设计，仅部分满足任务要求。"
+          },
+          {
+            "requirement_id": "5",
+            "requirement_text": "分析视频中提到的 LangChain 中间件 Hook 机制，并探讨如何在模块化系统中优雅地插入这些 Hook 卡点。",
+            "importance": 4,
+            "status": "unsatisfied",
+            "confidence": 60,
+            "evidence": "总结提到 LangChain 的模块化设计和中间件优化，但未具体分析 LangChain 中间件 Hook 机制，也未探讨如何优雅地插入这些 Hook 卡点。",
+            "reason": "总结未涉及 LangChain 中间件 Hook 机制的具体分析，未满足任务要求。"
+          },
+          {
+            "requirement_id": "6",
+            "requirement_text": "探讨如何应对模型能力增强导致旧 Harness 技巧失效的风险，并设计底座架构以保持外部约束逻辑与核心链路的解耦。",
+            "importance": 5,
+            "status": "partial",
+            "confidence": 70,
+            "evidence": "总结提到 Harness Engineering 能动态调整以应对模型能力增强，但未具体探讨如何应对旧技巧失效的风险，也未设计底座架构以保持外部约束逻辑与核心链路的解耦。",
+            "reason": "总结提及动态调整能力，但未深入分析风险应对和底座架构设计，仅部分满足任务要求。"
+          }
+        ]
+      }
+    }
+  },
+  "timing": {
+    "analyze_ms": 265336,
+    "finalize_ms": 67416,
+    "total_ms": 388982
+  }
+}

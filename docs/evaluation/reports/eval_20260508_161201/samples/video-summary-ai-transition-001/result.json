@@ -1,0 +1,301 @@
+{
+  "sample_id": "video-summary-ai-transition-001",
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/分享我转 AI 方向的学习路径和工作转变.mp4",
+  "review_package": {
+    "thread_id": "eval-eval_20260508_161201-video-summary-ai-transition-001",
+    "stage": "pending_human_review",
+    "human_gate_status": "pending",
+    "human_gate_reason": "human_review_required",
+    "aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 4\n- user_focus: 本地视频场景下，请按照“学习路径与核心技术”、“企业工作模式转变”以及“AI焦虑应对”的结构进行归纳，并模拟人类对视频核心技术点的询问和追问。\n\n## chunk-000 [00:00 - 03:51]\n### chunk_summary\n**学习路径与核心技术**  \n作者从Web3后端开发转向AI领域，学习路径基于工作需求展开，重点关注Agent Workflow、Tool调用、Prompt/Skill、MCP Server、RAG等技术，并通过官方文档和实践课程加深理解。视频中提到这些技术点的具体应用和学习方式。\n\n**企业工作模式转变**  \n作者的工作模式从Web3开发转向AI系统设计，任务从结合DeFi的AI agent开发转变为更广泛的技术学习与系统设计，同时探索个人兴趣领域并找到适合的方法。\n\n**AI焦虑应对**  \n作者提到AI焦虑是普遍现象，暗示可能会分享应对方法或个人经验，但当前分片未具体展开。\n\n**模拟人类询问与追问**  \n1. 关于学习路径：为什么选择这些具体技术点作为学习重点？它们在实际工作中如何发挥作用？  \n2. 关于工作模式转变：从Web3到AI的转变过程中，遇到的最大挑战是什么？如何克服？  \n3. 关于AI焦虑：能否具体分享一些应对AI焦虑的策略或个人经验？\n### audio_insights\n{'learning_path_and_core_technologies': '作者从web3后端开发转向AI方向，学习路径围绕工作需求展开，重点学习了Agent workflow、Tool调用、Languages框架等技术，并通过官方文档和实践课程加深理解。', 'enterprise_work_mode_transformation': '工作模式从web3开发转向AI系统设计，任务从开发结合DeFi的AI agent转变为更广泛的技术学习和系统设计。', 'ai_anxiety_response': '作者提到会分享对AI焦虑的看法，但当前分片未具体展开，证据不足。'}\n### vision_insights\n{'学习路径与核心技术': '视频提到学习AI相关的内容，包括Agent Workflow、Tool Calling、Prompt/Skill、MCP Server、RAG等技术点。', '企业工作模式转变': '讲述了从后端开发到AI方向的工作转变，探索个人兴趣领域的机会，并找到适合的方法。', 'AI焦虑应对': '提到AI焦虑是每个人都在经历的事，暗示可能会分享应对方法或个人经验。'}\n\n## chunk-001 [03:51 - 07:42]\n### chunk_summary\n### 学习路径与核心技术\n视频强调了学习 AI 技术的路径，包括 OpenAI Cookbook、Anthropic Tool use API 和 LangGraph 官方文档。这些资源覆盖了 Tool Calling、会话持久化和 Agent 技术的核心知识，推荐了 prompt 和 skill 工程的最佳实践指南。音频补充了注册、持久化和 Memory 技术的具体应用。\n\n**追问建议**：\n- Tool Calling 的底层执行具体如何实现？\n- LangGraph 的持久化技术在实际应用中有哪些典型场景？\n\n---\n\n### 企业工作模式转变\n视频展示了企业从传统后端业务组转向 AI 组后的工作模式变化，涉及全局状态、Prompt/Skill、MGP Server 和 RAG 等模块。这些模块显示了 AI 技术如何与工程实践结合，解决稳定性和团队级 skill 开发的挑战。\n\n**追问建议**：\n- AI 与实际工程结合的模块中，哪些技术最适合企业转型？\n\n---\n\n### AI焦虑应对\n虽然视频未直接提到 AI 焦虑，但通过提供详细的学习路径和技术模块，帮助观众理解如何设计稳定的 skill，减少上下文膨胀问题，从而提升团队生产环境的结果质量。\n\n**追问建议**：\n- 如何通过优化上下文设计来缓解 AI 技术的复杂性？\n### audio_insights\n{'学习路径与核心技术': '视频中提到学习AI工具注册、持久化和Memory的相关技术，推荐OpenAI和Anthropic的资源，包括prompt和skill工程的最佳实践指南。', '企业工作模式转变': '讲述从后端业务组转到AI组后，工作视角和解决问题思路的变化，强调AI结合工程实践的稳定性和团队级别skill开发的挑战。', 'AI焦虑应对': '个人webcoding容错率高，但团队生产环境需要设计稳定的skill以减少上下文膨胀问题，提升结果质量。', '证据充足': True}\n### vision_insights\n{'学习路径与核心技术': '视频中提到的学习路径包括 OpenAI Cookbook 和 Anthropic 的 Tool use API，以及 LangGraph 的官方文档和视频。这些资源主要围绕 Tool Calling 和会话持久化技术展开，介绍了工具调用的定义、Agent 的关注点以及如何实现会话持久化。', '企业工作模式转变': '视频中提到的模块（如全局状态、Prompt / Skill、MGP Server 和 RAG）可能暗示了 AI 技术在企业工作模式中的整合方式，强调了实际工程中的应用。', 'AI焦虑应对': '虽然视频中未直接提到 AI 焦虑，但通过提供详细的学习路径和技术模块，可能旨在帮助观众更好地理解和应对 AI 技术带来的挑战。', '追问建议': ['Tool Calling 的底层执行具体如何实现？', 'LangGraph 的持久化技术在实际应用中有哪些典型场景？', 'AI 与实际工程结合的模块中，哪些技术最适合企业转型？']}\n\n## chunk-002 [07:42 - 11:33]\n### chunk_summary\n### 学习路径与核心技术\n音频和视频内容均详细介绍了Skill、MCP Server和RIG的核心概念及学习路径。Skill模块化功能用于任务知识的组织与测评，学习资源包括官方教程和实战示例。MCP Server作为AI时代的协议标准，提供了架构和使用方法的指导。RIG服务则用于知识库检索，相关学习资源包括Luncheon官方指南和测评资料。\n\n**模拟询问与追问：**\n- Skill模块化功能如何提升任务知识的组织效率？是否有具体的应用案例？\n- MCP Server的协议标准在实际企业环境中如何实现？有哪些常见的挑战？\n- RIG服务的知识库检索功能是否支持多语言？如何优化检索效率？\n\n### 企业工作模式转变\n音频提到企业AI团队的工作模式正在转变，主要集中于AI基建（如模型网关和权限控制）及内部AI工具（如知识库问答服务和Skill Hub）。视频内容未直接涉及相关内容。\n\n**模拟询问与追问：**\n- 模型网关在企业AI基建中具体扮演什么角色？如何确保权限控制的安全性？\n- Skill Hub在企业内部工具中如何支持团队协作？是否有扩展性限制？\n\n### AI焦虑应对\n当前分片未涉及AI焦虑应对的相关内容。\n### audio_insights\n{'学习路径与核心技术': '视频详细介绍了Skill、MCP Server和RIG的核心概念及学习路径。Skill涉及任务知识的组织与测评，MCP Server是AI时代的协议标准，学习资源包括官方教程和实战示例。RIG服务用于知识库检索，学习资源包括Luncheon官方指南和测评资料。', '企业工作模式转变': '企业AI团队的工作模式正在转变，主要集中于AI基建（如模型网关和权限控制）、内部AI工具（如知识库问答服务和Skill Hub）等方向。', 'AI焦虑应对': '当前分片未涉及AI焦虑应对的相关内容。'}\n### vision_insights\n{'学习路径与核心技术': '视频重点介绍了 Agent Skills 的模块化功能、Skill 工程的设计与评估方法，以及 MCP Server 的架构和使用方法。这些内容为学习 AI 技术提供了清晰的路径和实践指导。', '企业工作模式转变': '当前分片未直接涉及企业工作模式转变的内容。', 'AI焦虑应对': '当前分片未直接涉及 AI 焦虑应对的内容。'}\n\n## chunk-003 [11:33 - 15:24]\n### chunk_summary\n### 学习路径与核心技术\n音频提到 **Skill 工程** 的实际应用场景，包括管理内部技能和 MCP 服务，以及帮助团队构建 AI 体校方案，可能与 **Tool Calling** 和 **LangGraph 文档**相关。视觉部分未直接提供相关证据。\n\n**人类可能的询问与追问：**\n- Skill 工程在实际应用中如何与 MCP 服务协同工作？\n- Tool Calling 和 LangGraph 文档在团队构建中具体发挥了什么作用？\n\n---\n\n### 企业工作模式转变\n音频和视频均强调企业从专注单一业务线转向广泛的 AI 团队协作，特别是理解不同业务需求、角色调整以及快速交付能力的重要性。视频进一步提到提供 Skill 工程方案以适应行业变化。\n\n**人类可能的询问与追问：**\n- 企业如何有效调整团队角色以适应 AI 驱动的协作模式？\n- Skill 工程方案具体如何帮助企业应对行业变化？\n\n---\n\n### AI焦虑应对\n音频提到 AI 带来的职业冲击，例如成就感减少和岗位压力增加，并通过阅读《德米安》寻找自我使命来缓解焦虑。视频补充了两种应对方式：接受成长中的焦虑感和寻求团队或外界支持，强调这种焦虑的普遍性和解决路径。\n\n**人类可能的询问与追问：**\n- 如何在职业发展中平衡成就感与 AI 带来的压力？\n- 团队支持在缓解 AI 焦虑中具体体现在哪些方面？\n### audio_insights\n{'学习路径与核心技术': '当前分片提到 skill 工程的实际应用场景，包括管理内部 skill 和 MCP 服务，以及帮助团队构建 AI 体校方案。结合 previous_chunk_summaries，可能与 Tool Calling 和 LangGraph 文档相关。', '企业工作模式转变': '工作方式从专注单一业务线转变为广泛的 AI 组协作，强调与其他团队的交流和快速交付能力。这与 AI 技术的应用直接相关。', 'AI焦虑应对': 'AI带来的职业冲击包括成就感减少和岗位压力增加。通过阅读《德米安》缓解焦虑，强调寻找自我使命的重要性。'}\n### vision_insights\n{'学习路径与核心技术': '证据不足，未在当前分片中直接提及。', '企业工作模式转变': '视频详细阐述了企业工作模式的转变，包括团队角色调整、理解不同业务需求以及提供 Skill 工程方案，强调了行业变化对工作的影响。', 'AI焦虑应对': '视频提出了应对 AI 焦虑的两种方式：接受成长中的焦虑感和寻求团队或外界支持，并强调了这种焦虑的普遍性和解决路径。'}",
+    "editable_aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 4\n- user_focus: 本地视频场景下，请按照“学习路径与核心技术”、“企业工作模式转变”以及“AI焦虑应对”的结构进行归纳，并模拟人类对视频核心技术点的询问和追问。\n\n## chunk-000 [00:00 - 03:51]\n### chunk_summary\n**学习路径与核心技术**  \n作者从Web3后端开发转向AI领域，学习路径基于工作需求展开，重点关注Agent Workflow、Tool调用、Prompt/Skill、MCP Server、RAG等技术，并通过官方文档和实践课程加深理解。视频中提到这些技术点的具体应用和学习方式。\n\n**企业工作模式转变**  \n作者的工作模式从Web3开发转向AI系统设计，任务从结合DeFi的AI agent开发转变为更广泛的技术学习与系统设计，同时探索个人兴趣领域并找到适合的方法。\n\n**AI焦虑应对**  \n作者提到AI焦虑是普遍现象，暗示可能会分享应对方法或个人经验，但当前分片未具体展开。\n\n**模拟人类询问与追问**  \n1. 关于学习路径：为什么选择这些具体技术点作为学习重点？它们在实际工作中如何发挥作用？  \n2. 关于工作模式转变：从Web3到AI的转变过程中，遇到的最大挑战是什么？如何克服？  \n3. 关于AI焦虑：能否具体分享一些应对AI焦虑的策略或个人经验？\n### audio_insights\n{'learning_path_and_core_technologies': '作者从web3后端开发转向AI方向，学习路径围绕工作需求展开，重点学习了Agent workflow、Tool调用、Languages框架等技术，并通过官方文档和实践课程加深理解。', 'enterprise_work_mode_transformation': '工作模式从web3开发转向AI系统设计，任务从开发结合DeFi的AI agent转变为更广泛的技术学习和系统设计。', 'ai_anxiety_response': '作者提到会分享对AI焦虑的看法，但当前分片未具体展开，证据不足。'}\n### vision_insights\n{'学习路径与核心技术': '视频提到学习AI相关的内容，包括Agent Workflow、Tool Calling、Prompt/Skill、MCP Server、RAG等技术点。', '企业工作模式转变': '讲述了从后端开发到AI方向的工作转变，探索个人兴趣领域的机会，并找到适合的方法。', 'AI焦虑应对': '提到AI焦虑是每个人都在经历的事，暗示可能会分享应对方法或个人经验。'}\n\n## chunk-001 [03:51 - 07:42]\n### chunk_summary\n### 学习路径与核心技术\n视频强调了学习 AI 技术的路径，包括 OpenAI Cookbook、Anthropic Tool use API 和 LangGraph 官方文档。这些资源覆盖了 Tool Calling、会话持久化和 Agent 技术的核心知识，推荐了 prompt 和 skill 工程的最佳实践指南。音频补充了注册、持久化和 Memory 技术的具体应用。\n\n**追问建议**：\n- Tool Calling 的底层执行具体如何实现？\n- LangGraph 的持久化技术在实际应用中有哪些典型场景？\n\n---\n\n### 企业工作模式转变\n视频展示了企业从传统后端业务组转向 AI 组后的工作模式变化，涉及全局状态、Prompt/Skill、MGP Server 和 RAG 等模块。这些模块显示了 AI 技术如何与工程实践结合，解决稳定性和团队级 skill 开发的挑战。\n\n**追问建议**：\n- AI 与实际工程结合的模块中，哪些技术最适合企业转型？\n\n---\n\n### AI焦虑应对\n虽然视频未直接提到 AI 焦虑，但通过提供详细的学习路径和技术模块，帮助观众理解如何设计稳定的 skill，减少上下文膨胀问题，从而提升团队生产环境的结果质量。\n\n**追问建议**：\n- 如何通过优化上下文设计来缓解 AI 技术的复杂性？\n### audio_insights\n{'学习路径与核心技术': '视频中提到学习AI工具注册、持久化和Memory的相关技术，推荐OpenAI和Anthropic的资源，包括prompt和skill工程的最佳实践指南。', '企业工作模式转变': '讲述从后端业务组转到AI组后，工作视角和解决问题思路的变化，强调AI结合工程实践的稳定性和团队级别skill开发的挑战。', 'AI焦虑应对': '个人webcoding容错率高，但团队生产环境需要设计稳定的skill以减少上下文膨胀问题，提升结果质量。', '证据充足': True}\n### vision_insights\n{'学习路径与核心技术': '视频中提到的学习路径包括 OpenAI Cookbook 和 Anthropic 的 Tool use API，以及 LangGraph 的官方文档和视频。这些资源主要围绕 Tool Calling 和会话持久化技术展开，介绍了工具调用的定义、Agent 的关注点以及如何实现会话持久化。', '企业工作模式转变': '视频中提到的模块（如全局状态、Prompt / Skill、MGP Server 和 RAG）可能暗示了 AI 技术在企业工作模式中的整合方式，强调了实际工程中的应用。', 'AI焦虑应对': '虽然视频中未直接提到 AI 焦虑，但通过提供详细的学习路径和技术模块，可能旨在帮助观众更好地理解和应对 AI 技术带来的挑战。', '追问建议': ['Tool Calling 的底层执行具体如何实现？', 'LangGraph 的持久化技术在实际应用中有哪些典型场景？', 'AI 与实际工程结合的模块中，哪些技术最适合企业转型？']}\n\n## chunk-002 [07:42 - 11:33]\n### chunk_summary\n### 学习路径与核心技术\n音频和视频内容均详细介绍了Skill、MCP Server和RIG的核心概念及学习路径。Skill模块化功能用于任务知识的组织与测评，学习资源包括官方教程和实战示例。MCP Server作为AI时代的协议标准，提供了架构和使用方法的指导。RIG服务则用于知识库检索，相关学习资源包括Luncheon官方指南和测评资料。\n\n**模拟询问与追问：**\n- Skill模块化功能如何提升任务知识的组织效率？是否有具体的应用案例？\n- MCP Server的协议标准在实际企业环境中如何实现？有哪些常见的挑战？\n- RIG服务的知识库检索功能是否支持多语言？如何优化检索效率？\n\n### 企业工作模式转变\n音频提到企业AI团队的工作模式正在转变，主要集中于AI基建（如模型网关和权限控制）及内部AI工具（如知识库问答服务和Skill Hub）。视频内容未直接涉及相关内容。\n\n**模拟询问与追问：**\n- 模型网关在企业AI基建中具体扮演什么角色？如何确保权限控制的安全性？\n- Skill Hub在企业内部工具中如何支持团队协作？是否有扩展性限制？\n\n### AI焦虑应对\n当前分片未涉及AI焦虑应对的相关内容。\n### audio_insights\n{'学习路径与核心技术': '视频详细介绍了Skill、MCP Server和RIG的核心概念及学习路径。Skill涉及任务知识的组织与测评，MCP Server是AI时代的协议标准，学习资源包括官方教程和实战示例。RIG服务用于知识库检索，学习资源包括Luncheon官方指南和测评资料。', '企业工作模式转变': '企业AI团队的工作模式正在转变，主要集中于AI基建（如模型网关和权限控制）、内部AI工具（如知识库问答服务和Skill Hub）等方向。', 'AI焦虑应对': '当前分片未涉及AI焦虑应对的相关内容。'}\n### vision_insights\n{'学习路径与核心技术': '视频重点介绍了 Agent Skills 的模块化功能、Skill 工程的设计与评估方法，以及 MCP Server 的架构和使用方法。这些内容为学习 AI 技术提供了清晰的路径和实践指导。', '企业工作模式转变': '当前分片未直接涉及企业工作模式转变的内容。', 'AI焦虑应对': '当前分片未直接涉及 AI 焦虑应对的内容。'}\n\n## chunk-003 [11:33 - 15:24]\n### chunk_summary\n### 学习路径与核心技术\n音频提到 **Skill 工程** 的实际应用场景，包括管理内部技能和 MCP 服务，以及帮助团队构建 AI 体校方案，可能与 **Tool Calling** 和 **LangGraph 文档**相关。视觉部分未直接提供相关证据。\n\n**人类可能的询问与追问：**\n- Skill 工程在实际应用中如何与 MCP 服务协同工作？\n- Tool Calling 和 LangGraph 文档在团队构建中具体发挥了什么作用？\n\n---\n\n### 企业工作模式转变\n音频和视频均强调企业从专注单一业务线转向广泛的 AI 团队协作，特别是理解不同业务需求、角色调整以及快速交付能力的重要性。视频进一步提到提供 Skill 工程方案以适应行业变化。\n\n**人类可能的询问与追问：**\n- 企业如何有效调整团队角色以适应 AI 驱动的协作模式？\n- Skill 工程方案具体如何帮助企业应对行业变化？\n\n---\n\n### AI焦虑应对\n音频提到 AI 带来的职业冲击，例如成就感减少和岗位压力增加，并通过阅读《德米安》寻找自我使命来缓解焦虑。视频补充了两种应对方式：接受成长中的焦虑感和寻求团队或外界支持，强调这种焦虑的普遍性和解决路径。\n\n**人类可能的询问与追问：**\n- 如何在职业发展中平衡成就感与 AI 带来的压力？\n- 团队支持在缓解 AI 焦虑中具体体现在哪些方面？\n### audio_insights\n{'学习路径与核心技术': '当前分片提到 skill 工程的实际应用场景，包括管理内部 skill 和 MCP 服务，以及帮助团队构建 AI 体校方案。结合 previous_chunk_summaries，可能与 Tool Calling 和 LangGraph 文档相关。', '企业工作模式转变': '工作方式从专注单一业务线转变为广泛的 AI 组协作，强调与其他团队的交流和快速交付能力。这与 AI 技术的应用直接相关。', 'AI焦虑应对': 'AI带来的职业冲击包括成就感减少和岗位压力增加。通过阅读《德米安》缓解焦虑，强调寻找自我使命的重要性。'}\n### vision_insights\n{'学习路径与核心技术': '证据不足，未在当前分片中直接提及。', '企业工作模式转变': '视频详细阐述了企业工作模式的转变，包括团队角色调整、理解不同业务需求以及提供 Skill 工程方案，强调了行业变化对工作的影响。', 'AI焦虑应对': '视频提出了应对 AI 焦虑的两种方式：接受成长中的焦虑感和寻求团队或外界支持，并强调了这种焦虑的普遍性和解决路径。'}",
+    "human_guidance": "",
+    "chunk_count": 4
+  },
+  "judge": {
+    "fact": {
+      "label": "fail",
+      "score": 0.4142,
+      "details": "",
+      "metrics": {
+        "score": 0.4142,
+        "label": "fail",
+        "details": "",
+        "claim_count": 16,
+        "total_claim_importance": 60,
+        "supported_claim_count": 4,
+        "contradicted_claim_count": 1,
+        "not_mentioned_claim_count": 11,
+        "supported_claim_importance": 12,
+        "contradicted_claim_importance": 5,
+        "not_mentioned_claim_importance": 43,
+        "support_ratio": 0.2,
+        "judge_confidence": 0.8781,
+        "hallucination_density": 0.75,
+        "weighted_hallucination_density": 0.7333,
+        "weighted_penalty": 44.0,
+        "capped_weighted_hallucination_density": 0.35,
+        "hallucination_breakdown": {
+          "entity": 1,
+          "relation_action": 0,
+          "fabrication": 11
+        },
+        "weighted_hallucination_penalty_breakdown": {
+          "entity": 1.0,
+          "relation_action": 0,
+          "fabrication": 43.0
+        },
+        "claims": [
+          {
+            "claim_id": "1",
+            "claim_text": "视频中提到的学习重点技术包括Agent Workflow、Tool Calling、Prompt/Skill工程、MCP Server和RIG服务。",
+            "claim_type": "technical",
+            "importance": 5,
+            "status": "contradicted",
+            "hallucination_type": "entity",
+            "confidence": 90,
+            "evidence": "参考资料中提到的学习重点技术包括Agent Workflow、Tool Calling、Prompt/Skill工程、MCP Server和RAG应用及评测，但未提到RIG服务。",
+            "reason": "RIG服务未在参考资料中提及，属于错误实体。"
+          },
+          {
+            "claim_id": "2",
+            "claim_text": "推荐学习资源包括OpenAI Cookbook、Anthropic Tool use API、LangGraph官方文档和Luncheon官方指南。",
+            "claim_type": "educational",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到任何推荐学习资源。",
+            "reason": "推荐学习资源的内容完全未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "3",
+            "claim_text": "Skill模块化功能提升了任务知识的组织效率，尤其在企业内部技能管理方面。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到Skill模块化功能提升任务知识组织效率的内容。",
+            "reason": "Skill模块化功能的具体作用未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "4",
+            "claim_text": "MCP Server与Skill工程协同工作，为团队构建AI解决方案提供了结构化支持。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到MCP Server与Skill工程协同工作的内容。",
+            "reason": "MCP Server与Skill工程协同工作的具体描述未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "5",
+            "claim_text": "企业从传统后端开发转向AI协作，强调理解不同业务需求、角色调整和快速交付能力的重要性。",
+            "claim_type": "organizational",
+            "importance": 5,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到企业从传统后端开发转向AI协作的具体内容。",
+            "reason": "企业转型的具体描述未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "6",
+            "claim_text": "模型网关和权限控制在企业AI基础设施建设中扮演关键角色。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 95,
+            "evidence": "参考资料提到模型网关和权限控制是企业AI基础设施建设中的关键角色。",
+            "reason": "参考资料明确支持该声明。"
+          },
+          {
+            "claim_id": "7",
+            "claim_text": "Skill工程方案帮助企业应对行业变化，适应AI驱动的协作模式。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到Skill工程方案帮助企业应对行业变化的内容。",
+            "reason": "Skill工程方案的具体作用未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "8",
+            "claim_text": "AI技术带来的职业冲击包括成就感减少和岗位压力增加。",
+            "claim_type": "social",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 95,
+            "evidence": "参考资料提到AI技术带来的职业冲击包括成就感剥夺和工作压缩焦虑。",
+            "reason": "参考资料明确支持该声明。"
+          },
+          {
+            "claim_id": "9",
+            "claim_text": "通过阅读《德米安》可以找到自我使命，缓解AI焦虑。",
+            "claim_type": "educational",
+            "importance": 2,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 95,
+            "evidence": "参考资料提到通过阅读《德米安》可以找到自我使命，缓解AI焦虑。",
+            "reason": "参考资料明确支持该声明。"
+          },
+          {
+            "claim_id": "10",
+            "claim_text": "接受成长中的焦虑感并将其视为学习和适应的必经过程是应对AI焦虑的一种策略。",
+            "claim_type": "social",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到接受成长中的焦虑感并将其视为学习和适应的必经过程的内容。",
+            "reason": "该策略未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "11",
+            "claim_text": "寻求团队或外界支持可以有效缓解AI焦虑。",
+            "claim_type": "social",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到寻求团队或外界支持可以缓解AI焦虑的内容。",
+            "reason": "该策略未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "12",
+            "claim_text": "初学者可以优先关注OpenAI Cookbook和Anthropic Tool use API等官方资源，逐步掌握核心技术。",
+            "claim_type": "educational",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到初学者可以优先关注OpenAI Cookbook和Anthropic Tool use API等官方资源的内容。",
+            "reason": "推荐学习资源的内容未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "13",
+            "claim_text": "企业转型需从基础设施建设入手，重点解决权限控制和团队协作中的技术难题。",
+            "claim_type": "organizational",
+            "importance": 5,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到企业转型需从基础设施建设入手的内容。",
+            "reason": "企业转型的具体描述未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "14",
+            "claim_text": "Skill工程方案可作为适应行业变化的重要工具，建议深入研究其扩展性和应用场景。",
+            "claim_type": "technical",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到Skill工程方案可作为适应行业变化的重要工具的内容。",
+            "reason": "Skill工程方案的具体作用未在参考资料中提及，属于凭空捏造。"
+          },
+          {
+            "claim_id": "15",
+            "claim_text": "面对AI焦虑，建议通过阅读和学习寻找自我使命，同时积极寻求团队支持。",
+            "claim_type": "social",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 95,
+            "evidence": "参考资料提到通过阅读和学习寻找自我使命，同时引用《德米安》鼓励大家摆脱随波逐流。",
+            "reason": "参考资料明确支持该声明。"
+          },
+          {
+            "claim_id": "16",
+            "claim_text": "接受技术快速发展的现实，将焦虑感转化为学习动力是一种应对策略。",
+            "claim_type": "social",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 85,
+            "evidence": "参考资料未提到接受技术快速发展的现实，将焦虑感转化为学习动力的内容。",
+            "reason": "该策略未在参考资料中提及，属于凭空捏造。"
+          }
+        ]
+      }
+    },
+    "task": {
+      "label": "pass",
+      "score": 0.9835,
+      "details": "",
+      "metrics": {
+        "score": 0.9835,
+        "label": "pass",
+        "details": "",
+        "requirement_count": 5,
+        "total_requirement_importance": 20,
+        "satisfied_requirement_count": 5,
+        "partial_requirement_count": 0,
+        "unsatisfied_requirement_count": 0,
+        "satisfied_requirement_importance": 20,
+        "partial_requirement_importance": 0,
+        "unsatisfied_requirement_importance": 0,
+        "coverage_ratio": 1.0,
+        "judge_confidence": 0.89,
+        "requirements": [
+          {
+            "requirement_id": "1",
+            "requirement_text": "归纳视频内容，按照'学习路径与核心技术'、'企业工作模式转变'、'AI焦虑应对'的结构进行总结。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 95,
+            "evidence": "生成总结按照'学习路径与核心技术'、'企业工作模式转变'、'AI焦虑应对'的结构进行了清晰的归纳，并详细解析了每个主题的内容。",
+            "reason": "总结内容与要求的结构完全一致，且每个部分的内容详尽，覆盖了视频的核心信息。"
+          },
+          {
+            "requirement_id": "2",
+            "requirement_text": "设计模拟人类对视频核心技术点的询问和追问。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "生成总结中提供了多个模拟追问，针对视频核心技术点进行了设计，例如Skill模块化功能、MCP Server协议标准、Tool Calling底层机制等。",
+            "reason": "追问设计符合要求，涵盖了视频中提到的核心技术点，并提出了具体问题以促进深入理解。"
+          },
+          {
+            "requirement_id": "3",
+            "requirement_text": "设计追问技术原理，例如'MCP Server相比传统RESTful API，如何让大模型自主发现和理解工具'。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 85,
+            "evidence": "总结中设计了针对技术原理的追问，例如'MCP Server在协议标准化方面是否支持动态扩展？其与传统RESTful API相比的优势是什么？'。",
+            "reason": "追问内容直接涉及技术原理，符合要求，且问题设计具有针对性和深度。"
+          },
+          {
+            "requirement_id": "4",
+            "requirement_text": "设计追问工程挑战，例如'流程约束写入Prompt导致上下文膨胀和注意力稀释的问题，如何在Skill工程中解决'。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "总结中设计了工程挑战相关的追问，例如'上下文膨胀问题，Skill工程是如何通过模块化设计来解决注意力稀释的？'。",
+            "reason": "追问内容明确针对工程挑战，问题设计具体且与视频内容相关，满足要求。"
+          },
+          {
+            "requirement_id": "5",
+            "requirement_text": "设计追问实践资源，例如'视频中推荐的官方文档或评测工具（如LangSmith）的具体用法'。",
+            "importance": 3,
+            "status": "satisfied",
+            "confidence": 85,
+            "evidence": "总结中设计了实践资源相关的追问，例如'LangGraph文档中的哪些章节或工具是最值得优先学习的？'。",
+            "reason": "追问内容涉及视频中推荐的资源，问题设计具体且实用，符合要求。"
+          }
+        ]
+      }
+    }
+  },
+  "timing": {
+    "analyze_ms": 177450,
+    "finalize_ms": 59512,
+    "total_ms": 270298
+  }
+}

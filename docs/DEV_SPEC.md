@@ -537,7 +537,12 @@ video_summarizer/
 ├── scripts/                        # 回归与基线脚本
 ├── temp/                           # 临时文件（自动清理）
 ├── test_output/                    # 测试产出物
-└── analysis/                       # 设计分析文档
+└── docs/                            # 项目文档（设计分析、评估报告、开发规范等）
+    ├── analysis/                   # 设计分析文档
+    ├── evaluation/reports/         # 评估报告
+    ├── DEV_SPEC.md                 # 开发规范文档
+    ├── OBSERVABILITY_RUNBOOK_CN.md # 可观测性操作手册
+    └── FRONTEND_BACKEND_API_INTERFACE_CN.md # 前后端接口规范
 ```
 
 ### 5.3 模块职责

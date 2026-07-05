@@ -1,0 +1,322 @@
+{
+  "sample_id": "video-rag-hallucination-001",
+  "source_type": "local",
+  "video_source": "evaluation/eval_videos/面试官：你觉得RAG为什么会出现幻觉？.mp4",
+  "review_package": {
+    "thread_id": "eval-eval_20260508_153256-video-rag-hallucination-001",
+    "stage": "pending_human_review",
+    "human_gate_status": "pending",
+    "human_gate_reason": "human_review_required",
+    "aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 1\n- user_focus: 请根据视频内容，系统性地总结RAG出现幻觉的原因及全链路解决方案。看完你的总结后，我可能会追问：在检索阶段，为什么仅仅使用向量检索不够，必须引入混合检索（Hybrid Search）？\n\n## chunk-000 [00:00 - 04:29]\n### chunk_summary\nRAG（Retrieval-Augmented Generation）出现幻觉的原因涵盖数据准备、用户提问、检索和生成四个环节，主要包括数据切分不当、用户问题模糊、检索方式单一以及生成阶段的知识冲突。为解决这些问题，视频提出了全链路解决方案：\n\n1. **数据准备阶段**：采用语义切分和数据标签化，确保数据完整性和来源清晰，解决“垃圾进垃圾出”（GIGO）问题。\n2. **用户提问阶段**：通过问题重写优化用户输入，减少模糊性，提升检索匹配效果。\n3. **检索阶段**：引入混合检索（向量检索+关键词检索）和重排序（如Cross Encoder），提高召回率和结果精准度。\n4. **生成阶段**：通过Prompt设计约束模型行为，要求引用具体文档并明确指示“未知内容需直接表明”。\n\n总结方法概括为“净、改、排、控”：净化数据源头，改写用户问题，优化检索方式，控制生成环节。\n\n视频强调混合检索的重要性，指出仅使用向量检索可能导致召回率不足，需结合关键词检索以覆盖更多相关内容。\n### audio_insights\n{'幻觉原因': 'RAG幻觉可能发生在数据准备、用户提问、检索和生成的任何环节，主要原因包括数据切分不当、用户问题模糊、检索方式单一以及生成阶段的知识冲突。', '全链路解决方案': '1. 数据准备阶段：采用语义切分和数据标签化，确保数据完整性和来源清晰；2. 用户提问阶段：通过问题重写润色用户问题，使其更适合检索；3. 检索阶段：采用混合检索（向量+关键词）和重排序（Cross Encoder），确保检索结果精准；4. 生成阶段：通过Prompt约束模型行为，要求引用具体文档并明确指示‘不知道就说不知道’。', '总结方法': '净、改、排、控：净化数据源头，改写用户问题，优化检索方式，控制生成环节。'}\n### vision_insights\n{'content': '视频分片系统性地总结了RAG出现幻觉的原因及全链路解决方案。解决方案分为五个阶段：数据准备、查询优化、检索与写回、生成以及总结。每个阶段针对不同的幻觉来源提出了具体的解决方法，例如数据准备阶段解决GIGO问题，查询优化阶段通过Query Rewriting减少模糊性，检索阶段引入混合检索 (Hybrid Search) 提高召回率，生成阶段通过Prompt设计减少知识不准确。视频最后强调了核心知识点和面试应对策略。'}",
+    "editable_aggregated_chunk_insights": "# Chunk Aggregated Insights\n\n- total_chunks: 1\n- user_focus: 请根据视频内容，系统性地总结RAG出现幻觉的原因及全链路解决方案。看完你的总结后，我可能会追问：在检索阶段，为什么仅仅使用向量检索不够，必须引入混合检索（Hybrid Search）？\n\n## chunk-000 [00:00 - 04:29]\n### chunk_summary\nRAG（Retrieval-Augmented Generation）出现幻觉的原因涵盖数据准备、用户提问、检索和生成四个环节，主要包括数据切分不当、用户问题模糊、检索方式单一以及生成阶段的知识冲突。为解决这些问题，视频提出了全链路解决方案：\n\n1. **数据准备阶段**：采用语义切分和数据标签化，确保数据完整性和来源清晰，解决“垃圾进垃圾出”（GIGO）问题。\n2. **用户提问阶段**：通过问题重写优化用户输入，减少模糊性，提升检索匹配效果。\n3. **检索阶段**：引入混合检索（向量检索+关键词检索）和重排序（如Cross Encoder），提高召回率和结果精准度。\n4. **生成阶段**：通过Prompt设计约束模型行为，要求引用具体文档并明确指示“未知内容需直接表明”。\n\n总结方法概括为“净、改、排、控”：净化数据源头，改写用户问题，优化检索方式，控制生成环节。\n\n视频强调混合检索的重要性，指出仅使用向量检索可能导致召回率不足，需结合关键词检索以覆盖更多相关内容。\n### audio_insights\n{'幻觉原因': 'RAG幻觉可能发生在数据准备、用户提问、检索和生成的任何环节，主要原因包括数据切分不当、用户问题模糊、检索方式单一以及生成阶段的知识冲突。', '全链路解决方案': '1. 数据准备阶段：采用语义切分和数据标签化，确保数据完整性和来源清晰；2. 用户提问阶段：通过问题重写润色用户问题，使其更适合检索；3. 检索阶段：采用混合检索（向量+关键词）和重排序（Cross Encoder），确保检索结果精准；4. 生成阶段：通过Prompt约束模型行为，要求引用具体文档并明确指示‘不知道就说不知道’。', '总结方法': '净、改、排、控：净化数据源头，改写用户问题，优化检索方式，控制生成环节。'}\n### vision_insights\n{'content': '视频分片系统性地总结了RAG出现幻觉的原因及全链路解决方案。解决方案分为五个阶段：数据准备、查询优化、检索与写回、生成以及总结。每个阶段针对不同的幻觉来源提出了具体的解决方法，例如数据准备阶段解决GIGO问题，查询优化阶段通过Query Rewriting减少模糊性，检索阶段引入混合检索 (Hybrid Search) 提高召回率，生成阶段通过Prompt设计减少知识不准确。视频最后强调了核心知识点和面试应对策略。'}",
+    "human_guidance": "",
+    "chunk_count": 1
+  },
+  "judge": {
+    "fact": {
+      "label": "warn",
+      "score": 0.7101,
+      "details": "",
+      "metrics": {
+        "score": 0.7101,
+        "label": "warn",
+        "details": "",
+        "claim_count": 18,
+        "total_claim_importance": 69,
+        "supported_claim_count": 15,
+        "contradicted_claim_count": 0,
+        "not_mentioned_claim_count": 3,
+        "supported_claim_importance": 59,
+        "contradicted_claim_importance": 0,
+        "not_mentioned_claim_importance": 10,
+        "support_ratio": 0.8551,
+        "judge_confidence": 0.9833,
+        "hallucination_density": 0.1667,
+        "weighted_hallucination_density": 0.1449,
+        "weighted_penalty": 10.0,
+        "hallucination_breakdown": {
+          "entity": 0,
+          "relation_action": 0,
+          "fabrication": 3
+        },
+        "weighted_hallucination_penalty_breakdown": {
+          "entity": 0,
+          "relation_action": 0,
+          "fabrication": 10.0
+        },
+        "claims": [
+          {
+            "claim_id": "1",
+            "claim_text": "RAG幻觉是指模型生成内容时出现不真实、不准确的信息。",
+            "claim_type": "definition",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料明确指出RAG幻觉是模型生成内容时出现不真实、不准确的信息。",
+            "reason": "定义与参考资料一致。"
+          },
+          {
+            "claim_id": "2",
+            "claim_text": "RAG幻觉可能发生在数据准备阶段、用户提问阶段、检索阶段和生成阶段。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到RAG幻觉可能发生在数据入库、检索、生成的任何一环。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "3",
+            "claim_text": "数据切分不当或未进行标签化会导致信息不完整或来源不清晰，形成“垃圾进垃圾出”（GIGO）问题。",
+            "claim_type": "fact",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 90,
+            "evidence": "参考资料未提及数据切分不当或未进行标签化会导致信息不完整或来源不清晰。",
+            "reason": "该说法未在参考资料中找到支持，且属于凭空捏造的重要事实。"
+          },
+          {
+            "claim_id": "4",
+            "claim_text": "用户输入问题模糊或歧义会影响检索匹配的准确性。",
+            "claim_type": "fact",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到用户提问与知识库不匹配可能导致问题。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "5",
+            "claim_text": "单一检索方式（如仅使用向量检索）可能导致召回率不足，无法覆盖所有相关信息。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到单一检索方式可能导致召回率不足。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "6",
+            "claim_text": "模型在知识冲突或知识空白的情况下可能生成虚假回答。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到大模型自身的知识冲突与惯性输出可能导致虚假回答。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "7",
+            "claim_text": "语义切分可以确保数据的逻辑完整性。",
+            "claim_type": "fact",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到语义切分可以保证语料干净完整。",
+            "reason": "语义切分的逻辑完整性与参考资料一致。"
+          },
+          {
+            "claim_id": "8",
+            "claim_text": "对数据进行标签化处理可以明确来源并提升可信度。",
+            "claim_type": "fact",
+            "importance": 3,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 90,
+            "evidence": "参考资料未提及对数据进行标签化处理可以明确来源并提升可信度。",
+            "reason": "该说法未在参考资料中找到支持，且属于凭空捏造的重要事实。"
+          },
+          {
+            "claim_id": "9",
+            "claim_text": "Query Rewriting技术可以优化用户输入，减少模糊性。",
+            "claim_type": "fact",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到Query改写可以明确用户模糊的意图。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "10",
+            "claim_text": "混合检索（Hybrid Search）结合向量检索与关键词检索，弥补单一检索方式的不足。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到混合检索结合向量检索与关键词检索，弥补单一检索方式的不足。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "11",
+            "claim_text": "Cross Encoder可以对检索结果进行排序，确保最相关的内容靠前。",
+            "claim_type": "fact",
+            "importance": 3,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到Cross-Encoder模型用于重排序，确保最相关内容靠前。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "12",
+            "claim_text": "通过Prompt设计可以约束模型行为，明确要求引用具体文档。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到通过Prompt设计可以约束模型行为，要求引用具体文档。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "13",
+            "claim_text": "向量检索在语义匹配上表现优秀，但召回率可能不足，尤其是对于专有名词或低频词汇。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到向量检索在语义匹配上表现优秀，但召回率可能不足。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "14",
+            "claim_text": "关键词检索能够直接匹配显性文本，确保覆盖更多相关内容。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "not_mentioned",
+            "hallucination_type": "fabrication",
+            "confidence": 90,
+            "evidence": "参考资料未提及关键词检索能够直接匹配显性文本，确保覆盖更多相关内容。",
+            "reason": "该说法未在参考资料中找到支持，且属于凭空捏造的重要事实。"
+          },
+          {
+            "claim_id": "15",
+            "claim_text": "向量检索与关键词检索结合能够在语义理解与显性匹配之间形成互补，提高检索结果的全面性和精准度。",
+            "claim_type": "fact",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到混合检索结合语义理解与显性匹配，形成互补。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "16",
+            "claim_text": "RAG幻觉的原因涉及数据、用户输入、检索与生成四个环节，每个环节均需优化。",
+            "claim_type": "fact",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到RAG幻觉的原因涉及数据、用户输入、检索与生成四个环节。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "17",
+            "claim_text": "全链路解决方案包括“净化数据源、改写用户问题、优化检索方式、控制生成行为”，形成闭环。",
+            "claim_type": "fact",
+            "importance": 4,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到全链路解决方案包括净化数据源、改写用户问题、优化检索方式、控制生成行为。",
+            "reason": "参考资料明确支持该说法。"
+          },
+          {
+            "claim_id": "18",
+            "claim_text": "混合检索（Hybrid Search）是解决检索阶段问题的关键，能够有效提升召回率与结果质量。",
+            "claim_type": "fact",
+            "importance": 5,
+            "status": "supported",
+            "hallucination_type": "none",
+            "confidence": 100,
+            "evidence": "参考资料提到混合检索是解决检索阶段问题的关键，能够有效提升召回率与结果质量。",
+            "reason": "参考资料明确支持该说法。"
+          }
+        ]
+      }
+    },
+    "task": {
+      "label": "pass",
+      "score": 0.9286,
+      "details": "",
+      "metrics": {
+        "score": 0.9286,
+        "label": "pass",
+        "details": "",
+        "requirement_count": 5,
+        "total_requirement_importance": 21,
+        "satisfied_requirement_count": 4,
+        "partial_requirement_count": 1,
+        "unsatisfied_requirement_count": 0,
+        "satisfied_requirement_importance": 18,
+        "partial_requirement_importance": 3,
+        "unsatisfied_requirement_importance": 0,
+        "coverage_ratio": 0.9286,
+        "judge_confidence": 0.86,
+        "requirements": [
+          {
+            "requirement_id": "1",
+            "requirement_text": "系统性总结RAG出现幻觉的原因。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 95,
+            "evidence": "生成总结详细分析了RAG幻觉的原因，涵盖数据准备、用户提问、检索和生成四个环节。",
+            "reason": "总结内容系统性地覆盖了幻觉的多环节成因，符合要求。"
+          },
+          {
+            "requirement_id": "2",
+            "requirement_text": "系统性总结RAG的全链路解决方案。",
+            "importance": 5,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "生成总结提出了从数据准备到生成阶段的全链路解决方案，包括净化数据源、改写用户问题、优化检索方式和控制生成环节。",
+            "reason": "总结内容全面阐述了全链路解决方案，符合要求。"
+          },
+          {
+            "requirement_id": "3",
+            "requirement_text": "在总结中明确强调向量检索对于专有名词容易发生偏离的原因。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 85,
+            "evidence": "总结明确指出向量检索的局限性，尤其是对于专有名词或低频词汇容易发生偏离的原因。",
+            "reason": "总结内容强调了向量检索的不足，并解释了专有名词偏离的原因，符合要求。"
+          },
+          {
+            "requirement_id": "4",
+            "requirement_text": "在总结中明确提出混合检索（Hybrid Search）的必要性及其“两手抓”策略。",
+            "importance": 4,
+            "status": "satisfied",
+            "confidence": 90,
+            "evidence": "总结详细阐述了混合检索的必要性及其两手抓策略，结合向量检索与关键词检索的优势。",
+            "reason": "总结内容明确提出了混合检索的必要性及策略，符合要求。"
+          },
+          {
+            "requirement_id": "5",
+            "requirement_text": "按照面试八股文的严谨结构生成总结内容。",
+            "importance": 3,
+            "status": "partial",
+            "confidence": 70,
+            "evidence": "总结内容结构较为清晰，但未完全按照面试八股文的严谨结构，例如缺乏明确的分段标题和逻辑层次。",
+            "reason": "虽然总结内容逻辑清晰，但未完全体现面试八股文的严谨结构，部分满足要求。"
+          }
+        ]
+      }
+    }
+  },
+  "timing": {
+    "analyze_ms": 64744,
+    "finalize_ms": 33491,
+    "total_ms": 130514
+  }
+}

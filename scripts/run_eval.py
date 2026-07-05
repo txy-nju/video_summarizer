@@ -818,7 +818,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="evaluation/reports",
+        default="docs/evaluation/reports",
         help="Directory where reports will be stored",
     )
     parser.add_argument(
