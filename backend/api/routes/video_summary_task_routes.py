@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
@@ -11,7 +11,7 @@ from backend.dependencies import (
     get_video_summary_task_service,
     get_workflow_orchestration_service,
 )
-from backend.exceptions import AppError
+from backend.exceptions import ConflictError, ErrorCode, NotFoundError, ValidationError
 from backend.schemas.common import MetaInfo, PaginationInfo
 from backend.schemas.video_summary_task import (
     TaskCloneToKbRequest,
@@ -62,23 +62,15 @@ async def create_video_summary_task(
     try:
         task = task_service.create_video_summary_task(owner_id=current_user.user_id, payload=payload)
     except DuplicateTaskError as exc:
-        raise AppError(
-            code="TASK_DUPLICATE_VIDEO_IN_KB",
+        raise ConflictError(
+            code=ErrorCode.TASK_DUPLICATE_VIDEO_IN_KB,
             message="A task for this video already exists in this knowledge base.",
-            status_code=status.HTTP_409_CONFLICT,
             details={"existing_task_id": exc.existing_task_id, "kbid": exc.kbid},
         )
-    except ValueError as exc:
-        if str(exc) == "video_not_ready":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Video is not ready for summarization. Transcription and keyframe extraction must both complete first.",
-            )
-        raise
     if task is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Knowledge base or video resource not found",
+        raise NotFoundError(
+            code=ErrorCode.KB_NOT_FOUND,
+            message="Knowledge base or video resource not found",
         )
     return VideoSummaryTaskResponse(data=task, meta=_build_meta(request))
 
@@ -99,7 +91,7 @@ async def list_video_summary_tasks(
         try:
             parse_fields(fields, _ALLOWED_FIELDS)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.REQUEST_UNSUPPORTED_FIELDS, message=str(exc)) from exc
 
     items, pagination = task_service.list_video_summary_tasks(
         owner_id=current_user.user_id,
@@ -118,7 +110,7 @@ async def get_video_summary_task(
 ):
     task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
     if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+        raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
     return VideoSummaryTaskResponse(data=task, meta=_build_meta(request))
 
 
@@ -132,7 +124,7 @@ async def update_video_summary_task(
 ):
     task = task_service.update_video_summary_task(owner_id=current_user.user_id, task_id=task_id, payload=payload)
     if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+        raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
     return VideoSummaryTaskResponse(data=task, meta=_build_meta(request))
 
 
@@ -145,7 +137,7 @@ async def delete_video_summary_task(
 ):
     deleted = task_service.delete_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+        raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
     return VideoSummaryTaskDeleteResponse(data=VideoSummaryTaskDeleteData(task_id=task_id), meta=_build_meta(request))
 
 
@@ -170,13 +162,10 @@ async def clone_task_to_knowledge_base(
             task_id=task_id,
             payload=payload,
         )
-    except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     except DuplicateTaskError as exc:
-        raise AppError(
-            code="TASK_DUPLICATE_VIDEO_IN_KB",
+        raise ConflictError(
+            code=ErrorCode.TASK_DUPLICATE_VIDEO_IN_KB,
             message="A task for this video already exists in the target knowledge base.",
-            status_code=status.HTTP_409_CONFLICT,
             details={"existing_task_id": exc.existing_task_id, "kbid": exc.kbid},
         )
 
@@ -210,23 +199,11 @@ async def start_analysis_workflow(
     _ = payload
 
     trace_id = str(getattr(request.state, "trace_id", ""))
-    try:
-        response_data = task_service.dispatch_start_analysis_workflow(
-            owner_id=current_user.user_id,
-            task_id=task_id,
-            trace_id=trace_id,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
-        msg = str(exc)
-        if msg == "finalization_in_progress":
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Phase-2 finalization is currently in progress. "
-                "Cannot restart phase-1 analysis. Please wait for finalization to complete.",
-            ) from exc
-        raise
+    response_data = task_service.dispatch_start_analysis_workflow(
+        owner_id=current_user.user_id,
+        task_id=task_id,
+        trace_id=trace_id,
+    )
 
     # 仅在任务被真正分发（非幂等命中）时推送 WS 首事件
     if response_data.get("workflow_state") == "DRAFT_GENERATING":
@@ -262,21 +239,13 @@ async def approve_and_finalize_workflow(
     _ = workflow_service
 
     trace_id = str(getattr(request.state, "trace_id", ""))
-    try:
-        response_data = task_service.dispatch_approve_and_finalize_workflow(
-            owner_id=current_user.user_id,
-            task_id=task_id,
-            edited_aggregated_chunk_insights=payload.edited_aggregated_chunk_insights or "",
-            human_guidance=payload.human_guidance or "",
-            trace_id=trace_id,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
+    response_data = task_service.dispatch_approve_and_finalize_workflow(
+        owner_id=current_user.user_id,
+        task_id=task_id,
+        edited_aggregated_chunk_insights=payload.edited_aggregated_chunk_insights or "",
+        human_guidance=payload.human_guidance or "",
+        trace_id=trace_id,
+    )
 
     return ApproveAndFinalizeResponse(
         data=response_data,

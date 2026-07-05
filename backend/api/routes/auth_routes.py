@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import (
@@ -11,6 +11,7 @@ from backend.auth.models import (
 from backend.auth.utils import TokenError, decode_token
 from backend.config import Settings
 from backend.dependencies import get_app_settings, get_auth_service
+from backend.exceptions import AuthError, ErrorCode
 from backend.services.auth_service import AuthService
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
@@ -41,12 +42,12 @@ async def refresh(
             algorithm=settings.jwt_algorithm,
         )
     except TokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        raise AuthError(code=ErrorCode.AUTH_INVALID_TOKEN, message=str(exc)) from exc
 
     if claims.get("type") != "refresh":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+        raise AuthError(code=ErrorCode.AUTH_INVALID_TOKEN_TYPE, message="Invalid token type")
     if claims.get("device_id") != payload.device_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Device mismatch")
+        raise AuthError(code=ErrorCode.AUTH_DEVICE_MISMATCH, message="Device mismatch")
 
     token_data = auth_service.refresh_access_token(
         user_id=claims["sub"],

@@ -1,10 +1,9 @@
 """AuthService - JWT authentication orchestration with database persistence."""
 
-from fastapi import HTTPException, status
-
 from backend.auth.models import TokenResponseData, UserView
 from backend.auth.utils import create_token, verify_password
 from backend.config import Settings
+from backend.exceptions import AuthError, ConflictError, ErrorCode, NotFoundError
 from backend.repositories.user_repository import UserRepository
 
 
@@ -49,7 +48,7 @@ class AuthService:
             self._user_repository.commit()
         except ValueError as e:
             # Repository layer raises ValueError on duplicate username
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+            raise ConflictError(code=ErrorCode.AUTH_USERNAME_ALREADY_EXISTS, message=str(e)) from e
 
         return UserView(user_id=str(user_record.user_id), username=user_record.username)
 
@@ -69,7 +68,7 @@ class AuthService:
         """
         user_record = self._user_repository.get_by_username(username)
         if user_record is None or not verify_password(password, user_record.password_hash):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+            raise AuthError(code=ErrorCode.AUTH_INVALID_CREDENTIALS, message="Invalid credentials")
 
         return self._issue_token_pair(user_id=user_record.user_id, username=user_record.username, device_id=device_id)
 
@@ -91,7 +90,7 @@ class AuthService:
         """
         user_record = self._user_repository.get_by_id(user_id)
         if user_record is None or user_record.username != username:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid refresh token subject")
+            raise AuthError(code=ErrorCode.AUTH_INVALID_TOKEN, message="Invalid refresh token subject")
 
         return self._issue_token_pair(user_id=user_record.user_id, username=user_record.username, device_id=device_id)
 
@@ -109,7 +108,7 @@ class AuthService:
         """
         user_record = self._user_repository.get_by_id(user_id)
         if user_record is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise NotFoundError(code=ErrorCode.AUTH_USER_NOT_FOUND, message="User not found")
 
         return UserView(user_id=str(user_record.user_id), username=user_record.username)
 

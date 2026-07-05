@@ -47,7 +47,7 @@ async def register_device(
         )
     except Exception as exc:
         logger.exception("Failed to register device for user=%s", current_user.user_id)
-        raise HTTPException(status_code=500, detail="Failed to register device") from exc
+        raise ServiceError(code=ErrorCode.DEVICE_REGISTER_FAILED, message="Failed to register device") from exc
 
 
 @router.delete("/{device_token_id}")
@@ -67,14 +67,14 @@ async def unregister_device(
         )
         return {"status": "success", "message": "Device unregistered"}
     except LookupError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise NotFoundError(code=ErrorCode.DEVICE_NOT_FOUND, message=str(exc)) from exc
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise ForbiddenError(code=ErrorCode.DEVICE_NOT_OWNER, message=str(exc)) from exc
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Failed to unregister device id=%s", device_token_id)
-        raise HTTPException(status_code=500, detail="Failed to unregister device") from exc
+        raise ServiceError(code=ErrorCode.DEVICE_UNREGISTER_FAILED, message="Failed to unregister device") from exc
 
 
 @router.get("")
@@ -90,4 +90,4 @@ async def list_devices(
         }
     except Exception as exc:
         logger.exception("Failed to list devices for user=%s", current_user.user_id)
-        raise HTTPException(status_code=500, detail="Failed to list devices") from exc
+        raise ServiceError(code=ErrorCode.DEVICE_LIST_FAILED, message="Failed to list devices") from exc

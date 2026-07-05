@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from backend.exceptions import ErrorCode, ForbiddenError, NotFoundError
 from backend.repositories.device_repository import DeviceRepository
 from backend.schemas.device import DeviceRegisterRequest, DeviceRegisterResponse
 
@@ -46,9 +47,9 @@ class DeviceService:
         """Unregister device token for owner."""
         existing = self._repository.get_by_id(device_token_id)
         if existing is None:
-            raise LookupError("Device not found")
+            raise NotFoundError(code=ErrorCode.DEVICE_NOT_FOUND, message="Device not found")
         if existing.user_id != owner_id:
-            raise PermissionError("Cannot unregister another user's device")
+            raise ForbiddenError(code=ErrorCode.DEVICE_NOT_OWNER, message="Cannot unregister another user's device")
         self._repository.delete(device_token_id)
 
     def list_devices_by_owner(self, *, owner_id: str) -> list[dict[str, str]]:

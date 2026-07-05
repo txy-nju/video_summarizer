@@ -3,7 +3,16 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from backend.exceptions import AppError
+from backend.exceptions import (
+    AppError,
+    AuthError,
+    ConflictError,
+    ErrorCode,
+    ForbiddenError,
+    NotFoundError,
+    ServiceError,
+    ValidationError,
+)
 from backend.middleware.access_log import register_access_log_middleware
 from backend.middleware.error_handler import register_error_handlers
 from backend.middleware.request_context import register_request_context_middleware
@@ -124,3 +133,128 @@ def test_validation_error_maps_to_unified_payload() -> None:
     assert body["status"] == "error"
     assert body["error"]["code"] == "REQUEST_VALIDATE_INVALID_PAYLOAD"
     assert body["error"]["details"]["errors"]
+
+
+# ── Domain exception subclass smoke tests ────────────────────────────────────
+
+
+def test_auth_error_uses_default_401() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/auth-error")
+    async def auth_error():
+        raise AuthError(code=ErrorCode.AUTH_INVALID_TOKEN, message="Token expired")
+
+    client = TestClient(app)
+    response = client.get("/auth-error")
+    body = response.json()
+
+    assert response.status_code == 401
+    assert body["error"]["code"] == "AUTH_INVALID_TOKEN"
+    assert body["error"]["message"] == "Token expired"
+    assert body["status"] == "error"
+
+
+def test_forbidden_error_uses_default_403() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/forbidden")
+    async def forbidden():
+        raise ForbiddenError(code=ErrorCode.AUTH_INSUFFICIENT_PERMISSIONS, message="Access denied")
+
+    client = TestClient(app)
+    response = client.get("/forbidden")
+    body = response.json()
+
+    assert response.status_code == 403
+    assert body["error"]["code"] == "AUTH_INSUFFICIENT_PERMISSIONS"
+
+
+def test_not_found_error_uses_default_404() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/not-found")
+    async def not_found():
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="KB missing")
+
+    client = TestClient(app)
+    response = client.get("/not-found")
+    body = response.json()
+
+    assert response.status_code == 404
+    assert body["error"]["code"] == "KB_NOT_FOUND"
+
+
+def test_conflict_error_uses_default_409() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/conflict")
+    async def conflict():
+        raise ConflictError(code=ErrorCode.TASK_DUPLICATE_VIDEO_IN_KB, message="Duplicate")
+
+    client = TestClient(app)
+    response = client.get("/conflict")
+    body = response.json()
+
+    assert response.status_code == 409
+    assert body["error"]["code"] == "TASK_DUPLICATE_VIDEO_IN_KB"
+
+
+def test_validation_error_subclass_uses_default_422() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/validation-error")
+    async def validation_error():
+        raise ValidationError(code=ErrorCode.VIDEO_NOT_READY, message="Video not ready")
+
+    client = TestClient(app)
+    response = client.get("/validation-error")
+    body = response.json()
+
+    assert response.status_code == 422
+    assert body["error"]["code"] == "VIDEO_NOT_READY"
+
+
+def test_service_error_uses_default_500_and_is_retryable() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/service-error")
+    async def service_error():
+        raise ServiceError(code=ErrorCode.QA_AGENT_NOT_CONFIGURED, message="Agent missing")
+
+    client = TestClient(app)
+    response = client.get("/service-error")
+    body = response.json()
+
+    assert response.status_code == 500
+    assert body["error"]["code"] == "QA_AGENT_NOT_CONFIGURED"
+    assert body["error"]["is_retryable"] is True
+
+
+def test_domain_error_can_override_status_code() -> None:
+    app = FastAPI()
+    register_request_context_middleware(app)
+    register_error_handlers(app)
+
+    @app.get("/override")
+    async def override():
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Gone", status_code=410)
+
+    client = TestClient(app)
+    response = client.get("/override")
+    body = response.json()
+
+    assert response.status_code == 410
+    assert body["error"]["code"] == "KB_NOT_FOUND"

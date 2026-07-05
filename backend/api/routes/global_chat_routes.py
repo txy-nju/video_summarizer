@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
@@ -15,6 +15,7 @@ from backend.schemas.global_chat import (
     GlobalChatSessionResponse,
     GlobalChatSessionUpdateRequest,
 )
+from backend.exceptions import ErrorCode, NotFoundError, ValidationError
 from backend.services.global_chat_service import GlobalChatService
 
 
@@ -51,20 +52,14 @@ async def create_global_chat_session(
     """创建新的全局知识库会话"""
     # 检查路径 kbid 与请求体一致
     if kbid != payload.kbid:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="kbid in path and payload must match",
-        )
+        raise ValidationError(code=ErrorCode.REQUEST_INVALID_QUERY_PARAM, message="kbid in path and payload must match")
 
     session = chat_service.create_chat_session(
         owner_id=current_user.user_id,
         payload=payload,
     )
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Knowledge base not found",
-        )
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base not found")
     return GlobalChatSessionResponse(data=session, meta=_build_meta(request))
 
 
@@ -89,7 +84,7 @@ async def list_global_chat_sessions(
         try:
             parse_fields(fields, _CHAT_ALLOWED_FIELDS)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.REQUEST_UNSUPPORTED_FIELDS, message=str(exc)) from exc
 
     items, pagination = chat_service.list_chat_sessions(
         owner_id=current_user.user_id,
@@ -122,10 +117,7 @@ async def get_global_chat_session(
         chat_id=chat_id,
     )
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat session not found",
-        )
+        raise NotFoundError(code=ErrorCode.CHAT_SESSION_NOT_FOUND, message="Chat session not found")
     return GlobalChatSessionResponse(data=session, meta=_build_meta(request))
 
 
@@ -149,10 +141,7 @@ async def update_global_chat_session(
         payload=payload,
     )
     if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat session not found",
-        )
+        raise NotFoundError(code=ErrorCode.CHAT_SESSION_NOT_FOUND, message="Chat session not found")
     return GlobalChatSessionResponse(data=session, meta=_build_meta(request))
 
 
@@ -174,10 +163,7 @@ async def delete_global_chat_session(
         chat_id=chat_id,
     )
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat session not found",
-        )
+        raise NotFoundError(code=ErrorCode.CHAT_SESSION_NOT_FOUND, message="Chat session not found")
     return GlobalChatSessionDeleteResponse(
         data=GlobalChatSessionDeleteData(chat_id=chat_id),
         meta=_build_meta(request),

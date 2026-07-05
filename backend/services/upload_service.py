@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import uuid
 
+from backend.exceptions import ConflictError, ErrorCode, ForbiddenError, NotFoundError, ServiceError, ValidationError
 from backend.repositories.upload_repository import UploadRepository
 from backend.schemas.upload import (
     ChunkStatusResponse,
@@ -72,27 +73,37 @@ class UploadService:
         - 分片尚未上传（幂等：已存在则跳过写入）
 
         Raises:
-            ValueError: 校验失败
+            AppError: 校验失败
         """
         state = self._repository.get_session(upload_id)
         if state is None:
-            raise ValueError(f"Upload session not found: {upload_id}")
+            raise NotFoundError(
+                code=ErrorCode.UPLOAD_SESSION_NOT_FOUND,
+                message=f"Upload session not found: {upload_id}",
+            )
         if state.owner_id != owner_id:
-            raise ValueError("Upload session does not belong to current user")
+            raise ForbiddenError(
+                code=ErrorCode.UPLOAD_SESSION_NOT_OWNER,
+                message="Upload session does not belong to current user",
+            )
         if state.state in ("done", "dedup_reused", "rejected", "failed", "cancelled"):
-            raise ValueError(f"Upload session is in terminal state: {state.state}")
+            raise ConflictError(
+                code=ErrorCode.UPLOAD_SESSION_TERMINAL_STATE,
+                message=f"Upload session is in terminal state: {state.state}",
+            )
 
         total_chunks = state.total_chunks
         if chunk_index < 0 or chunk_index >= total_chunks:
-            raise ValueError(
-                f"Invalid chunk index {chunk_index}: must be 0-{total_chunks - 1}"
+            raise ValidationError(
+                code=ErrorCode.UPLOAD_CHUNK_INDEX_OUT_OF_RANGE,
+                message=f"Invalid chunk index {chunk_index}: must be 0-{total_chunks - 1}",
             )
 
         expected_length = state.chunk_length(chunk_index)
         if len(data) != expected_length:
-            raise ValueError(
-                f"Chunk {chunk_index} has wrong size: "
-                f"expected {expected_length}, got {len(data)}"
+            raise ValidationError(
+                code=ErrorCode.UPLOAD_CHUNK_SIZE_MISMATCH,
+                message=f"Chunk {chunk_index} has wrong size: expected {expected_length}, got {len(data)}",
             )
 
         # 幂等：已上传的分片跳过磁盘写入，仅确认
@@ -101,7 +112,10 @@ class UploadService:
 
         state = self._repository.mark_chunk_uploaded(upload_id, chunk_index)
         if state is None:
-            raise RuntimeError(f"Failed to update session after chunk upload: {upload_id}")
+            raise ServiceError(
+                code=ErrorCode.UPLOAD_FINALIZE_FAILED,
+                message=f"Failed to update session after chunk upload: {upload_id}",
+            )
 
         # 所有分片完成后标记为 uploading_complete，触发最终合并
         if state.is_complete:

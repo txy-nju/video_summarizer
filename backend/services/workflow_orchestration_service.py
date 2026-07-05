@@ -214,7 +214,7 @@ class WorkflowOrchestrationService:
             workflow_state="DRAFT_GENERATING",
         )
         if not task_record:
-            raise ValueError(f"Task {task_id} not found or permission denied")
+            raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message=f"Task {task_id} not found or permission denied")
 
         # Note: the initial "DRAFT_GENERATING" status_update is now published
         # from the API route (publish_task_accepted), so we don't duplicate it here.
@@ -250,7 +250,7 @@ class WorkflowOrchestrationService:
             )
 
             if not updated_task:
-                raise ValueError(f"Failed to update task {task_id}")
+                raise ServiceError(code=ErrorCode.TASK_WORKFLOW_START_FAILED, message=f"Failed to update task {task_id}")
 
             # Emit completion event
             self._progress_publisher.publish_completed(
@@ -392,7 +392,7 @@ class WorkflowOrchestrationService:
             )
 
             if not updated_task:
-                raise ValueError(f"Failed to update task {task_id}")
+                raise ServiceError(code=ErrorCode.TASK_WORKFLOW_START_FAILED, message=f"Failed to update task {task_id}")
 
             # Emit completion event
             self._progress_publisher.publish_completed(

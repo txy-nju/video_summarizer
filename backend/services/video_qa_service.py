@@ -236,7 +236,7 @@ class VideoQAService:
         cited_sources 可通过 ``agent.last_cited_sources`` 在流结束后获取。
         """
         if self._agent is None:
-            raise RuntimeError("VideoQAAgent is not configured")
+            raise ServiceError(code=ErrorCode.QA_AGENT_NOT_CONFIGURED, message="VideoQAAgent is not configured")
 
         attachments_data = [asdict(a) for a in attachments]
         token_gen = self._agent.answer_stream_with_context(

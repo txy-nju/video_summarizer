@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
 from backend.dependencies import get_video_resource_service, get_video_summary_task_service
+from backend.exceptions import ErrorCode, NotFoundError, ValidationError
 from backend.schemas.common import MetaInfo, PaginationInfo
 from backend.schemas.video_resource import (
     VideoResourceCreateRequest,
@@ -66,7 +67,7 @@ async def list_video_resources(
         try:
             parse_fields(fields, _ALLOWED_FIELDS)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.REQUEST_UNSUPPORTED_FIELDS, message=str(exc)) from exc
 
     items, pagination = video_service.list_video_resources(owner_id=current_user.user_id, page=page, page_size=page_size)
     return VideoResourceListResponse(data=items, pagination=PaginationInfo.model_validate(pagination), meta=_build_meta(request))
@@ -81,7 +82,7 @@ async def get_video_resource(
 ):
     video = video_service.get_video_resource(owner_id=current_user.user_id, video_id=video_id)
     if video is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
+        raise NotFoundError(code=ErrorCode.VIDEO_NOT_FOUND, message="Video resource not found")
     return VideoResourceResponse(data=video, meta=_build_meta(request))
 
 
@@ -95,7 +96,7 @@ async def update_video_resource(
 ):
     video = video_service.update_video_resource(owner_id=current_user.user_id, video_id=video_id, payload=payload)
     if video is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
+        raise NotFoundError(code=ErrorCode.VIDEO_NOT_FOUND, message="Video resource not found")
     return VideoResourceResponse(data=video, meta=_build_meta(request))
 
 
@@ -112,7 +113,7 @@ async def list_tasks_by_video(
     """查询指定视频关联的所有摘要任务。"""
     video = video_service.get_video_resource(owner_id=current_user.user_id, video_id=video_id)
     if video is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
+        raise NotFoundError(code=ErrorCode.VIDEO_NOT_FOUND, message="Video resource not found")
 
     from backend.api.pagination import build_pagination, normalize_page_size
 
@@ -144,5 +145,5 @@ async def delete_video_resource(
 ):
     deleted = video_service.delete_video_resource(owner_id=current_user.user_id, video_id=video_id)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video resource not found")
+        raise NotFoundError(code=ErrorCode.VIDEO_NOT_FOUND, message="Video resource not found")
     return VideoResourceDeleteResponse(data=VideoResourceDeleteData(video_id=video_id), meta=_build_meta(request))

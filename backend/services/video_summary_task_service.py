@@ -6,6 +6,7 @@ import json
 import logging
 
 from backend.api.pagination import build_pagination, normalize_page_size
+from backend.exceptions import ConflictError, ErrorCode, NotFoundError, ValidationError
 from backend.repositories.kb_repository import KnowledgeBaseRepository
 from backend.repositories.video_resource_repository import VideoResourceRepository
 from backend.repositories.video_summary_task_repository import VideoSummaryTaskRecord, VideoSummaryTaskRepository
@@ -62,7 +63,10 @@ class VideoSummaryTaskService:
             or video.transcribe_status != "COMPLETED"
             or video.frame_extraction_status != "COMPLETED"
         ):
-            raise ValueError("video_not_ready")
+            raise ValidationError(
+                code=ErrorCode.VIDEO_NOT_READY,
+                message="Video is not ready for summarization. Transcription and keyframe extraction must both complete first.",
+            )
 
         # Check for duplicate: a KB should only have one Task per video
         existing = self._repository.find_by_kb_and_video(owner_id, payload.kbid, payload.video_id)
@@ -154,12 +158,12 @@ class VideoSummaryTaskService:
         # 1. Validate source Task ownership
         source = self._repository.get_by_owner_and_id(owner_id, task_id)
         if source is None:
-            raise LookupError("Task not found")
+            raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Task not found")
 
         # 2. Validate target KB ownership
         target_kb = self._kb_repository.get_by_owner_and_id(owner_id, payload.kbid)
         if target_kb is None:
-            raise LookupError("Target KB not found")
+            raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Target KB not found")
 
         # 3. Duplicate check (ref_count is handled atomically inside
         #    delete_by_owner_and_id + clone_to_kb)
@@ -253,7 +257,11 @@ class VideoSummaryTaskService:
 
         allowed = _WORKFLOW_TRANSITIONS.get(current_state, set())
         if next_state not in allowed:
-            raise ValueError(f"invalid_workflow_transition:{current_state}->{next_state}")
+            raise ValidationError(
+                code=ErrorCode.TASK_INVALID_STATE_TRANSITION,
+                message=f"Invalid workflow transition from {current_state} to {next_state}",
+                details={"current_state": current_state, "next_state": next_state},
+            )
 
         if any(value is not None for value in (draft_summary, user_guidance, title, final_summary)):
             updated = self._repository.update_by_owner_and_id(
@@ -325,7 +333,11 @@ class VideoSummaryTaskService:
         if record is None:
             return None
         if record.workflow_state in ("COMPLETED", "FAILED"):
-            raise ValueError(f"invalid_workflow_transition:{record.workflow_state}->FAILED")
+            raise ValidationError(
+                code=ErrorCode.TASK_INVALID_STATE_TRANSITION,
+                message=f"Invalid workflow transition from {record.workflow_state} to FAILED",
+                details={"current_state": record.workflow_state, "next_state": "FAILED"},
+            )
         return self.transition_workflow_state(
             owner_id=owner_id,
             task_id=task_id,
@@ -348,7 +360,7 @@ class VideoSummaryTaskService:
         """
         task = self._repository.get_by_owner_and_id(owner_id, task_id)
         if task is None:
-            raise LookupError("Video summary task not found")
+            raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
 
         # ── 幂等性守卫 ──────────────────────────────────────────────
         # 所有数据来自 DB（task 由 get_by_owner_and_id 查询），不存在缓存失效问题。
@@ -384,12 +396,15 @@ class VideoSummaryTaskService:
 
         # phase-2 正在执行中：拒绝回到 phase-1
         if task.workflow_state == "FINAL_GENERATING":
-            raise ValueError("finalization_in_progress")
+            raise ConflictError(
+                code=ErrorCode.TASK_FINALIZATION_IN_PROGRESS,
+                message="Phase-2 finalization is currently in progress. Cannot restart phase-1 analysis.",
+            )
         # ────────────────────────────────────────────────────────────
 
         video = self._video_repository.get_by_owner_and_id(owner_id=owner_id, video_id=task.video_id)
         if video is None:
-            raise LookupError("Video resource not found")
+            raise NotFoundError(code=ErrorCode.VIDEO_NOT_FOUND, message="Video resource not found")
 
         # chunk_planner_node / chunk_audio_analyzer 期望收到形如
         # {"text": "...", "segments": [...]} 的 JSON 字符串。
@@ -447,11 +462,13 @@ class VideoSummaryTaskService:
         """Validate approval state and dispatch phase-2 finalization Celery task."""
         task = self._repository.get_by_owner_and_id(owner_id, task_id)
         if task is None:
-            raise LookupError("Video summary task not found")
+            raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
 
         if task.workflow_state != "WAITING_USER_APPROVAL":
-            raise ValueError(
-                f"Task must be in WAITING_USER_APPROVAL state, got {task.workflow_state}"
+            raise ValidationError(
+                code=ErrorCode.TASK_INVALID_STATE_TRANSITION,
+                message=f"Task must be in WAITING_USER_APPROVAL state, got {task.workflow_state}",
+                details={"current_state": task.workflow_state, "expected_state": "WAITING_USER_APPROVAL"},
             )
 
         from backend.tasks.workflow_runtime_tasks import async_execute_finalization_workflow

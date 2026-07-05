@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from backend.api.filters import parse_fields
@@ -27,6 +27,7 @@ from backend.schemas.video_qa import (
     VideoQARecordUpdateRequest,
 )
 from backend.services.video_summary_task_service import VideoSummaryTaskService
+from backend.exceptions import ConflictError, ErrorCode, NotFoundError, ServiceError, ValidationError
 from backend.services.video_qa_service import VideoQAService
 from backend.services.workflow_orchestration_service import WorkflowOrchestrationService
 from core.agent.events import AgentProgressEvent
@@ -72,9 +73,9 @@ async def create_video_qa(
     """创建单视频局部追问"""
     # 检查 task_id 参数一致性
     if task_id != payload.task_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="task_id in path and payload must match",
+        raise ValidationError(
+            code=ErrorCode.REQUEST_INVALID_QUERY_PARAM,
+            message="task_id in path and payload must match",
         )
 
     record = service.create_qa_record(
@@ -83,9 +84,9 @@ async def create_video_qa(
         payload=payload,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found",
+        raise NotFoundError(
+            code=ErrorCode.QA_TASK_NOT_FOUND,
+            message="Task not found",
         )
     return VideoQARecordResponse(data=record, meta=_build_meta(request))
 
@@ -108,7 +109,7 @@ async def list_video_qa(
         try:
             parse_fields(fields, _ALLOWED_FIELDS)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.REQUEST_UNSUPPORTED_FIELDS, message=str(exc)) from exc
 
     items, pagination = service.list_qa_records(
         owner_id=current_user.user_id,
@@ -134,10 +135,7 @@ async def get_video_qa(
         qa_id=qa_id,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
+        raise NotFoundError(code=ErrorCode.QA_RECORD_NOT_FOUND, message="QA record not found")
     return VideoQARecordResponse(data=record, meta=_build_meta(request))
 
 
@@ -158,10 +156,7 @@ async def update_video_qa(
         payload=payload,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
+        raise NotFoundError(code=ErrorCode.QA_RECORD_NOT_FOUND, message="QA record not found")
     return VideoQARecordResponse(data=record, meta=_build_meta(request))
 
 
@@ -180,10 +175,7 @@ async def delete_video_qa(
         qa_id=qa_id,
     )
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
+        raise NotFoundError(code=ErrorCode.QA_RECORD_NOT_FOUND, message="QA record not found")
     return VideoQARecordDeleteResponse(
         data=VideoQARecordDeleteData(qa_id=qa_id),
         meta=_build_meta(request),
@@ -202,13 +194,10 @@ async def time_travel_qa_stream(
 ):
     task = task_service.get_video_summary_task(owner_id=current_user.user_id, task_id=task_id)
     if task is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+        raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
 
     if task.workflow_state not in ("WAITING_USER_APPROVAL", "FINAL_GENERATING", "COMPLETED"):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Task must have completed analysis phase to support time travel Q&A",
-        )
+        raise ValidationError(code=ErrorCode.TASK_INVALID_STATE_TRANSITION, message="Task must have completed analysis phase to support time travel Q&A")
 
     trace_id = str(getattr(request.state, "trace_id", ""))
 
@@ -224,7 +213,7 @@ async def time_travel_qa_stream(
             window_seconds=None,
         )
         if qa_record is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+            raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
 
         token_gen = service.stream_rag_for_video(
             owner_id=current_user.user_id,
@@ -306,7 +295,7 @@ async def time_travel_qa_stream(
         window_seconds=payload.window_seconds,
     )
     if qa_record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+        raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
 
     try:
         token_gen = service.stream_time_travel_for_video(
@@ -330,11 +319,9 @@ async def time_travel_qa_stream(
             )
             output_chunks = _chunk_text(answer)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.TASK_INVALID_STATE_TRANSITION, message=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Time travel Q&A failed: {str(exc)}",
+            raise ServiceError(code=ErrorCode.QA_STREAM_ERROR, message=f"Time travel Q&A failed: {str(exc)}",
             ) from exc
 
         qa_record_with_answer = service.create_time_travel_qa_record(
@@ -347,7 +334,7 @@ async def time_travel_qa_stream(
             window_seconds=payload.window_seconds,
         )
         if qa_record_with_answer is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video summary task not found")
+            raise NotFoundError(code=ErrorCode.TASK_NOT_FOUND, message="Video summary task not found")
 
         produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 

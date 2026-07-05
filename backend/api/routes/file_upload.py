@@ -16,12 +16,13 @@ TUS 协议核心 header：
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import Response
 
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
 from backend.dependencies import get_upload_service
+from backend.exceptions import ErrorCode, NotFoundError, ValidationError
 from backend.schemas.upload import (
     ChunkStatusResponse,
     InitUploadRequest,
@@ -62,7 +63,7 @@ async def get_upload_status(
     status_info = service.get_upload_status(upload_id=upload_id, owner_id=current_user.user_id)
 
     if status_info is None:
-        raise HTTPException(status_code=404, detail="Upload session not found")
+        raise NotFoundError(code=ErrorCode.UPLOAD_SESSION_NOT_FOUND, message="Upload session not found")
 
     headers = {
         "Tus-Resumable": _TUS_VERSION,
@@ -92,31 +93,29 @@ async def upload_chunk(
     # 验证 TUS 协议版本
     tus_version = request.headers.get("Tus-Resumable", "")
     if tus_version and tus_version != _TUS_VERSION:
-        raise HTTPException(
+        raise ValidationError(
+            code=ErrorCode.REQUEST_INVALID_QUERY_PARAM,
+            message=f"Unsupported Tus-Resumable version: {tus_version}",
             status_code=412,
-            detail=f"Unsupported Tus-Resumable version: {tus_version}",
         )
 
     # 读取分片数据
     chunk_data = await request.body()
     if not chunk_data:
-        raise HTTPException(status_code=400, detail="Empty chunk body")
+        raise ValidationError(code=ErrorCode.UPLOAD_CHUNK_BODY_EMPTY, message="Empty chunk body")
 
     # 计算分片索引
     chunk_size = 10 * 1024 * 1024  # SERVER_CHUNK_SIZE
     chunk_index = upload_offset // chunk_size
 
-    try:
-        trace_id = str(getattr(request.state, "trace_id", ""))
-        state = service.upload_chunk(
-            upload_id=upload_id,
-            owner_id=current_user.user_id,
-            chunk_index=chunk_index,
-            data=chunk_data,
-            trace_id=trace_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+    trace_id = str(getattr(request.state, "trace_id", ""))
+    state = service.upload_chunk(
+        upload_id=upload_id,
+        owner_id=current_user.user_id,
+        chunk_index=chunk_index,
+        data=chunk_data,
+        trace_id=trace_id,
+    )
 
     # 返回 TUS 兼容响应
     headers = {
@@ -147,7 +146,7 @@ async def cancel_upload(
     """取消上传会话并清理已上传的分片文件。"""
     result = service.cancel_upload(upload_id=upload_id, owner_id=current_user.user_id)
     if result is None:
-        raise HTTPException(status_code=404, detail="Upload session not found")
+        raise NotFoundError(code=ErrorCode.UPLOAD_SESSION_NOT_FOUND, message="Upload session not found")
     return result.model_dump()
 
 
@@ -160,5 +159,5 @@ async def get_upload_info(
     """查询上传进度（JSON 格式，非 TUS 标准，方便前端轮询）。"""
     status_info = service.get_upload_status(upload_id=upload_id, owner_id=current_user.user_id)
     if status_info is None:
-        raise HTTPException(status_code=404, detail="Upload session not found")
+        raise NotFoundError(code=ErrorCode.UPLOAD_SESSION_NOT_FOUND, message="Upload session not found")
     return status_info

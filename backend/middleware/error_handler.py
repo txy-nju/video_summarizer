@@ -7,7 +7,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from backend.exceptions import (
-    DEFAULT_INTERNAL_ERROR_CODE,
+    DEPRECATED_HTTP_REQUEST_FAILED,
+    ErrorCode,
     AppError,
     build_error_response,
 )
@@ -32,7 +33,7 @@ def register_error_handlers(app: FastAPI) -> None:
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
         payload = build_error_response(
             request=request,
-            code="REQUEST_VALIDATE_INVALID_PAYLOAD",
+            code=ErrorCode.REQUEST_VALIDATE_INVALID_PAYLOAD,
             message="Request validation failed",
             details={"errors": exc.errors()},
             is_retryable=False,
@@ -42,7 +43,14 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(HTTPException)
     async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
-        code = "HTTP_REQUEST_FAILED"
+        logger.warning(
+            "Deprecated HTTPException caught — migrate to AppError with a domain ErrorCode. "
+            "detail=%s status=%d path=%s",
+            exc.detail,
+            exc.status_code,
+            getattr(request, "url", None),
+        )
+        code = DEPRECATED_HTTP_REQUEST_FAILED
         message = str(exc.detail) if exc.detail else "Request failed"
         payload = build_error_response(
             request=request,
@@ -66,7 +74,7 @@ def register_error_handlers(app: FastAPI) -> None:
         )
         payload = build_error_response(
             request=request,
-            code=DEFAULT_INTERNAL_ERROR_CODE,
+            code=ErrorCode.SYSTEM_RUNTIME_INTERNAL_ERROR,
             message="Internal Server Error",
             details={},
             is_retryable=True,

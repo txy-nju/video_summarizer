@@ -1,9 +1,10 @@
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.auth.utils import TokenError, decode_token
 from backend.config import Settings
 from backend.dependencies import get_app_settings, get_auth_service
+from backend.exceptions import AuthError, ErrorCode
 from backend.services.auth_service import AuthService
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -15,7 +16,7 @@ def get_current_user(
     auth_service: AuthService = Depends(get_auth_service),
 ):
     if credentials is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
+        raise AuthError(code=ErrorCode.AUTH_MISSING_TOKEN, message="Missing token")
 
     try:
         claims = decode_token(
@@ -24,10 +25,10 @@ def get_current_user(
             algorithm=settings.jwt_algorithm,
         )
     except TokenError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        raise AuthError(code=ErrorCode.AUTH_INVALID_TOKEN, message=str(exc)) from exc
 
     if claims.get("type") != "access":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+        raise AuthError(code=ErrorCode.AUTH_INVALID_TOKEN_TYPE, message="Invalid token type")
 
     return auth_service.get_user_by_id(claims["sub"])
 

@@ -4,13 +4,14 @@ from datetime import UTC, datetime
 import json
 from typing import Iterator
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from backend.api.filters import parse_fields
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
 from backend.dependencies import get_global_qa_service
+from backend.exceptions import ErrorCode, NotFoundError, ValidationError
 from backend.schemas.common import MetaInfo
 from backend.schemas.global_qa import (
     GlobalQARecordCreateRequest,
@@ -65,10 +66,7 @@ async def create_global_qa_stream(
         payload=payload,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat session not found",
-        )
+        raise NotFoundError(code=ErrorCode.GQA_RECORD_NOT_FOUND, message="Chat session not found")
 
     produced_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -160,10 +158,7 @@ async def create_global_qa_record(
         payload=payload,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Chat session not found",
-        )
+        raise NotFoundError(code=ErrorCode.GQA_RECORD_NOT_FOUND, message="Chat session not found")
     return GlobalQARecordResponse(data=record, meta=_build_meta(request))
 
 
@@ -188,7 +183,7 @@ async def list_global_qa_records(
         try:
             parse_fields(fields, _QA_ALLOWED_FIELDS)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.REQUEST_UNSUPPORTED_FIELDS, message=str(exc)) from exc
 
     items, pagination = qa_service.list_qa_records(
         owner_id=current_user.user_id,
@@ -224,10 +219,7 @@ async def get_global_qa_record(
         qa_id=qa_id,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
+        raise NotFoundError(code=ErrorCode.GQA_RECORD_NOT_FOUND, message="QA record not found")
     return GlobalQARecordResponse(data=record, meta=_build_meta(request))
 
 
@@ -253,10 +245,7 @@ async def update_global_qa_record(
         payload=payload,
     )
     if record is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
+        raise NotFoundError(code=ErrorCode.GQA_RECORD_NOT_FOUND, message="QA record not found")
     return GlobalQARecordResponse(data=record, meta=_build_meta(request))
 
 
@@ -280,10 +269,7 @@ async def delete_global_qa_record(
         qa_id=qa_id,
     )
     if not success:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="QA record not found",
-        )
+        raise NotFoundError(code=ErrorCode.GQA_RECORD_NOT_FOUND, message="QA record not found")
     return GlobalQARecordDeleteResponse(
         data=GlobalQARecordDeleteData(qa_id=qa_id),
         meta=_build_meta(request),

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi import APIRouter, FastAPI, Query
 from fastapi.responses import FileResponse
 
 from backend.api.routes.auth_routes import router as auth_router
@@ -24,6 +24,7 @@ from backend.middleware.otel_middleware import register_otel_middleware
 from backend.middleware.request_context import register_request_context_middleware
 from backend.observability.tracing import configure_tracing
 from backend.dependencies import get_connection_manager
+from backend.exceptions import ErrorCode, NotFoundError
 
 def _build_system_router() -> APIRouter:
     router = APIRouter()
@@ -44,7 +45,7 @@ def _build_system_router() -> APIRouter:
         storage = get_object_storage_client()
         file_path: Path = storage._local_root / storage._normalize_key(object_key)
         if not file_path.exists():
-            raise HTTPException(status_code=404, detail="File not found")
+            raise NotFoundError(code=ErrorCode.SYSTEM_STORAGE_FILE_NOT_FOUND, message="File not found")
         # 不指定 media_type，由 Starlette 根据文件扩展名自动检测正确 MIME 类型
         # （如 .mp4 → video/mp4），ExoPlayer 需要正确的 Content-Type 才能初始化解码器。
         # FileResponse 默认支持 HTTP Range 请求（206 Partial Content）。

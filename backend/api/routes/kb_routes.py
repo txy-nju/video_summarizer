@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, Query, Request, status
 
 from backend.auth.dependencies import get_current_user
 from backend.auth.models import UserView
 from backend.api.filters import parse_fields
 from backend.dependencies import get_kb_service
-from backend.exceptions import AppError
+from backend.exceptions import ConflictError, ErrorCode, NotFoundError, ValidationError
 from backend.schemas.common import MetaInfo, PaginationInfo
 from backend.services.kb_service import DuplicateVideoInKbError
 from backend.schemas.kb import (
@@ -68,7 +68,7 @@ async def list_knowledge_bases(
         try:
             parse_fields(fields, _ALLOWED_FIELDS)
         except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+            raise ValidationError(code=ErrorCode.REQUEST_UNSUPPORTED_FIELDS, message=str(exc)) from exc
 
     items, pagination = kb_service.list_knowledge_bases(owner_id=current_user.user_id, page=page, page_size=page_size)
     return KnowledgeBaseListResponse(data=items, pagination=PaginationInfo.model_validate(pagination), meta=_build_meta(request))
@@ -83,7 +83,7 @@ async def get_knowledge_base(
 ):
     kb = kb_service.get_knowledge_base(owner_id=current_user.user_id, kbid=kbid)
     if kb is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base not found")
     return KnowledgeBaseResponse(data=kb, meta=_build_meta(request))
 
 
@@ -97,7 +97,7 @@ async def update_knowledge_base(
 ):
     kb = kb_service.update_knowledge_base(owner_id=current_user.user_id, kbid=kbid, payload=payload)
     if kb is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base not found")
     return KnowledgeBaseResponse(data=kb, meta=_build_meta(request))
 
 
@@ -110,7 +110,7 @@ async def delete_knowledge_base(
 ):
     deleted = kb_service.delete_knowledge_base(owner_id=current_user.user_id, kbid=kbid)
     if not deleted:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base not found")
     return KnowledgeBaseDeleteResponse(data=KnowledgeBaseDeleteData(kbid=kbid), meta=_build_meta(request))
 
 
@@ -129,14 +129,13 @@ async def add_video_to_knowledge_base(
             video_id=payload.video_id,
         )
     except DuplicateVideoInKbError as exc:
-        raise AppError(
-            code="KB_DUPLICATE_VIDEO",
+        raise ConflictError(
+            code=ErrorCode.KB_DUPLICATE_VIDEO,
             message="This video is already linked to this knowledge base.",
-            status_code=status.HTTP_409_CONFLICT,
             details={"kbid": exc.kbid, "video_id": exc.video_id},
         )
     if not bound:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base or video resource not found")
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base or video resource not found")
     return KnowledgeBaseVideoBindResponse(data=KnowledgeBaseVideoBindData(kbid=kbid, video_id=payload.video_id), meta=_build_meta(request))
 
 
@@ -156,7 +155,7 @@ async def list_knowledge_base_videos(
         page_size=page_size,
     )
     if result is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base not found")
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base not found")
     items, pagination = result
     return KnowledgeBaseVideoListResponse(data=items, pagination=PaginationInfo.model_validate(pagination), meta=_build_meta(request))
 
@@ -175,5 +174,5 @@ async def remove_video_from_knowledge_base(
         video_id=video_id,
     )
     if not removed:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge base or video resource not found")
+        raise NotFoundError(code=ErrorCode.KB_NOT_FOUND, message="Knowledge base or video resource not found")
     return KnowledgeBaseVideoRemoveResponse(data=KnowledgeBaseVideoBindData(kbid=kbid, video_id=video_id), meta=_build_meta(request))
